@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
+
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Sample, SizedSample,
@@ -28,9 +31,43 @@ enum Cmd {
     Shutdown,
 }
 
+#[cfg(windows)]
+enum LoopbackPumpCmd {
+    StartSession,
+    EndSession,
+}
+
 enum AudioChunk {
     Samples(Vec<f32>),
     EndOfStream,
+}
+
+/// How long the loopback pump waits for real system audio before emitting an
+/// equivalent run of silence.
+///
+/// This exists because `run_consumer` is driven entirely by its sample channel:
+/// it only polls `cmd_rx` after a chunk arrives. A microphone satisfies that
+/// implicitly — an open capture endpoint keeps delivering near-zero buffers every
+/// device period — but WASAPI loopback goes completely silent on an idle render
+/// endpoint. Without a pump, `Cmd::Stop` would never be observed and `stop()`
+/// would block forever.
+#[cfg(windows)]
+const LOOPBACK_PUMP_INTERVAL_MS: usize = 10;
+
+const CONSUMER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[cfg(windows)]
+struct LoopbackChunk {
+    samples: Vec<f32>,
+    sample_rate: u32,
+    session_generation: u64,
+}
+
+/// A Windows render endpoint to capture through WASAPI loopback.
+#[cfg(windows)]
+#[derive(Clone)]
+pub struct SystemAudioCapture {
+    pub device: Device,
 }
 
 /// How 16 kHz mono frames should be filtered for one recording session.
@@ -70,13 +107,28 @@ impl VadConfig {
 /// policy while recording. Used to feed a live streaming transcription as audio arrives.
 pub type AudioFrameCallback = Arc<dyn Fn(&[f32]) + Send + Sync + 'static>;
 
+/// The independently processed microphone and system-audio lanes returned by a
+/// recording stop. Persistence continues to use `microphone` only.
+pub struct RecordedAudio {
+    pub microphone: Vec<f32>,
+    pub system: Vec<f32>,
+}
+
 pub struct AudioRecorder {
     device: Option<Device>,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
+    #[cfg(windows)]
+    system_cmd_tx: Option<mpsc::Sender<Cmd>>,
+    #[cfg(windows)]
+    loopback_pump_tx: Option<mpsc::Sender<LoopbackPumpCmd>>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
     vad: Option<VadConfig>,
+    #[cfg(windows)]
+    system_vad: Option<VadConfig>,
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
     audio_cb: Option<AudioFrameCallback>,
+    #[cfg(windows)]
+    system_audio_cb: Option<AudioFrameCallback>,
     /// Which input channel to use. None = average all (original behavior).
     selected_channel: Option<usize>,
     /// Preferred stream config cached per device name. The two HAL property
@@ -86,6 +138,16 @@ pub struct AudioRecorder {
     /// cleared whenever an open fails so a stale rate/format self-heals on the
     /// caller's retry.
     config_cache: Arc<Mutex<Option<(String, cpal::SupportedStreamConfig)>>>,
+    #[cfg(windows)]
+    system_audio_session: Arc<SystemAudioSession>,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct SystemAudioSession {
+    active: AtomicBool,
+    generation: AtomicU64,
+    stale_samples: AtomicUsize,
 }
 
 impl AudioRecorder {
@@ -93,12 +155,22 @@ impl AudioRecorder {
         Ok(AudioRecorder {
             device: None,
             cmd_tx: None,
+            #[cfg(windows)]
+            system_cmd_tx: None,
+            #[cfg(windows)]
+            loopback_pump_tx: None,
             worker_handle: None,
             vad: None,
+            #[cfg(windows)]
+            system_vad: None,
             level_cb: None,
             audio_cb: None,
+            #[cfg(windows)]
+            system_audio_cb: None,
             selected_channel: None,
             config_cache: Arc::new(Mutex::new(None)),
+            #[cfg(windows)]
+            system_audio_session: Arc::new(SystemAudioSession::default()),
         })
     }
 
@@ -112,6 +184,23 @@ impl AudioRecorder {
         streaming_hangover_frames: usize,
     ) -> Self {
         self.vad = Some(VadConfig {
+            detector: Arc::new(Mutex::new(detector)),
+            offline_hangover_frames,
+            streaming_hangover_frames,
+        });
+        self
+    }
+
+    /// Attach an independent detector for the system-audio consumer. It must not
+    /// share Silero recurrent state or smoothing counters with the microphone.
+    #[cfg(windows)]
+    pub fn with_system_vad(
+        mut self,
+        detector: Box<dyn VoiceActivityDetector>,
+        offline_hangover_frames: usize,
+        streaming_hangover_frames: usize,
+    ) -> Self {
+        self.system_vad = Some(VadConfig {
             detector: Arc::new(Mutex::new(detector)),
             offline_hangover_frames,
             streaming_hangover_frames,
@@ -139,6 +228,15 @@ impl AudioRecorder {
         self
     }
 
+    #[cfg(windows)]
+    pub fn with_system_audio_callback<F>(mut self, cb: F) -> Self
+    where
+        F: Fn(&[f32]) + Send + Sync + 'static,
+    {
+        self.system_audio_cb = Some(Arc::new(cb));
+        self
+    }
+
     pub fn with_selected_channel(mut self, channel: Option<u16>) -> Self {
         self.set_selected_channel(channel);
         self
@@ -148,7 +246,11 @@ impl AudioRecorder {
         self.selected_channel = channel.map(usize::from);
     }
 
-    pub fn open(&mut self, device: Option<Device>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn open(
+        &mut self,
+        device: Option<Device>,
+        #[cfg(windows)] system_audio: Option<SystemAudioCapture>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.worker_handle.is_some() {
             if !self.is_capture_worker_dead() {
                 return Ok(()); // already open
@@ -162,7 +264,15 @@ impl AudioRecorder {
 
         let (sample_tx, sample_rx) = mpsc::channel::<AudioChunk>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-        let (init_tx, init_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+        #[cfg(windows)]
+        let (system_sample_tx, system_sample_rx) = mpsc::channel::<AudioChunk>();
+        #[cfg(windows)]
+        let (system_cmd_tx, system_cmd_rx) = mpsc::channel::<Cmd>();
+        #[cfg(windows)]
+        let system_cmd_tx_for_worker = system_cmd_tx.clone();
+        #[cfg(windows)]
+        let (loopback_pump_tx, loopback_pump_rx) = mpsc::channel::<LoopbackPumpCmd>();
+        let (init_tx, init_rx) = mpsc::sync_channel::<Result<bool, String>>(1);
 
         let host = crate::audio_toolkit::get_cpal_host();
         let device = match device {
@@ -174,17 +284,37 @@ impl AudioRecorder {
 
         let thread_device = device.clone();
         let vad = self.vad.clone();
+        #[cfg(windows)]
+        let system_vad = self.system_vad.clone();
         // Move the optional level callback into the worker thread
         let level_cb = self.level_cb.clone();
         // Move the optional real-time audio frame callback into the worker thread
         let audio_cb = self.audio_cb.clone();
+        #[cfg(windows)]
+        let system_audio_cb = self.system_audio_cb.clone();
         let selected_channel = self.selected_channel;
         let config_cache = Arc::clone(&self.config_cache);
+        #[cfg(windows)]
+        let system_audio_session = Arc::clone(&self.system_audio_session);
 
         let worker = std::thread::spawn(move || {
             let stop_flag = Arc::new(AtomicBool::new(false));
             let stop_flag_for_stream = stop_flag.clone();
-            let init_result = (|| -> Result<(cpal::Stream, u32), String> {
+            #[cfg(windows)]
+            let (loopback_tx, loopback_rx) = mpsc::sync_channel::<LoopbackChunk>(16);
+            #[cfg(windows)]
+            let (loopback_buffer_tx, loopback_buffer_rx) = mpsc::sync_channel::<Vec<f32>>(16);
+            #[cfg(windows)]
+            for _ in 0..16 {
+                let _ = loopback_buffer_tx.try_send(Vec::with_capacity(4096));
+            }
+            #[cfg(windows)]
+            let dropped_loopback_samples = Arc::new(AtomicUsize::new(0));
+            #[cfg(windows)]
+            let loopback_available = Arc::new(AtomicBool::new(false));
+            #[cfg(windows)]
+            let loopback_sample_rate = Arc::new(AtomicU32::new(0));
+            let init_result = (|| -> Result<_, String> {
                 let config_started = Instant::now();
                 let device_name = thread_device.name().unwrap_or_default();
                 let cached_config = config_cache
@@ -283,6 +413,27 @@ impl AudioRecorder {
                 stream
                     .play()
                     .map_err(|e| format!("Failed to start microphone stream: {e}"))?;
+
+                #[cfg(windows)]
+                let loopback_stream = system_audio.and_then(|capture| {
+                    match AudioRecorder::build_loopback_stream(
+                        &capture.device,
+                        loopback_tx,
+                        loopback_buffer_rx,
+                        Arc::clone(&system_audio_session),
+                        Arc::clone(&loopback_available),
+                        Arc::clone(&loopback_sample_rate),
+                        Arc::clone(&dropped_loopback_samples),
+                    ) {
+                        Ok(stream) => Some(stream),
+                        Err(error) => {
+                            log::warn!(
+                                "System audio capture unavailable; continuing microphone-only: {error}"
+                            );
+                            None
+                        }
+                    }
+                });
                 log::debug!(
                     "mic worker init: fetch_config={:?} (cached={}) build_stream={:?} play={:?}",
                     config_elapsed,
@@ -297,12 +448,98 @@ impl AudioRecorder {
                     *config_cache.lock().unwrap() = Some((device_name, config));
                 }
 
+                #[cfg(windows)]
+                return Ok((stream, loopback_stream, sample_rate));
+                #[cfg(not(windows))]
                 Ok((stream, sample_rate))
             })();
 
             match init_result {
+                #[cfg(windows)]
+                Ok((stream, loopback_stream, sample_rate)) => {
+                    let system_sample_rate = match loopback_sample_rate.load(Ordering::Acquire) {
+                        0 => constants::WHISPER_SAMPLE_RATE,
+                        sample_rate => sample_rate,
+                    };
+                    let (system_consumer, loopback_pump) = if loopback_stream.is_some() {
+                        let system_stream_running_at = Instant::now();
+                        let system_stop_flag = Arc::new(AtomicBool::new(false));
+                        let system_consumer = std::thread::Builder::new()
+                            .name("audio-loopback-consumer".to_string())
+                            .spawn(move || {
+                                run_consumer(
+                                    system_sample_rate,
+                                    system_vad,
+                                    system_sample_rx,
+                                    system_cmd_rx,
+                                    None,
+                                    system_audio_cb,
+                                    system_stop_flag,
+                                    system_stream_running_at,
+                                );
+                            });
+                        let system_consumer = match system_consumer {
+                            Ok(handle) => handle,
+                            Err(error) => {
+                                let error_message =
+                                    format!("Failed to start loopback consumer thread: {error}");
+                                let _ = init_tx.send(Err(error_message));
+                                return;
+                            }
+                        };
+                        let loopback_pump = std::thread::Builder::new()
+                            .name("audio-loopback-pump".to_string())
+                            .spawn(move || {
+                                run_loopback_pump(
+                                    loopback_rx,
+                                    loopback_buffer_tx,
+                                    system_sample_tx,
+                                    loopback_pump_rx,
+                                    system_audio_session,
+                                    system_sample_rate,
+                                );
+                            });
+                        let loopback_pump = match loopback_pump {
+                            Ok(handle) => handle,
+                            Err(error) => {
+                                let error_message =
+                                    format!("Failed to start loopback pump thread: {error}");
+                                let _ = init_tx.send(Err(error_message));
+                                let _ = system_consumer.join();
+                                return;
+                            }
+                        };
+                        (Some(system_consumer), Some(loopback_pump))
+                    } else {
+                        (None, None)
+                    };
+                    let _ = init_tx.send(Ok(loopback_stream.is_some()));
+                    let stream_running_at = Instant::now();
+                    run_consumer(
+                        sample_rate,
+                        vad,
+                        sample_rx,
+                        cmd_rx,
+                        level_cb,
+                        audio_cb,
+                        stop_flag,
+                        stream_running_at,
+                    );
+                    if system_consumer.is_some() {
+                        let _ = system_cmd_tx_for_worker.send(Cmd::Shutdown);
+                    }
+                    drop(loopback_stream);
+                    drop(stream);
+                    if let Some(handle) = system_consumer {
+                        let _ = handle.join();
+                    }
+                    if let Some(handle) = loopback_pump {
+                        let _ = handle.join();
+                    }
+                }
+                #[cfg(not(windows))]
                 Ok((stream, sample_rate)) => {
-                    let _ = init_tx.send(Ok(()));
+                    let _ = init_tx.send(Ok(false));
                     // Timestamp for the play()-returned -> first-samples gap the
                     // init handshake can't see (hardware dependent).
                     let stream_running_at = Instant::now();
@@ -331,9 +568,16 @@ impl AudioRecorder {
         });
 
         match init_rx.recv() {
-            Ok(Ok(())) => {
+            Ok(Ok(system_audio_active)) => {
+                #[cfg(not(windows))]
+                let _ = system_audio_active;
                 self.device = Some(device);
                 self.cmd_tx = Some(cmd_tx);
+                #[cfg(windows)]
+                {
+                    self.system_cmd_tx = system_audio_active.then_some(system_cmd_tx);
+                    self.loopback_pump_tx = system_audio_active.then_some(loopback_pump_tx);
+                }
                 self.worker_handle = Some(worker);
                 Ok(())
             }
@@ -368,16 +612,106 @@ impl AudioRecorder {
             .as_ref()
             .ok_or_else(|| Error::other("Recorder is not open"))?;
         let (ready_tx, ready_rx) = mpsc::channel();
-        tx.send(Cmd::Start(vad_policy, Instant::now(), ready_tx))?;
+        #[cfg(windows)]
+        {
+            self.system_audio_session
+                .generation
+                .fetch_add(1, Ordering::AcqRel);
+            self.system_audio_session
+                .active
+                .store(true, Ordering::Release);
+        }
+        #[cfg(windows)]
+        if let Some(pump_tx) = &self.loopback_pump_tx {
+            pump_tx.send(LoopbackPumpCmd::StartSession)?;
+        }
+        #[cfg(windows)]
+        if let Some(system_tx) = &self.system_cmd_tx {
+            let (system_ready_tx, _system_ready_rx) = mpsc::channel();
+            if let Err(error) =
+                system_tx.send(Cmd::Start(vad_policy, Instant::now(), system_ready_tx))
+            {
+                log::warn!(
+                    "Failed to start system-audio consumer; continuing microphone-only: {error}"
+                );
+            }
+        }
+        if let Err(error) = tx.send(Cmd::Start(vad_policy, Instant::now(), ready_tx)) {
+            #[cfg(windows)]
+            {
+                self.system_audio_session
+                    .active
+                    .store(false, Ordering::Release);
+                self.system_audio_session
+                    .generation
+                    .fetch_add(1, Ordering::AcqRel);
+            }
+            return Err(Box::new(error));
+        }
         Ok(ready_rx)
     }
 
-    pub fn stop(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-        let (resp_tx, resp_rx) = mpsc::channel();
-        if let Some(tx) = &self.cmd_tx {
-            tx.send(Cmd::Stop(resp_tx))?;
+    pub fn stop(&self) -> Result<RecordedAudio, Box<dyn std::error::Error>> {
+        let (mic_resp_tx, mic_resp_rx) = mpsc::channel();
+        let mic_tx = self
+            .cmd_tx
+            .as_ref()
+            .ok_or_else(|| Error::other("Recorder is not open"))?;
+        #[cfg(windows)]
+        {
+            self.system_audio_session
+                .active
+                .store(false, Ordering::Release);
+            self.system_audio_session
+                .generation
+                .fetch_add(1, Ordering::AcqRel);
         }
-        Ok(resp_rx.recv()?) // wait for the samples
+        #[cfg(windows)]
+        let system_response = if let Some(system_tx) = &self.system_cmd_tx {
+            let (system_resp_tx, system_resp_rx) = mpsc::channel();
+            if let Err(error) = system_tx.send(Cmd::Stop(system_resp_tx)) {
+                log::warn!("Failed to stop system-audio consumer: {error}");
+                None
+            } else {
+                if let Some(pump_tx) = &self.loopback_pump_tx {
+                    if let Err(error) = pump_tx.send(LoopbackPumpCmd::EndSession) {
+                        log::warn!("Failed to end loopback pump session: {error}");
+                    }
+                }
+                Some(system_resp_rx)
+            }
+        } else {
+            None
+        };
+
+        mic_tx.send(Cmd::Stop(mic_resp_tx))?;
+
+        let stop_deadline = Instant::now() + CONSUMER_STOP_TIMEOUT;
+        let microphone = mic_resp_rx
+            .recv_timeout(stop_deadline.saturating_duration_since(Instant::now()))
+            .map_err(|error| {
+                Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Timed out waiting for microphone consumer stop: {error}"),
+                )
+            })?;
+        #[cfg(windows)]
+        let system = match system_response {
+            Some(rx) => {
+                match rx.recv_timeout(stop_deadline.saturating_duration_since(Instant::now())) {
+                    Ok(samples) => samples,
+                    Err(error) => {
+                        log::warn!("Timed out waiting for system-audio consumer stop: {error}");
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
+        #[cfg(not(windows))]
+        let system = Vec::new();
+
+        Ok(RecordedAudio { microphone, system })
     }
 
     /// True once the capture worker has exited without anyone calling `close`.
@@ -395,8 +729,25 @@ impl AudioRecorder {
     }
 
     pub fn close(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(windows)]
+        {
+            self.system_audio_session
+                .active
+                .store(false, Ordering::Release);
+            self.system_audio_session
+                .generation
+                .fetch_add(1, Ordering::AcqRel);
+        }
         if let Some(tx) = self.cmd_tx.take() {
             let _ = tx.send(Cmd::Shutdown);
+        }
+        #[cfg(windows)]
+        if let Some(tx) = self.system_cmd_tx.take() {
+            let _ = tx.send(Cmd::Shutdown);
+        }
+        #[cfg(windows)]
+        {
+            self.loopback_pump_tx.take();
         }
         if let Some(h) = self.worker_handle.take() {
             let _ = h.join();
@@ -405,6 +756,8 @@ impl AudioRecorder {
         Ok(())
     }
 
+    // The cfg-specific channel ownership is clearest when kept explicit at the stream boundary.
+    #[allow(clippy::too_many_arguments)]
     fn build_stream<T>(
         device: &cpal::Device,
         config: &cpal::SupportedStreamConfig,
@@ -478,6 +831,158 @@ impl AudioRecorder {
         )
     }
 
+    #[cfg(windows)]
+    fn build_loopback_stream(
+        device: &cpal::Device,
+        loopback_tx: mpsc::SyncSender<LoopbackChunk>,
+        loopback_buffer_rx: mpsc::Receiver<Vec<f32>>,
+        session: Arc<SystemAudioSession>,
+        available: Arc<AtomicBool>,
+        shared_sample_rate: Arc<AtomicU32>,
+        dropped_samples: Arc<AtomicUsize>,
+    ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+        let config = Self::get_preferred_loopback_config(device)?;
+        let channels = usize::from(config.channels());
+        let sample_rate = config.sample_rate().0;
+        shared_sample_rate.store(sample_rate, Ordering::Release);
+        log::info!(
+            "Using system audio device: {:?}\nSample rate: {}\nChannels: {}\nFormat: {:?}",
+            device.name(),
+            sample_rate,
+            channels,
+            config.sample_format()
+        );
+
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::U8 => Self::build_loopback_stream_typed::<u8>(
+                device,
+                &config,
+                loopback_tx,
+                loopback_buffer_rx,
+                session,
+                Arc::clone(&available),
+                Arc::clone(&dropped_samples),
+            )?,
+            cpal::SampleFormat::I16 => Self::build_loopback_stream_typed::<i16>(
+                device,
+                &config,
+                loopback_tx,
+                loopback_buffer_rx,
+                session,
+                Arc::clone(&available),
+                Arc::clone(&dropped_samples),
+            )?,
+            cpal::SampleFormat::I32 => Self::build_loopback_stream_typed::<i32>(
+                device,
+                &config,
+                loopback_tx,
+                loopback_buffer_rx,
+                session,
+                Arc::clone(&available),
+                Arc::clone(&dropped_samples),
+            )?,
+            cpal::SampleFormat::F32 => Self::build_loopback_stream_typed::<f32>(
+                device,
+                &config,
+                loopback_tx,
+                loopback_buffer_rx,
+                session,
+                Arc::clone(&available),
+                Arc::clone(&dropped_samples),
+            )?,
+            sample_format => {
+                return Err(Box::new(Error::other(format!(
+                    "Unsupported loopback sample format: {sample_format:?}"
+                ))));
+            }
+        };
+
+        stream.play()?;
+        available.store(true, Ordering::Release);
+        Ok(stream)
+    }
+
+    #[cfg(windows)]
+    fn build_loopback_stream_typed<T>(
+        device: &cpal::Device,
+        config: &cpal::SupportedStreamConfig,
+        loopback_tx: mpsc::SyncSender<LoopbackChunk>,
+        loopback_buffer_rx: mpsc::Receiver<Vec<f32>>,
+        session: Arc<SystemAudioSession>,
+        available: Arc<AtomicBool>,
+        dropped_samples: Arc<AtomicUsize>,
+    ) -> Result<cpal::Stream, cpal::BuildStreamError>
+    where
+        T: Sample + SizedSample + Send + 'static,
+        f32: cpal::FromSample<T>,
+    {
+        let channels = usize::from(config.channels());
+        let sample_rate = config.sample_rate().0;
+        let mut emergency_buffer = Some(Vec::with_capacity(4096));
+        let dropped_samples_for_callback = dropped_samples;
+
+        let data_callback = move |data: &[T], _: &cpal::InputCallbackInfo| {
+            let session_generation = session.generation.load(Ordering::Acquire);
+            if !session.active.load(Ordering::Acquire) {
+                return;
+            }
+
+            let Some(mut mono_buffer) = emergency_buffer
+                .take()
+                .or_else(|| loopback_buffer_rx.try_recv().ok())
+            else {
+                dropped_samples_for_callback.fetch_add(data.len() / channels, Ordering::Relaxed);
+                return;
+            };
+            downmix_loopback(data, channels, &mut mono_buffer);
+            let sample_count = mono_buffer.len();
+            if session.generation.load(Ordering::Acquire) != session_generation {
+                session
+                    .stale_samples
+                    .fetch_add(sample_count, Ordering::Relaxed);
+                mono_buffer.clear();
+                emergency_buffer = Some(mono_buffer);
+                return;
+            }
+            let chunk = LoopbackChunk {
+                samples: mono_buffer,
+                sample_rate,
+                session_generation,
+            };
+            match loopback_tx.try_send(chunk) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(chunk)) => {
+                    dropped_samples_for_callback.fetch_add(sample_count, Ordering::Relaxed);
+                    emergency_buffer = Some(chunk.samples);
+                }
+                Err(mpsc::TrySendError::Disconnected(chunk)) => {
+                    emergency_buffer = Some(chunk.samples);
+                }
+            }
+        };
+
+        let error_available = Arc::clone(&available);
+        device.build_input_stream(
+            &config.clone().into(),
+            data_callback,
+            move |error| {
+                error_available.store(false, Ordering::Release);
+                log::warn!("System audio stream error; continuing microphone-only: {error}");
+            },
+            None,
+        )
+    }
+
+    #[cfg(windows)]
+    fn get_preferred_loopback_config(
+        device: &cpal::Device,
+    ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
+        // WASAPI render endpoints reject input-config enumeration even though
+        // cpal can open them for shared-mode loopback. Their output default is
+        // therefore the authoritative loopback format.
+        Ok(device.default_output_config()?)
+    }
+
     pub fn preferred_input_channel_count(
         device: &cpal::Device,
     ) -> Result<u16, Box<dyn std::error::Error>> {
@@ -540,6 +1045,175 @@ impl AudioRecorder {
     }
 }
 
+#[cfg(windows)]
+fn downmix_loopback<T>(data: &[T], channels: usize, output: &mut Vec<f32>)
+where
+    T: Sample + Copy,
+    f32: cpal::FromSample<T>,
+{
+    output.clear();
+    if channels == 0 {
+        return;
+    }
+    output.reserve(data.len() / channels);
+
+    if channels == 1 {
+        output.extend(data.iter().map(|sample| (*sample).to_sample::<f32>()));
+        return;
+    }
+    if channels == 2 {
+        output.extend(
+            data.chunks_exact(2)
+                .map(|frame| (frame[0].to_sample::<f32>() + frame[1].to_sample::<f32>()) * 0.5),
+        );
+        return;
+    }
+
+    // Windows uses FL, FR, FC, LFE, then surround/back channels for its common
+    // 5.1/7.1 layouts. Preserve centre-channel speech, ignore LFE, and spread
+    // the remaining weight across the surrounds. cpal exposes only a channel
+    // count, not the endpoint's channel mask, so exotic layouts may differ.
+    for frame in data.chunks_exact(channels) {
+        let front = frame[0].to_sample::<f32>() * 0.2
+            + frame[1].to_sample::<f32>() * 0.2
+            + frame[2].to_sample::<f32>() * 0.4;
+        let surround_count = channels.saturating_sub(4);
+        let surround = if surround_count == 0 {
+            0.0
+        } else {
+            frame[4..]
+                .iter()
+                .map(|sample| (*sample).to_sample::<f32>())
+                .sum::<f32>()
+                * (0.2 / surround_count as f32)
+        };
+        output.push(front + surround);
+    }
+}
+
+#[cfg(windows)]
+fn run_loopback_pump(
+    loopback_rx: mpsc::Receiver<LoopbackChunk>,
+    loopback_buffer_tx: mpsc::SyncSender<Vec<f32>>,
+    sample_tx: mpsc::Sender<AudioChunk>,
+    control_rx: mpsc::Receiver<LoopbackPumpCmd>,
+    session: Arc<SystemAudioSession>,
+    sample_rate: u32,
+) {
+    let pump_interval = Duration::from_millis(LOOPBACK_PUMP_INTERVAL_MS as u64);
+    let silence_len =
+        ((u64::from(sample_rate) * LOOPBACK_PUMP_INTERVAL_MS as u64) / 1000).max(1) as usize;
+    let mut loopback_connected = true;
+
+    loop {
+        // No wakeups or allocations between recordings. The pump becomes active
+        // only after the recorder explicitly starts a system-audio session.
+        match control_rx.recv() {
+            Ok(LoopbackPumpCmd::StartSession) => {}
+            Ok(LoopbackPumpCmd::EndSession) => continue,
+            Err(_) => return,
+        }
+        let mut next_tick = Instant::now() + pump_interval;
+
+        'session: loop {
+            while let Ok(command) = control_rx.try_recv() {
+                match command {
+                    LoopbackPumpCmd::StartSession => {
+                        next_tick = Instant::now() + pump_interval;
+                    }
+                    LoopbackPumpCmd::EndSession => {
+                        // Wake `run_consumer` after Cmd::Stop is queued, then place
+                        // exactly one sentinel behind that wake-up chunk for its drain.
+                        if sample_tx
+                            .send(AudioChunk::Samples(vec![0.0; silence_len]))
+                            .is_err()
+                            || sample_tx.send(AudioChunk::EndOfStream).is_err()
+                        {
+                            return;
+                        }
+                        break 'session;
+                    }
+                }
+            }
+
+            let now = Instant::now();
+            let wait = next_tick.saturating_duration_since(now);
+            let receive_result = if loopback_connected {
+                loopback_rx.recv_timeout(wait)
+            } else {
+                match control_rx.recv_timeout(wait) {
+                    Ok(LoopbackPumpCmd::EndSession) => {
+                        if sample_tx
+                            .send(AudioChunk::Samples(vec![0.0; silence_len]))
+                            .is_err()
+                            || sample_tx.send(AudioChunk::EndOfStream).is_err()
+                        {
+                            return;
+                        }
+                        break 'session;
+                    }
+                    Ok(LoopbackPumpCmd::StartSession) => {
+                        next_tick = Instant::now() + pump_interval;
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Timeout) => Err(mpsc::RecvTimeoutError::Timeout),
+                }
+            };
+
+            match receive_result {
+                Ok(mut chunk) => {
+                    let current_generation = session.generation.load(Ordering::Acquire);
+                    if session.active.load(Ordering::Acquire)
+                        && chunk.session_generation == current_generation
+                    {
+                        if chunk.sample_rate != sample_rate {
+                            log::warn!(
+                            "Loopback sample rate changed from {sample_rate} to {}; dropping packet",
+                            chunk.sample_rate
+                        );
+                            chunk.samples.clear();
+                            let _ = loopback_buffer_tx.try_send(chunk.samples);
+                            continue;
+                        }
+                        let sample_count = chunk.samples.len();
+                        let samples = std::mem::take(&mut chunk.samples);
+                        if sample_tx.send(AudioChunk::Samples(samples)).is_err() {
+                            return;
+                        }
+                        next_tick +=
+                            Duration::from_secs_f64(sample_count as f64 / sample_rate as f64);
+                    } else if chunk.session_generation != current_generation {
+                        session
+                            .stale_samples
+                            .fetch_add(chunk.samples.len(), Ordering::Relaxed);
+                    }
+
+                    chunk.samples.clear();
+                    let _ = loopback_buffer_tx.try_send(chunk.samples);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let now = Instant::now();
+                    while now >= next_tick {
+                        if sample_tx
+                            .send(AudioChunk::Samples(vec![0.0; silence_len]))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        next_tick += pump_interval;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // A dead render endpoint must degrade to synthetic silence, not
+                    // take command polling (and therefore stop/shutdown) down with it.
+                    loopback_connected = false;
+                }
+            }
+        }
+    }
+}
+
 pub fn is_microphone_access_denied(error_message: &str) -> bool {
     let normalized = error_message.to_lowercase();
     normalized.contains("access is denied")
@@ -556,7 +1230,130 @@ pub fn is_no_input_device_error(error_message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::{
+        downmix_loopback, run_consumer, run_loopback_pump, Cmd, LoopbackChunk, LoopbackPumpCmd,
+        SystemAudioSession, VadPolicy,
+    };
     use super::{is_microphone_access_denied, is_no_input_device_error, AudioRecorder};
+    #[cfg(windows)]
+    use std::sync::{atomic::Ordering, mpsc, Arc};
+    #[cfg(windows)]
+    use std::time::{Duration, Instant};
+
+    #[cfg(windows)]
+    struct LoopbackHarness {
+        raw_tx: Option<mpsc::SyncSender<LoopbackChunk>>,
+        cmd_tx: mpsc::Sender<Cmd>,
+        pump_tx: mpsc::Sender<LoopbackPumpCmd>,
+        session: Arc<SystemAudioSession>,
+        consumer_done: mpsc::Receiver<()>,
+        pump_done: mpsc::Receiver<()>,
+    }
+
+    #[cfg(windows)]
+    impl LoopbackHarness {
+        fn new() -> Self {
+            let (raw_tx, raw_rx) = mpsc::sync_channel(4);
+            let (buffer_tx, _buffer_rx) = mpsc::sync_channel(4);
+            let (sample_tx, sample_rx) = mpsc::channel();
+            let (cmd_tx, cmd_rx) = mpsc::channel();
+            let (pump_tx, pump_rx) = mpsc::channel();
+            let session = Arc::new(SystemAudioSession::default());
+            let (consumer_done_tx, consumer_done) = mpsc::channel();
+            let consumer = std::thread::spawn(move || {
+                run_consumer(
+                    16_000,
+                    None,
+                    sample_rx,
+                    cmd_rx,
+                    None,
+                    None,
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    Instant::now(),
+                );
+                let _ = consumer_done_tx.send(());
+            });
+            let pump_session = Arc::clone(&session);
+            let (pump_done_tx, pump_done) = mpsc::channel();
+            std::thread::spawn(move || {
+                run_loopback_pump(raw_rx, buffer_tx, sample_tx, pump_rx, pump_session, 16_000);
+                let _ = pump_done_tx.send(());
+                let _ = consumer.join();
+            });
+
+            Self {
+                raw_tx: Some(raw_tx),
+                cmd_tx,
+                pump_tx,
+                session,
+                consumer_done,
+                pump_done,
+            }
+        }
+
+        fn start(&self) -> mpsc::Receiver<()> {
+            self.session.generation.fetch_add(1, Ordering::AcqRel);
+            self.session.active.store(true, Ordering::Release);
+            self.pump_tx
+                .send(LoopbackPumpCmd::StartSession)
+                .expect("pump start session");
+            let (ready_tx, ready_rx) = mpsc::channel();
+            self.cmd_tx
+                .send(Cmd::Start(VadPolicy::Disabled, Instant::now(), ready_tx))
+                .expect("start command");
+            ready_rx
+        }
+
+        fn send(&self, samples: Vec<f32>, generation: u64) {
+            self.raw_tx
+                .as_ref()
+                .expect("loopback sender")
+                .send(LoopbackChunk {
+                    samples,
+                    sample_rate: 16_000,
+                    session_generation: generation,
+                })
+                .expect("loopback samples");
+        }
+
+        fn fail_device(&mut self) {
+            self.raw_tx.take();
+        }
+
+        fn stop(&self) -> Vec<f32> {
+            self.session.active.store(false, Ordering::Release);
+            self.session.generation.fetch_add(1, Ordering::AcqRel);
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.cmd_tx.send(Cmd::Stop(reply_tx)).expect("stop command");
+            self.pump_tx
+                .send(LoopbackPumpCmd::EndSession)
+                .expect("pump end session");
+            reply_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("stop must not hang")
+        }
+
+        fn shutdown(self) {
+            let Self {
+                raw_tx,
+                cmd_tx,
+                pump_tx,
+                consumer_done,
+                pump_done,
+                ..
+            } = self;
+            let _ = cmd_tx.send(Cmd::Shutdown);
+            drop(raw_tx);
+            drop(pump_tx);
+            consumer_done
+                .recv_timeout(Duration::from_secs(1))
+                .expect("consumer shutdown must not hang");
+            pump_done
+                .recv_timeout(Duration::from_secs(1))
+                .expect("pump shutdown must not hang");
+        }
+    }
 
     #[test]
     fn unopened_recorder_is_not_reported_dead() {
@@ -565,6 +1362,15 @@ mod tests {
         // open() take the rebuild path.
         let recorder = AudioRecorder::new().expect("recorder");
         assert!(!recorder.is_capture_worker_dead());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disabled_recorder_has_no_loopback_runtime_resources() {
+        let recorder = AudioRecorder::new().expect("recorder");
+        assert!(recorder.system_vad.is_none(), "no second VAD");
+        assert!(recorder.system_cmd_tx.is_none(), "no second consumer");
+        assert!(recorder.loopback_pump_tx.is_none(), "no pump thread");
     }
 
     #[test]
@@ -603,6 +1409,238 @@ mod tests {
     fn does_not_match_other_errors_for_no_device() {
         assert!(!is_no_input_device_error("permission denied"));
         assert!(!is_no_input_device_error("device not found"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn surround_downmix_preserves_center_and_ignores_lfe() {
+        let mut mono = Vec::new();
+        downmix_loopback(&[0.0_f32, 0.0, 1.0, 1.0, 0.0, 0.0], 6, &mut mono);
+        assert_eq!(mono.len(), 1);
+        assert!((mono[0] - 0.4).abs() < 1e-6);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_completes_with_zero_loopback_callbacks() {
+        let harness = LoopbackHarness::new();
+        harness
+            .start()
+            .recv_timeout(Duration::from_secs(1))
+            .expect("silence pump should make capture ready");
+        let _ = harness.stop();
+        harness.shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_completes_when_loopback_fails_before_first_sample() {
+        let mut harness = LoopbackHarness::new();
+        harness.fail_device();
+        harness.start();
+        let _ = harness.stop();
+        harness.shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_completes_when_loopback_fails_mid_recording() {
+        let mut harness = LoopbackHarness::new();
+        harness.start();
+        let generation = harness.session.generation.load(Ordering::Acquire);
+        harness.send(vec![0.5; 480], generation);
+        harness.fail_device();
+        let _ = harness.stop();
+        harness.shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_immediately_after_start_completes() {
+        let harness = LoopbackHarness::new();
+        harness.start();
+        let _ = harness.stop();
+        harness.shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shutdown_while_loopback_is_silent_completes() {
+        LoopbackHarness::new().shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pump_is_idle_until_a_session_starts() {
+        let (_raw_tx, raw_rx) = mpsc::sync_channel(1);
+        let (buffer_tx, _buffer_rx) = mpsc::sync_channel(1);
+        let (sample_tx, sample_rx) = mpsc::channel();
+        let (control_tx, control_rx) = mpsc::channel();
+        let session = Arc::new(SystemAudioSession::default());
+        let pump = std::thread::spawn(move || {
+            run_loopback_pump(raw_rx, buffer_tx, sample_tx, control_rx, session, 16_000)
+        });
+
+        assert!(sample_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        drop(control_tx);
+        pump.join().expect("pump exits when control closes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bursty_packets_follow_elapsed_time_without_phantom_ticks() {
+        let (raw_tx, raw_rx) = mpsc::sync_channel(8);
+        let (buffer_tx, _buffer_rx) = mpsc::sync_channel(8);
+        let (sample_tx, sample_rx) = mpsc::channel();
+        let (control_tx, control_rx) = mpsc::channel();
+        let session = Arc::new(SystemAudioSession::default());
+        session.active.store(true, Ordering::Release);
+        session.generation.store(1, Ordering::Release);
+        let pump_session = Arc::clone(&session);
+        let pump = std::thread::spawn(move || {
+            run_loopback_pump(
+                raw_rx,
+                buffer_tx,
+                sample_tx,
+                control_rx,
+                pump_session,
+                16_000,
+            )
+        });
+        control_tx
+            .send(LoopbackPumpCmd::StartSession)
+            .expect("start pump");
+        // Deliver 20 packets (200 ms of audio) back-to-back in a few ms. This is
+        // the shape WASAPI loopback actually uses, and it is what separates the two
+        // designs: a deadline-driven pump advances `next_tick` by each packet's
+        // duration, so the audio timeline runs ahead of the wall clock and almost
+        // no silence is owed. A timeout-driven pump adds a full tick per timeout
+        // regardless, inflating the stream well past the real audio.
+        const BURST_PACKETS: usize = 20;
+        const PACKET_SAMPLES: usize = 160;
+        const REAL_SAMPLES: usize = BURST_PACKETS * PACKET_SAMPLES;
+        for _ in 0..BURST_PACKETS {
+            raw_tx
+                .send(LoopbackChunk {
+                    samples: vec![0.5; PACKET_SAMPLES],
+                    sample_rate: 16_000,
+                    session_generation: 1,
+                })
+                .expect("burst packet");
+        }
+        let mut sample_count = 0;
+        while sample_count < REAL_SAMPLES {
+            if let super::AudioChunk::Samples(samples) = sample_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("real burst output")
+            {
+                sample_count += samples.len();
+            }
+        }
+        control_tx
+            .send(LoopbackPumpCmd::EndSession)
+            .expect("end pump");
+
+        while let super::AudioChunk::Samples(samples) = sample_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("pump output")
+        {
+            sample_count += samples.len();
+        }
+
+        // Every real sample must survive the burst — none may be dropped or
+        // displaced by synthetic silence.
+        assert_eq!(
+            sample_count.min(REAL_SAMPLES),
+            REAL_SAMPLES,
+            "real burst audio was lost: sample_count={sample_count}"
+        );
+
+        // Silence is asserted as a bounded ALLOWANCE rather than an exact tick
+        // count, because the pump blocks on the loopback channel: at stop it waits
+        // out the remaining deadline, emits one catch-up tick, then emits the
+        // deliberate EndSession wake-up chunk. A startup race can add one more.
+        // Four ticks is generous for those; a timeout-driven pump would add on the
+        // order of one tick per packet across a 20-packet burst and blow past it.
+        let silence = sample_count - REAL_SAMPLES;
+        let allowance = 4 * PACKET_SAMPLES;
+        assert!(
+            silence <= allowance,
+            "pump injected phantom silence during a back-to-back burst: \
+             silence={silence} samples ({} ticks) exceeds allowance={allowance}; \
+             sample_count={sample_count}, real={REAL_SAMPLES}",
+            silence / PACKET_SAMPLES
+        );
+        drop(control_tx);
+        pump.join().expect("pump exits");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_recorder_stop_completes_while_loopback_packets_continue() {
+        let harness = LoopbackHarness::new();
+        harness.start();
+        let generation = harness.session.generation.load(Ordering::Acquire);
+        let raw_tx = harness.raw_tx.as_ref().expect("raw sender").clone();
+        let producing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let producer_flag = Arc::clone(&producing);
+        let producer = std::thread::spawn(move || {
+            while producer_flag.load(Ordering::Acquire) {
+                let _ = raw_tx.try_send(LoopbackChunk {
+                    samples: vec![0.25; 160],
+                    sample_rate: 16_000,
+                    session_generation: generation,
+                });
+                std::thread::yield_now();
+            }
+        });
+
+        let (mic_tx, mic_rx) = mpsc::channel();
+        let mic_worker = std::thread::spawn(move || {
+            while let Ok(command) = mic_rx.recv() {
+                match command {
+                    Cmd::Stop(reply) => {
+                        let _ = reply.send(vec![0.75; 160]);
+                    }
+                    Cmd::Shutdown => break,
+                    Cmd::Start(..) => {}
+                }
+            }
+        });
+        let mut recorder = AudioRecorder::new().expect("recorder");
+        recorder.cmd_tx = Some(mic_tx.clone());
+        recorder.system_cmd_tx = Some(harness.cmd_tx.clone());
+        recorder.loopback_pump_tx = Some(harness.pump_tx.clone());
+        recorder.system_audio_session = Arc::clone(&harness.session);
+
+        let recorded = recorder.stop().expect("real stop must complete");
+        assert_eq!(recorded.microphone, vec![0.75; 160]);
+        producing.store(false, Ordering::Release);
+        producer.join().expect("producer exits");
+        let _ = mic_tx.send(Cmd::Shutdown);
+        mic_worker.join().expect("mic worker exits");
+        drop(recorder);
+        harness.shutdown();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn immediate_stop_start_drops_stale_loopback_audio() {
+        let harness = LoopbackHarness::new();
+        harness.start();
+        let first_generation = harness.session.generation.load(Ordering::Acquire);
+        harness.send(vec![0.75; 480], first_generation);
+        let _ = harness.stop();
+
+        harness.start();
+        let current_generation = harness.session.generation.load(Ordering::Acquire);
+        harness.send(vec![0.75; 480], first_generation);
+        harness.send(vec![0.25; 480], current_generation);
+        std::thread::sleep(Duration::from_millis(50));
+        let second = harness.stop();
+        assert!(second.iter().any(|sample| (*sample - 0.25).abs() < 1e-6));
+        assert!(!second.iter().any(|sample| (*sample - 0.75).abs() < 1e-6));
+        harness.shutdown();
     }
 }
 

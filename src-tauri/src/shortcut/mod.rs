@@ -1310,8 +1310,9 @@ pub fn change_show_tray_icon_setting(app: AppHandle, enabled: bool) -> Result<()
 fn save_accelerator_and_reload_next_use(app: &AppHandle, s: settings::AppSettings) {
     settings::write_settings(app, s);
 
-    let tm = app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
-    tm.reload_model_on_next_use();
+    for manager in crate::managers::transcription::transcription_managers(app) {
+        manager.reload_model_on_next_use();
+    }
 }
 
 #[tauri::command]

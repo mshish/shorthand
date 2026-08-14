@@ -34,7 +34,12 @@ use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
-use managers::transcription::TranscriptionManager;
+#[cfg(windows)]
+use managers::transcription::SystemAudioTranscription;
+use managers::transcription::{
+    transcription_managers, ActiveStreamManagers, StreamSource, StreamTranscriptMerger,
+    TranscriptionManager,
+};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::image::Image;
@@ -158,12 +163,34 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     let model_manager =
         Arc::new(ModelManager::new(app_handle).expect("Failed to initialize model manager"));
     let transcription_manager = Arc::new(
-        TranscriptionManager::new(app_handle, model_manager.clone())
+        TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
+    #[cfg(windows)]
+    let initial_settings = settings::get_settings(app_handle);
+    #[cfg(windows)]
+    let system_audio_transcription = if initial_settings.system_audio_enabled
+        && model_manager
+            .get_model_info(&initial_settings.selected_model)
+            .is_some_and(|model| model.supports_streaming)
+    {
+        Some(Arc::new(
+            TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
+                .expect("Failed to initialize system audio transcription manager"),
+        ))
+    } else {
+        None
+    };
     let recording_manager = Arc::new(
-        AudioRecordingManager::new(app_handle, transcription_manager.stream_router())
-            .expect("Failed to initialize recording manager"),
+        AudioRecordingManager::new(
+            app_handle,
+            transcription_manager.stream_router(),
+            #[cfg(windows)]
+            system_audio_transcription
+                .as_ref()
+                .map(|manager| manager.stream_router()),
+        )
+        .expect("Failed to initialize recording manager"),
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
@@ -178,7 +205,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // Add managers to Tauri's managed state
     app_handle.manage(recording_manager.clone());
     app_handle.manage(model_manager.clone());
+    app_handle.manage(StreamTranscriptMerger::default());
+    app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
+    #[cfg(windows)]
+    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
+        system_audio_transcription,
+    )));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
 
@@ -270,15 +303,18 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 tray::copy_last_transcript(app);
             }
             "unload_model" => {
-                let transcription_manager = app.state::<Arc<TranscriptionManager>>();
-                if !transcription_manager.is_model_loaded() {
+                let managers = transcription_managers(app);
+                if !managers.iter().any(|manager| manager.is_model_loaded()) {
                     log::warn!("No model is currently loaded.");
                     return;
                 }
-                match transcription_manager.unload_model() {
-                    Ok(()) => log::info!("Model unloaded via tray."),
-                    Err(e) => log::error!("Failed to unload model via tray: {}", e),
+                for manager in managers {
+                    if let Err(e) = manager.unload_model() {
+                        log::error!("Failed to unload model via tray: {}", e);
+                        return;
+                    }
                 }
+                log::info!("Model unloaded via tray.");
             }
             "cancel" => {
                 use crate::utils::cancel_current_operation;
@@ -704,6 +740,8 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::is_recording,
             commands::audio::get_microphone_channels,
             commands::audio::set_selected_channel,
+            commands::audio::change_system_audio_enabled_setting,
+            commands::audio::set_system_audio_device,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,
@@ -844,10 +882,16 @@ pub fn run(cli_args: CliArgs) {
                     ModelManager::new(&app_handle).expect("Failed to initialize model manager"),
                 );
                 let transcription_manager = Arc::new(
-                    TranscriptionManager::new(&app_handle, model_manager.clone())
-                        .expect("Failed to initialize transcription manager"),
+                    TranscriptionManager::new(
+                        &app_handle,
+                        model_manager.clone(),
+                        StreamSource::Mic,
+                    )
+                    .expect("Failed to initialize transcription manager"),
                 );
                 app_handle.manage(model_manager);
+                app_handle.manage(StreamTranscriptMerger::default());
+                app_handle.manage(ActiveStreamManagers::default());
                 app_handle.manage(transcription_manager);
                 managers::transcription::init_transcribe_backend();
                 managers::transcription::apply_accelerator_settings(&app_handle);
@@ -859,7 +903,7 @@ pub fn run(cli_args: CliArgs) {
                     // Drop the loaded engine before teardown: ggml-metal's global
                     // device free asserts (SIGABRT) if a model's Metal resources
                     // are still alive at C++ static-destructor time.
-                    if let Some(tm) = handle.try_state::<Arc<TranscriptionManager>>() {
+                    for tm in transcription_managers(&handle) {
                         let _ = tm.unload_model();
                     }
                     // process::exit (not app.exit, which exits 0 regardless) so the
@@ -999,7 +1043,7 @@ pub fn run(cli_args: CliArgs) {
             }
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
-                if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
+                for tm in transcription_managers(app) {
                     let _ = tm.unload_model();
                 }
             }

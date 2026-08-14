@@ -57,7 +57,7 @@
                          center longer labels; shared by Live (collapsed) + minimal */
   --ov-open-w: 392px; /* Live panel, expanded */
   --ov-base-h: 40px; /* control-row height (.sbase) */
-  --ov-cap-max-h: 64px; /* max height of the scrolling live-text region */
+  --ov-cap-max-h: 64px; /* max height of the single-lane live-text region */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -254,6 +254,9 @@
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* legacy Edge */
 }
+.stext-cap.dual-lane {
+  max-height: 104px;
+}
 /* Hide the scrollbar (WebKit/Chromium) — scroll-back is signalled by the fade. */
 .stext-cap::-webkit-scrollbar {
   display: none;
@@ -262,6 +265,26 @@
   /* Bottom-anchor the text when it's shorter than the viewport, avoiding the
      justify-content:flex-end overflow bug that makes the top unscrollable. */
   margin: auto 0 0;
+}
+.stream-lane {
+  border-inline-start: 2px solid var(--s-border);
+  padding-inline-start: 8px;
+}
+.stream-lane + .stream-lane {
+  margin-top: 8px;
+}
+.stream-lane.system-lane {
+  border-inline-start-color: var(--s-accent);
+}
+.stream-lane-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--s-faint);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .stext-cap .tentative {
   color: inherit;

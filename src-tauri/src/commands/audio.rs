@@ -1,6 +1,11 @@
 use crate::audio_feedback;
 use crate::audio_toolkit::audio::{list_input_devices, list_output_devices, AudioRecorder};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
+use crate::managers::model::ModelManager;
+#[cfg(windows)]
+use crate::managers::transcription::{
+    StreamSource, SystemAudioTranscription, TranscriptionManager,
+};
 use crate::settings::{get_settings, write_settings};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -377,4 +382,132 @@ pub async fn set_selected_channel(app: AppHandle, channel: Option<u16>) -> Resul
     settings.selected_channel = channel;
     write_settings(&app, settings);
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn change_system_audio_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let settings = get_settings(&app);
+    if enabled && settings.mute_while_recording {
+        return Err(
+            "System audio capture cannot be enabled while mute while recording is enabled"
+                .to_string(),
+        );
+    }
+    if enabled {
+        let supports_streaming = app
+            .state::<Arc<ModelManager>>()
+            .get_model_info(&settings.selected_model)
+            .is_some_and(|model| model.supports_streaming);
+        if !supports_streaming {
+            return Err(
+                "System audio capture requires a model that supports streaming".to_string(),
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+        let device_name = settings.system_audio_device.clone();
+        let existing_system_manager = app
+            .state::<SystemAudioTranscription>()
+            .0
+            .lock()
+            .unwrap()
+            .clone();
+        let system_manager = if enabled {
+            match existing_system_manager {
+                Some(manager) => Some(manager),
+                None => Some(Arc::new(
+                    TranscriptionManager::new(
+                        &app,
+                        app.state::<Arc<ModelManager>>().inner().clone(),
+                        StreamSource::System,
+                    )
+                    .map_err(|error| {
+                        format!("Failed to initialize system audio transcription: {error}")
+                    })?,
+                )),
+            }
+        } else {
+            None
+        };
+        let stream_router = system_manager
+            .as_ref()
+            .map(|manager| manager.stream_router());
+        let manager_for_update = Arc::clone(&manager);
+        tokio::task::spawn_blocking(move || {
+            manager_for_update.update_system_audio_capture(enabled, device_name, stream_router)
+        })
+        .await
+        .map_err(|error| format!("audio task join failed: {error}"))?
+        .map_err(|error| format!("Failed to update system audio capture: {error}"))?;
+
+        let system_state = app.state::<SystemAudioTranscription>();
+        let mut slot = system_state.0.lock().unwrap();
+        if !enabled {
+            if let Some(old_manager) = slot.take() {
+                let _ = old_manager.unload_model();
+            }
+        } else {
+            *slot = system_manager;
+        }
+        drop(slot);
+
+        let mut settings = get_settings(&app);
+        settings.system_audio_enabled = enabled;
+        write_settings(&app, settings);
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    Err("System audio capture is only available on Windows".to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_system_audio_device(
+    app: AppHandle,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let normalized_device =
+            device_name.filter(|name| !name.eq_ignore_ascii_case("default") && !name.is_empty());
+        let settings = get_settings(&app);
+        let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+        let runtime_device = normalized_device.clone();
+        let stream_router = app
+            .state::<SystemAudioTranscription>()
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|manager| manager.stream_router());
+        tokio::task::spawn_blocking(move || {
+            manager.update_system_audio_capture(
+                settings.system_audio_enabled,
+                runtime_device,
+                stream_router,
+            )
+        })
+        .await
+        .map_err(|error| format!("audio task join failed: {error}"))?
+        .map_err(|error| format!("Failed to update system audio device: {error}"))?;
+
+        let mut settings = get_settings(&app);
+        settings.system_audio_device = normalized_device;
+        write_settings(&app, settings);
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (app, device_name);
+        Err("System audio capture is only available on Windows".to_string())
+    }
 }

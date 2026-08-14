@@ -117,6 +117,23 @@ const settingUpdaters: {
         ? "default"
         : (value as string),
     ),
+  system_audio_enabled: async (value) => {
+    const result = await commands.changeSystemAudioEnabledSetting(
+      value as boolean,
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
+  system_audio_device: async (value) => {
+    const device = value as string | null | undefined;
+    const result = await commands.setSystemAudioDevice(
+      device === "Default" || device === "default" ? null : (device ?? null),
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
   recording_retention_period: (value) =>
     commands.updateRecordingRetentionPeriod(value as string),
   translate_to_english: (value) =>

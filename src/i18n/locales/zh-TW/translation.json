@@ -9,6 +9,11 @@
     "cancel": "取消",
     "secureInputWarning": "⚠ 快捷鍵被 Secure Input 阻擋"
   },
+  "transcript": {
+    "speakerMic": "You",
+    "speakerSystem": "System",
+    "retryUnavailable": "Retry is unavailable for transcripts containing system audio."
+  },
   "sidebar": {
     "general": "一般",
     "models": "模型",
@@ -249,6 +254,17 @@
       }
     },
     "advanced": {
+      "systemAudio": {
+        "label": "Capture System Audio",
+        "description": "Capture Windows system output as a separate speaker-labelled transcription alongside the microphone.",
+        "streamingRequired": "System audio capture requires a model that supports streaming.",
+        "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
+      },
+      "systemAudioDevice": {
+        "title": "System Audio Device",
+        "description": "Choose the output device to capture. Default follows the current Windows default output.",
+        "default": "Default"
+      },
       "groups": {
         "app": "應用程式",
         "output": "輸出",

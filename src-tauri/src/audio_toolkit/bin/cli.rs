@@ -108,7 +108,11 @@ impl RecorderState {
                     if self.is_open {
                         self.recorder.close()?;
                     }
-                    self.recorder.open(device)?;
+                    self.recorder.open(
+                        device,
+                        #[cfg(windows)]
+                        None,
+                    )?;
                     self.is_open = true;
                     self.current_device_index = device_index;
                     println!("Opened recorder in Always-On mode");
@@ -120,7 +124,11 @@ impl RecorderState {
                 if self.is_open {
                     self.recorder.close()?;
                 }
-                self.recorder.open(device)?;
+                self.recorder.open(
+                    device,
+                    #[cfg(windows)]
+                    None,
+                )?;
                 self.is_open = true;
                 self.current_device_index = device_index;
                 self.recorder.start(VadPolicy::Offline)?;
@@ -141,7 +149,7 @@ impl RecorderState {
             return Err("No recording in progress.".into());
         }
 
-        let samples = self.recorder.stop()?;
+        let samples = self.recorder.stop()?.microphone;
         self.is_recording = false;
 
         match self.mode {

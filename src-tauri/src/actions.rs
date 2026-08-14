@@ -5,11 +5,14 @@ use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
-use crate::managers::transcription::StreamWorkKind;
-use crate::managers::transcription::TranscriptionManager;
+use crate::managers::transcription::{
+    cancel_active_streams, transcription_managers, ActiveStreamManagers, StreamTranscriptMerger,
+    StreamWorkKind, TranscriptionManager,
+};
 use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
+use crate::tray_i18n::get_app_transcript_translations;
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
 };
@@ -116,6 +119,20 @@ where
 
 fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool {
     style == OverlayStyle::Live && is_streaming
+}
+
+fn combine_finalize_results<M, S>(
+    mic: anyhow::Result<M>,
+    system: anyhow::Result<Option<S>>,
+) -> (anyhow::Result<M>, Option<S>) {
+    let system = match system {
+        Ok(result) => result,
+        Err(err) => {
+            error!("System-audio stream finalize failed; continuing with microphone: {err}");
+            None
+        }
+    };
+    (mic, system)
 }
 
 async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
@@ -471,12 +488,13 @@ impl ShortcutAction for TranscribeAction {
         debug!("TranscribeAction::start called for binding: {}", binding_id);
 
         // Load model in the background
-        let tm = app.state::<Arc<TranscriptionManager>>();
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         // Load ASR model and VAD model in parallel
         let kickoff_started = Instant::now();
-        tm.initiate_model_load();
+        for manager in transcription_managers(app) {
+            manager.initiate_model_load();
+        }
         let rm_clone = Arc::clone(&rm);
         std::thread::spawn(move || {
             if let Err(e) = rm_clone.preload_vad() {
@@ -514,7 +532,17 @@ impl ShortcutAction for TranscribeAction {
             VadPolicy::Offline
         };
         if model_supports_streaming {
-            tm.start_stream();
+            let managers = transcription_managers(app);
+            if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
+                merger.begin_session(managers.len() > 1);
+            }
+            app.state::<ActiveStreamManagers>()
+                .capture(managers.clone());
+            // Each manager guards its own worker. The optional system lane is
+            // independently started and can refuse/fail without affecting mic.
+            for manager in managers {
+                manager.start_stream();
+            }
         }
         let plan_elapsed = plan_started.elapsed();
 
@@ -602,7 +630,7 @@ impl ShortcutAction for TranscribeAction {
         } else {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
-            tm.cancel_stream();
+            cancel_active_streams(app);
             utils::hide_recording_overlay(app);
             change_tray_icon(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
@@ -655,6 +683,7 @@ impl ShortcutAction for TranscribeAction {
         // Capture this before finalizing the stream so every later working state
         // targets the same overlay that was shown for this transcription.
         let use_streaming_overlay = should_use_streaming_overlay(style, tm.is_streaming());
+        let transcript_labels = get_app_transcript_translations(app);
         if use_streaming_overlay {
             tm.emit_stream_working(StreamWorkKind::Transcribing);
         } else {
@@ -679,16 +708,18 @@ impl ShortcutAction for TranscribeAction {
             );
 
             let stop_recording_time = Instant::now();
-            if let Some(samples) = rm.stop_recording(&binding_id, cancel_generation) {
+            if let Some(recorded_audio) = rm.stop_recording(&binding_id, cancel_generation) {
+                let samples = recorded_audio.microphone;
                 debug!(
-                    "Recording stopped and samples retrieved in {:?}, sample count: {}",
+                    "Recording stopped and samples retrieved in {:?}, mic samples: {}, system samples: {}",
                     stop_recording_time.elapsed(),
-                    samples.len()
+                    samples.len(),
+                    recorded_audio.system.len()
                 );
 
                 if rm.was_cancelled_since(cancel_generation) {
                     debug!("Transcription operation cancelled after recording stop");
-                    tm.cancel_stream();
+                    cancel_active_streams(&ah);
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                     return;
@@ -698,7 +729,10 @@ impl ShortcutAction for TranscribeAction {
                     debug!("Recording produced no audio samples; skipping persistence");
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
-                    tm.cancel_stream();
+                    for manager in ah.state::<ActiveStreamManagers>().take() {
+                        manager.cancel_stream();
+                    }
+                    ah.state::<StreamTranscriptMerger>().cancel_session();
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
@@ -716,17 +750,48 @@ impl ShortcutAction for TranscribeAction {
                     // running, finalize it and use its text (all audio was already
                     // fed to the stream); otherwise batch-transcribe the samples.
                     let transcription_time = Instant::now();
-                    let transcription_result = match tm.finalize_stream() {
+                    // Finalize mic first because it owns the paste/batch fallback
+                    // path. Then independently finalize the optional loopback
+                    // lane; its failure must never fail or wedge the mic result.
+                    let active_managers = ah.state::<ActiveStreamManagers>().take();
+                    let system_manager = active_managers.get(1).cloned();
+                    // Queue loopback finalize first so its decoder flush overlaps
+                    // the mic finalize wait. The captured Arc remains valid even
+                    // if settings or the managed optional slot change meanwhile.
+                    let system_pending = system_manager
+                        .as_ref()
+                        .and_then(|manager| manager.begin_finalize_stream());
+                    let mic_stream_result = tm.finalize_stream_detailed();
+                    let system_stream_result = match (system_manager, system_pending) {
+                        (Some(manager), Some(pending)) => manager.finish_finalize_stream(pending),
+                        _ => Ok(None),
+                    };
+                    let (mic_stream_result, system_stream) =
+                        combine_finalize_results(mic_stream_result, system_stream_result);
+                    let transcription_result = match mic_stream_result {
                         // A finalized stream with usable text wins. An empty result
                         // (no active stream, produced nothing, or a finalize error
                         // after the engine was returned) falls back to a full batch
                         // transcription of the same audio. A finalize timeout is
                         // surfaced instead — the worker may still hold the engine,
                         // so a batch fallback would contend with it.
-                        Ok(Some(text)) if !text.trim().is_empty() => Ok(text),
-                        Ok(_) => tm.transcribe(samples),
+                        Ok(Some(result)) if !result.filtered.trim().is_empty() => {
+                            Ok((result.filtered.clone(), Some(result)))
+                        }
+                        Ok(_) => tm.transcribe(samples).map(|text| (text, None)),
                         Err(err) => Err(err),
-                    };
+                    }
+                    .map(|(mic_text, mic_stream)| {
+                        let settings = get_settings(&ah);
+                        ah.state::<StreamTranscriptMerger>().render(
+                            &mic_text,
+                            mic_stream.as_ref(),
+                            system_stream.as_ref(),
+                            &settings,
+                            &transcript_labels.speaker_mic,
+                            &transcript_labels.speaker_system,
+                        )
+                    });
 
                     // Await WAV save and verify
                     let wav_saved = match wav_handle.await {
@@ -876,7 +941,7 @@ impl ShortcutAction for TranscribeAction {
             } else {
                 debug!("No samples retrieved from recording stop");
                 // Tear down any streaming worker so its channel doesn't leak.
-                tm.cancel_stream();
+                cancel_active_streams(&ah);
                 utils::hide_recording_overlay(&ah);
                 change_tray_icon(&ah, TrayIconState::Idle);
             }
@@ -952,8 +1017,8 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_unless_cancelled, is_blank_transcription, should_use_streaming_overlay,
-        strip_think_block,
+        combine_finalize_results, complete_unless_cancelled, is_blank_transcription,
+        should_use_streaming_overlay, strip_think_block,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1035,5 +1100,15 @@ mod tests {
         assert!(!should_use_streaming_overlay(OverlayStyle::Live, false));
         assert!(!should_use_streaming_overlay(OverlayStyle::Minimal, true));
         assert!(!should_use_streaming_overlay(OverlayStyle::None, true));
+    }
+
+    #[test]
+    fn loopback_finalize_error_preserves_successful_mic_result() {
+        let (mic, system) = combine_finalize_results::<_, String>(
+            Ok("microphone text"),
+            Err(anyhow::anyhow!("loopback failed")),
+        );
+        assert_eq!(mic.unwrap(), "microphone text");
+        assert_eq!(system, None);
     }
 }

@@ -276,10 +276,10 @@ fn split_versioned_so(name: &str) -> Option<(&str, usize)> {
         .then_some((stem, comps.len()))
 }
 
-/// Generate tray menu translations from frontend locale files.
+/// Generate backend-consumed tray and transcript translations from frontend locale files.
 ///
 /// Source of truth: src/i18n/locales/*/translation.json
-/// The English "tray" section defines the struct fields.
+/// The English "tray" and "transcript" sections define their struct fields.
 fn generate_tray_translations() {
     use std::collections::BTreeMap;
     use std::fs;
@@ -292,6 +292,7 @@ fn generate_tray_translations() {
 
     // Collect all locale translations
     let mut translations: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut transcript_translations: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
     for entry in fs::read_dir(locales_dir).unwrap().flatten() {
         let path = entry.path();
@@ -308,7 +309,10 @@ fn generate_tray_translations() {
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         if let Some(tray) = parsed.get("tray").cloned() {
-            translations.insert(lang, tray);
+            translations.insert(lang.clone(), tray);
+        }
+        if let Some(transcript) = parsed.get("transcript").cloned() {
+            transcript_translations.insert(lang, transcript);
         }
     }
 
@@ -349,14 +353,49 @@ fn generate_tray_translations() {
         out.push_str("    });\n");
     }
 
+    out.push_str("    m\n});\n\n");
+
+    let transcript_english = transcript_translations
+        .get("en")
+        .expect("English transcript translations must exist")
+        .as_object()
+        .unwrap();
+    let transcript_fields: Vec<_> = transcript_english
+        .keys()
+        .map(|key| (camel_to_snake(key), key.clone()))
+        .collect();
+    out.push_str("#[derive(Debug, Clone)]\npub struct TranscriptStrings {\n");
+    for (rust_field, _) in &transcript_fields {
+        out.push_str(&format!("    pub {rust_field}: String,\n"));
+    }
+    out.push_str("}\n\n");
+    out.push_str(
+        "pub static TRANSCRIPT_TRANSLATIONS: Lazy<HashMap<&'static str, TranscriptStrings>> = Lazy::new(|| {\n",
+    );
+    out.push_str("    let mut m = HashMap::new();\n");
+    for (lang, transcript) in &transcript_translations {
+        out.push_str(&format!("    m.insert(\"{lang}\", TranscriptStrings {{\n"));
+        for (rust_field, json_key) in &transcript_fields {
+            let val = transcript
+                .get(json_key)
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            out.push_str(&format!(
+                "        {rust_field}: \"{}\".to_string(),\n",
+                escape_string(val)
+            ));
+        }
+        out.push_str("    });\n");
+    }
     out.push_str("    m\n});\n");
 
     fs::write(Path::new(&out_dir).join("tray_translations.rs"), out).unwrap();
 
     println!(
-        "cargo:warning=Generated tray translations: {} languages, {} fields",
+        "cargo:warning=Generated tray/transcript translations: {} languages, {}/{} fields",
         translations.len(),
-        fields.len()
+        fields.len(),
+        transcript_fields.len()
     );
 }
 
