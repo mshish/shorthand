@@ -2,12 +2,13 @@
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
+use crate::follow_stream::Speaker;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::{
-    cancel_active_streams, transcription_managers, ActiveStreamManagers, StreamTranscriptMerger,
-    StreamWorkKind, TranscriptionManager,
+    cancel_active_streams, has_dual_speaker_output, transcription_managers, ActiveStreamManagers,
+    StreamTranscriptMerger, StreamWorkKind, TranscriptionManager,
 };
 use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
@@ -47,6 +48,19 @@ impl Drop for FinishGuard {
         // WAV copy, engine scratch); hand the cached pages back to the OS so
         // they don't sit in malloc arenas until they get swapped out (#1792).
         crate::memory::trim_freed_memory();
+    }
+}
+
+/// Publishes a terminal follow-stream event if the transcription pipeline ended
+/// without one — a panic, or any future early return that forgets its terminal.
+/// A no-op on every normal path, because the real terminal already cleared the
+/// hub's active session.
+struct FollowStreamSessionGuard(AppHandle);
+impl Drop for FollowStreamSessionGuard {
+    fn drop(&mut self) {
+        if let Some(hub) = crate::follow_stream::hub(&self.0) {
+            hub.error("transcription ended unexpectedly");
+        }
     }
 }
 
@@ -531,6 +545,9 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
+        if let Some(hub) = crate::follow_stream::hub(app) {
+            hub.begin(model_supports_streaming);
+        }
         if model_supports_streaming {
             let managers = transcription_managers(app);
             if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
@@ -620,6 +637,9 @@ impl ShortcutAction for TranscribeAction {
             }
             Err(e) => {
                 debug!("Failed to start recording: {}", e);
+                if let Some(hub) = crate::follow_stream::hub(app) {
+                    hub.error(&e);
+                }
                 recording_error = Some(e);
             }
         }
@@ -702,6 +722,7 @@ impl ShortcutAction for TranscribeAction {
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
+            let follow_stream_guard = FollowStreamSessionGuard(ah.clone());
             debug!(
                 "Starting async transcription task for binding: {}",
                 binding_id
@@ -727,6 +748,9 @@ impl ShortcutAction for TranscribeAction {
 
                 if samples.is_empty() {
                     debug!("Recording produced no audio samples; skipping persistence");
+                    if let Some(hub) = crate::follow_stream::hub(&ah) {
+                        hub.no_speech();
+                    }
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
                     for manager in ah.state::<ActiveStreamManagers>().take() {
@@ -783,14 +807,16 @@ impl ShortcutAction for TranscribeAction {
                     }
                     .map(|(mic_text, mic_stream)| {
                         let settings = get_settings(&ah);
-                        ah.state::<StreamTranscriptMerger>().render(
+                        let merged_dual_speaker = has_dual_speaker_output(system_stream.as_ref());
+                        let rendered = ah.state::<StreamTranscriptMerger>().render(
                             &mic_text,
                             mic_stream.as_ref(),
                             system_stream.as_ref(),
                             &settings,
                             &transcript_labels.speaker_mic,
                             &transcript_labels.speaker_system,
-                        )
+                        );
+                        (rendered, merged_dual_speaker)
                     });
 
                     // Await WAV save and verify
@@ -825,7 +851,7 @@ impl ShortcutAction for TranscribeAction {
                     }
 
                     match transcription_result {
-                        Ok(transcription) => {
+                        Ok((transcription, merged_dual_speaker)) => {
                             debug!(
                                 "Transcription completed in {:?}: '{}'",
                                 transcription_time.elapsed(),
@@ -872,6 +898,9 @@ impl ShortcutAction for TranscribeAction {
                             }
 
                             if processed.final_text.is_empty() {
+                                if let Some(hub) = crate::follow_stream::hub(&ah) {
+                                    hub.no_speech();
+                                }
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             } else {
@@ -879,7 +908,11 @@ impl ShortcutAction for TranscribeAction {
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
                                 let rm_for_paste = Arc::clone(&rm);
+                                // run_on_main_thread queues the closure, so keep the
+                                // wire backstop alive until final can be published.
+                                let follow_stream_guard = follow_stream_guard;
                                 ah.run_on_main_thread(move || {
+                                    let _follow_stream_guard = follow_stream_guard;
                                     if rm_for_paste.was_cancelled_since(cancel_generation) {
                                         debug!("Transcription operation cancelled before paste");
                                         utils::hide_recording_overlay(&ah_clone);
@@ -887,6 +920,10 @@ impl ShortcutAction for TranscribeAction {
                                         return;
                                     }
 
+                                    if let Some(hub) = crate::follow_stream::hub(&ah_clone) {
+                                        let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
+                                        hub.finish(speaker, &final_text);
+                                    }
                                     match utils::paste(final_text, ah_clone.clone()) {
                                         Ok(()) => debug!(
                                             "Text pasted successfully in {:?}",
@@ -918,9 +955,13 @@ impl ShortcutAction for TranscribeAction {
                             }
 
                             error!("Transcription failed: {}", err);
+                            let error_message = err.to_string();
+                            if let Some(hub) = crate::follow_stream::hub(&ah) {
+                                hub.error(&error_message);
+                            }
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
-                            let _ = ah.emit("transcription-error", err.to_string());
+                            let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
                             if wav_saved {
                                 if let Err(save_err) = hm.save_entry(
@@ -940,6 +981,9 @@ impl ShortcutAction for TranscribeAction {
                 }
             } else {
                 debug!("No samples retrieved from recording stop");
+                if let Some(hub) = crate::follow_stream::hub(&ah) {
+                    hub.no_speech();
+                }
                 // Tear down any streaming worker so its channel doesn't leak.
                 cancel_active_streams(&ah);
                 utils::hide_recording_overlay(&ah);

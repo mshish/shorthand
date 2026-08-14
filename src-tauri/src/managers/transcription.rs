@@ -151,8 +151,7 @@ impl StreamTranscriptMerger {
         system_label: &str,
     ) -> String {
         let state = std::mem::take(&mut *self.state.lock().unwrap());
-        let Some(system_stream) = system_stream.filter(|result| !result.filtered.trim().is_empty())
-        else {
+        let Some(system_stream) = filter_dual_speaker(system_stream) else {
             return mic_final.to_string();
         };
 
@@ -362,6 +361,16 @@ impl FinalizedStreamResult {
             &self.supported_languages,
         )
     }
+}
+
+fn filter_dual_speaker(
+    system_stream: Option<&FinalizedStreamResult>,
+) -> Option<&FinalizedStreamResult> {
+    system_stream.filter(|result| !result.filtered.trim().is_empty())
+}
+
+pub(crate) fn has_dual_speaker_output(system_stream: Option<&FinalizedStreamResult>) -> bool {
+    filter_dual_speaker(system_stream).is_some()
 }
 
 pub struct PendingStreamFinalize {
@@ -1577,6 +1586,13 @@ impl TranscriptionManager {
                 merger.observe_committed(self.source, committed);
             }
         }
+        // A timed-out or cancelled stream is marked inactive before its worker can
+        // emit a stale tail. Normal feed and finalize emissions occur while active.
+        if self.stream_active.load(Ordering::Acquire) {
+            if let Some(hub) = crate::follow_stream::hub(&self.app_handle) {
+                hub.partial(self.source, committed, tentative);
+            }
+        }
         let _ = StreamTextEvent {
             source: self.source,
             committed: committed.to_string(),
@@ -2595,6 +2611,24 @@ mod tests {
             ),
             output_language,
             supported_languages,
+        }
+    }
+
+    #[test]
+    fn dual_speaker_predicate_matches_render_system_branch() {
+        let settings = AppSettings::default();
+        let whitespace_only = finalized(" \t\n", &settings);
+        let contributing = finalized("system speech", &settings);
+
+        assert!(!has_dual_speaker_output(None));
+        assert!(!has_dual_speaker_output(Some(&whitespace_only)));
+        assert!(has_dual_speaker_output(Some(&contributing)));
+
+        for stream in [None, Some(&whitespace_only), Some(&contributing)] {
+            assert_eq!(
+                filter_dual_speaker(stream).is_some(),
+                has_dual_speaker_output(stream)
+            );
         }
     }
 

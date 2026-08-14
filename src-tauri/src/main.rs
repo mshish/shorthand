@@ -7,6 +7,10 @@ use handy_app_lib::CliArgs;
 fn main() {
     let cli_args = CliArgs::parse();
 
+    if let Some(mode) = cli_args.follow_stream {
+        std::process::exit(handy_app_lib::follow_stream::run_client(mode));
+    }
+
     #[cfg(target_os = "linux")]
     {
         // DMABUF renderer causes crashes on various GPU/display server configurations

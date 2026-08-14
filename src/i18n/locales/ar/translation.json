@@ -237,6 +237,10 @@
         "streamingRequired": "System audio capture requires a model that supports streaming.",
         "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
       },
+      "followStream": {
+        "label": "Follow Live Transcript Output",
+        "description": "Allow local tools to follow live transcript events by running `handy --follow-stream`."
+      },
       "systemAudioDevice": {
         "title": "System Audio Device",
         "description": "Choose the output device to capture. Default follows the current Windows default output.",

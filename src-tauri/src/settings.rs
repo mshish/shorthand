@@ -388,6 +388,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub system_audio_enabled: bool,
     #[serde(default)]
+    pub follow_stream_enabled: bool,
+    #[serde(default)]
     pub system_audio_device: Option<String>,
     #[serde(default = "default_translate_to_english")]
     pub translate_to_english: bool,
@@ -875,6 +877,7 @@ pub fn get_default_settings() -> AppSettings {
         clamshell_microphone: None,
         selected_output_device: None,
         system_audio_enabled: false,
+        follow_stream_enabled: false,
         system_audio_device: None,
         translate_to_english: false,
         selected_language: "auto".to_string(),

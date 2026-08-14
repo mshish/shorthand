@@ -8,6 +8,7 @@ mod catalog;
 pub mod cli;
 mod clipboard;
 mod commands;
+pub mod follow_stream;
 mod helpers;
 mod input;
 mod llm_client;
@@ -25,7 +26,7 @@ mod tray;
 mod tray_i18n;
 mod utils;
 
-pub use cli::CliArgs;
+pub use cli::{CliArgs, FollowStreamMode};
 #[cfg(debug_assertions)]
 use specta_typescript::{BigIntExportBehavior, Typescript};
 use tauri_specta::{collect_commands, collect_events, Builder};
@@ -166,7 +167,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
-    #[cfg(windows)]
     let initial_settings = settings::get_settings(app_handle);
     #[cfg(windows)]
     let system_audio_transcription = if initial_settings.system_audio_enabled
@@ -206,6 +206,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(recording_manager.clone());
     app_handle.manage(model_manager.clone());
     app_handle.manage(StreamTranscriptMerger::default());
+    let follow_stream_hub = Arc::new(follow_stream::FollowStreamHub::default());
+    app_handle.manage(Arc::clone(&follow_stream_hub));
+    app_handle.manage(follow_stream::FollowStreamServer::default());
     app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
     #[cfg(windows)]
@@ -214,6 +217,28 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     )));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
+
+    if initial_settings.follow_stream_enabled {
+        let startup_app = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let server = startup_app.state::<follow_stream::FollowStreamServer>();
+            let _lifecycle_guard = server.lock_lifecycle().await;
+            // Re-read after acquiring the lifecycle lock so a settings command
+            // that won the race can cancel this queued startup attempt.
+            if !settings::get_settings(&startup_app).follow_stream_enabled {
+                return;
+            }
+
+            if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
+                log::error!("Failed to start configured follow-stream listener: {error}");
+                // The toggle must reflect reality because there is no separate query
+                // for whether the follow-stream listener is actually running.
+                let mut settings = settings::get_settings(&startup_app);
+                settings.follow_stream_enabled = false;
+                settings::write_settings(&startup_app, settings);
+            }
+        });
+    }
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -705,6 +730,7 @@ pub fn run(cli_args: CliArgs) {
             commands::get_app_dir_path,
             commands::get_app_settings,
             commands::get_default_settings,
+            commands::change_follow_stream_enabled_setting,
             commands::get_log_dir_path,
             commands::set_log_level,
             commands::open_recordings_folder,
@@ -1043,6 +1069,11 @@ pub fn run(cli_args: CliArgs) {
             }
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
+                if let Some(hub) = follow_stream::hub(app) {
+                    // Best-effort terminal event: server teardown aborts follower
+                    // tasks, so a follower may observe EOF instead of this cancel.
+                    hub.cancel();
+                }
                 for tm in transcription_managers(app) {
                     let _ = tm.unload_model();
                 }

@@ -175,19 +175,21 @@ Handy supports command-line parameters on all platforms for integration with scr
 
 **Implementation:** `cli.rs` (definitions), `main.rs` (parsing), `lib.rs` (applying), `signal_handle.rs` (shared logic)
 
-| Flag                     | Description                                                |
-| ------------------------ | ---------------------------------------------------------- |
-| `--toggle-transcription` | Toggle recording on/off on a running instance              |
-| `--toggle-post-process`  | Toggle recording with post-processing on/off               |
-| `--cancel`               | Cancel the current operation on a running instance         |
-| `--start-hidden`         | Launch without showing the main window (tray icon visible) |
-| `--no-tray`              | Launch without system tray (closing window quits the app)  |
-| `--debug`                | Enable debug mode with verbose (Trace) logging             |
+| Flag                     | Description                                                 |
+| ------------------------ | ----------------------------------------------------------- |
+| `--toggle-transcription` | Toggle recording on/off on a running instance               |
+| `--toggle-post-process`  | Toggle recording with post-processing on/off                |
+| `--cancel`               | Cancel the current operation on a running instance          |
+| `--follow-stream [MODE]` | Follow live transcript events as NDJSON or committed deltas |
+| `--start-hidden`         | Launch without showing the main window (tray icon visible)  |
+| `--no-tray`              | Launch without system tray (closing window quits the app)   |
+| `--debug`                | Enable debug mode with verbose (Trace) logging              |
 
 **Key design decisions:**
 
 - CLI flags are runtime-only overrides — they do NOT modify persisted settings
 - Remote control flags work via `tauri_plugin_single_instance`: second instance sends args, then exits
+- `--follow-stream` is a fork-only feature, off by default, whose follower attaches over a per-user local socket rather than `tauri_plugin_single_instance`; see [FOLLOW_STREAM.md](FOLLOW_STREAM.md)
 - `send_transcription_input()` in `signal_handle.rs` is shared between signal handlers and CLI
 
 ## Debug Mode

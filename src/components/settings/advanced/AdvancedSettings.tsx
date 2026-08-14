@@ -24,6 +24,7 @@ import { LazyStreamClose } from "../LazyStreamClose";
 import { FillerWordRemoval } from "../FillerWordRemoval";
 import { SystemAudioCapture } from "./SystemAudioCapture";
 import { SystemAudioDeviceSelector } from "./SystemAudioDeviceSelector";
+import { FollowStreamOutput } from "./FollowStreamOutput";
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -46,6 +47,7 @@ export const AdvancedSettings: React.FC = () => {
         <TypingToolSetting descriptionMode="tooltip" grouped={true} />
         <ClipboardHandlingSetting descriptionMode="tooltip" grouped={true} />
         <AutoSubmit descriptionMode="tooltip" grouped={true} />
+        <FollowStreamOutput descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>

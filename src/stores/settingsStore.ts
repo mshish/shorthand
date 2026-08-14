@@ -125,6 +125,14 @@ const settingUpdaters: {
       throw new Error(result.error);
     }
   },
+  follow_stream_enabled: async (value) => {
+    const result = await commands.changeFollowStreamEnabledSetting(
+      value as boolean,
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
   system_audio_device: async (value) => {
     const device = value as string | null | undefined;
     const result = await commands.setSystemAudioDevice(

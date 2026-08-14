@@ -85,6 +85,9 @@ pub fn cancel_current_operation(app: &AppHandle) {
     audio_manager.cancel_recording();
 
     // Abandon any live streaming transcription
+    if let Some(hub) = crate::follow_stream::hub(app) {
+        hub.cancel();
+    }
     cancel_active_streams(app);
 
     // Update tray icon and hide overlay

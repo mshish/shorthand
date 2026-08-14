@@ -1,6 +1,13 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lowercase")]
+pub enum FollowStreamMode {
+    Json,
+    Delta,
+}
+
 #[derive(Parser, Debug, Clone, Default)]
 #[command(name = "handy", about = "Handy - Speech to Text")]
 pub struct CliArgs {
@@ -60,4 +67,45 @@ pub struct CliArgs {
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Attach to the running Handy instance and stream live transcript events to
+    /// stdout as NDJSON. Pass `delta` for append-only committed text instead.
+    #[arg(
+        long,
+        value_name = "MODE",
+        num_args = 0..=1,
+        default_missing_value = "json",
+        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel"]
+    )]
+    pub follow_stream: Option<FollowStreamMode>,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{error::ErrorKind, Parser};
+
+    use super::*;
+
+    #[test]
+    fn follow_stream_argument_shapes_parse_as_documented() {
+        assert_eq!(CliArgs::parse_from(["handy"]).follow_stream, None);
+        assert_eq!(
+            CliArgs::parse_from(["handy", "--follow-stream"]).follow_stream,
+            Some(FollowStreamMode::Json)
+        );
+        assert_eq!(
+            CliArgs::parse_from(["handy", "--follow-stream", "delta"]).follow_stream,
+            Some(FollowStreamMode::Delta)
+        );
+        assert_eq!(
+            CliArgs::parse_from(["handy", "--follow-stream=delta"]).follow_stream,
+            Some(FollowStreamMode::Delta)
+        );
+
+        let error = CliArgs::try_parse_from(["handy", "--follow-stream", "--cancel"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error = CliArgs::try_parse_from(["handy", "--follow-stream", "bogus"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
 }
