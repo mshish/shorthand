@@ -4,18 +4,16 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { SettingContainer } from "../../ui/SettingContainer";
-import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { Button } from "../../ui/Button";
 import { AppDataDirectory } from "../AppDataDirectory";
 import { AppLanguageSelector } from "../AppLanguageSelector";
 import { ShowWhatsNewOnUpdate } from "../ShowWhatsNewOnUpdate";
 import { ThemeSelector } from "../ThemeSelector";
 import { LogDirectory } from "../debug";
-import { useSettings } from "../../../hooks/useSettings";
+import { ShowAllSettingsToggle } from "@/shorthand/ShowAllSettingsToggle";
 
 export const AboutSettings: React.FC = () => {
   const { t } = useTranslation();
-  const { getSetting, updateSetting, isUpdating } = useSettings();
   const [version, setVersion] = useState("");
 
   useEffect(() => {
@@ -56,17 +54,7 @@ export const AboutSettings: React.FC = () => {
 
         <ShowWhatsNewOnUpdate descriptionMode="tooltip" grouped={true} />
 
-        <ToggleSwitch
-          checked={getSetting("show_all_settings") ?? false}
-          onChange={(nextEnabled) =>
-            updateSetting("show_all_settings", nextEnabled)
-          }
-          isUpdating={isUpdating("show_all_settings")}
-          label={t("settings.about.showAllSettings.label")}
-          description={t("settings.about.showAllSettings.description")}
-          descriptionMode="tooltip"
-          grouped={true}
-        />
+        <ShowAllSettingsToggle />
 
         <SettingContainer
           title={t("settings.about.supportDevelopment.title")}

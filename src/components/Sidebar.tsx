@@ -1,23 +1,11 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Cog,
-  FlaskConical,
-  History,
-  Info,
-  Sparkles,
-  Cpu,
-  Mic,
-  Captions,
-  AppWindow,
-} from "lucide-react";
+import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
 import HandyTextLogo from "./icons/HandyTextLogo";
 import HandyHand from "./icons/HandyHand";
 import { useSettings } from "../hooks/useSettings";
 import { getVisibleSectionIds } from "@/shorthand/visibility";
-import { CaptureSettings } from "@/shorthand/CaptureSettings";
-import { TranscriptionSettings } from "@/shorthand/TranscriptionSettings";
-import { AppSettings } from "@/shorthand/AppSettings";
+import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
 import {
   GeneralSettings,
   AdvancedSettings,
@@ -46,24 +34,7 @@ interface SectionConfig {
 }
 
 export const SECTIONS_CONFIG = {
-  capture: {
-    labelKey: "sidebar.capture",
-    icon: Mic,
-    component: CaptureSettings,
-    enabled: () => true,
-  },
-  transcription: {
-    labelKey: "sidebar.transcription",
-    icon: Captions,
-    component: TranscriptionSettings,
-    enabled: () => true,
-  },
-  app: {
-    labelKey: "sidebar.app",
-    icon: AppWindow,
-    component: AppSettings,
-    enabled: () => true,
-  },
+  ...SHORTHAND_SECTIONS,
   general: {
     labelKey: "sidebar.general",
     icon: HandyHand,
