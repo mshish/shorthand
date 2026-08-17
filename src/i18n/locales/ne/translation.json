@@ -19,9 +19,6 @@
     "models": "मोडेलहरू",
     "advanced": "उन्नत",
     "postProcessing": "पोस्ट प्रोसेस",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "हिस्ट्री",
     "debug": "डिबग",
     "about": "बारेमा"
@@ -605,10 +602,6 @@
       "whatsNewUpdates": {
         "label": "नयाँ के छ देखाउनुहोस्",
         "description": "Handy अपडेट भएपछि रिलिज नोटहरू देखाउनुहोस्"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       },
       "appDataDirectory": {
         "title": "एप डेटा डाइरेक्टरी",

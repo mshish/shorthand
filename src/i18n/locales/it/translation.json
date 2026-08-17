@@ -19,9 +19,6 @@
     "models": "Modelli",
     "advanced": "Avanzate",
     "postProcessing": "Post-Elaborazione",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "Cronologia",
     "debug": "Debug",
     "about": "Informazioni"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "Mostra novità",
         "description": "Mostra le note di rilascio dopo gli aggiornamenti di Handy"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

@@ -19,9 +19,6 @@
     "models": "Modellen",
     "advanced": "Geavanceerd",
     "postProcessing": "Naverwerking",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "Geschiedenis",
     "debug": "Probleemoplossing",
     "about": "Over Handy"
@@ -605,10 +602,6 @@
       "whatsNewUpdates": {
         "label": "Toon 'Wat is er nieuw'",
         "description": "Release-notes tonen nadat Handy is bijgewerkt"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       },
       "appDataDirectory": {
         "title": "App-datamap",

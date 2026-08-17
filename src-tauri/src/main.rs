@@ -2,13 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use clap::Parser;
-use handy_app_lib::CliArgs;
+use shorthand_app_lib::CliArgs;
 
 fn main() {
     let cli_args = CliArgs::parse();
 
     if let Some(mode) = cli_args.follow_stream {
-        std::process::exit(handy_app_lib::follow_stream::run_client(mode));
+        std::process::exit(shorthand_app_lib::follow_stream::run_client(mode));
     }
 
     #[cfg(target_os = "linux")]
@@ -18,5 +18,5 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    handy_app_lib::run(cli_args)
+    shorthand_app_lib::run(cli_args)
 }

@@ -13,7 +13,7 @@ pub enum FollowStreamMode {
 }
 
 #[derive(Parser, Debug, Clone, Default)]
-#[command(name = "handy", about = "Handy - Speech to Text")]
+#[command(name = "shorthand", about = "Shorthand - live transcript capture")]
 pub struct CliArgs {
     /// Start with the main window hidden
     #[arg(long)]

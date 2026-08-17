@@ -19,9 +19,6 @@
     "models": "Modeller",
     "advanced": "Avancerat",
     "postProcessing": "Efterbearbetning",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "Historik",
     "debug": "Felsökning",
     "about": "Om"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "Visa nyheter",
         "description": "Visa versionsinformation efter Handy-uppdateringar"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

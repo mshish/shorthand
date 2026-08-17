@@ -19,9 +19,6 @@
     "models": "モデル",
     "advanced": "詳細設定",
     "postProcessing": "後処理",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "履歴",
     "debug": "デバッグ",
     "about": "概要"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "新機能を表示",
         "description": "Handy のアップデート後にリリースノートを表示"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

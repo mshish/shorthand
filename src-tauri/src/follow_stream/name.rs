@@ -11,7 +11,7 @@ pub fn socket_name() -> io::Result<String> {
         return Ok(name.clone());
     }
 
-    let name = format!("handy.follow-stream.{}", current_identity()?);
+    let name = format!("shorthand.follow-stream.{}", current_identity()?);
     match SOCKET_NAME.set(name.clone()) {
         Ok(()) => Ok(name),
         Err(_) => SOCKET_NAME
@@ -117,7 +117,7 @@ mod tests {
         assert!(!first.is_empty());
 
         #[cfg(windows)]
-        assert!(first.starts_with("handy.follow-stream.S-1-"));
+        assert!(first.starts_with("shorthand.follow-stream.S-1-"));
 
         #[cfg(unix)]
         assert!(first.ends_with(&format!(".{}", unsafe { libc::geteuid() })));
