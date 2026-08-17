@@ -194,6 +194,15 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
+    // Retention normally runs as a side effect of save_entry, but with both
+    // save_recordings and save_transcripts off (the default) save_entry is
+    // never reached, so a user's pre-existing backlog would otherwise never
+    // age out again. Run it once here so upgrading users still get their
+    // retention policy applied even while nothing new is being saved. A
+    // cleanup failure must never prevent the app from starting.
+    if let Err(err) = history_manager.cleanup_old_entries() {
+        log::error!("Failed to run startup history cleanup: {}", err);
+    }
 
     // Initialize the transcribe-cpp native backend (logging + backend module
     // registration) once, before any whisper model is loaded.
