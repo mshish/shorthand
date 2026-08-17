@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useState,
-  useRef,
-  type ComponentType,
-  type ReactNode,
-} from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
 import { toast, Toaster } from "sonner";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -20,7 +14,7 @@ import SecureInputWarning from "./components/SecureInputWarning";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import { Sidebar } from "./components/Sidebar";
 import { WhatsNewGate } from "./components/whats-new";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -29,19 +23,6 @@ import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 import { useVisibleSection } from "@/shorthand/useVisibleSection";
 
 type OnboardingStep = "accessibility" | "model" | "done";
-
-// Falls back to `fallbackComponent` rather than a hardcoded section: which
-// section is visible depends on show_all_settings, so the fallback must be
-// computed by the caller from the currently visible sections (see
-// `getVisibleSectionIds`), not hardcoded to a section that may be hidden.
-const renderSettingsContent = (
-  section: SidebarSection,
-  fallbackComponent: ComponentType,
-) => {
-  const ActiveComponent =
-    SECTIONS_CONFIG[section]?.component ?? fallbackComponent;
-  return <ActiveComponent />;
-};
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -52,7 +33,7 @@ function App() {
   // (vs a new user who needs full onboarding including model selection)
   const [isReturningUser, setIsReturningUser] = useState(false);
   const { settings, updateSetting } = useSettings();
-  const { currentSection, setCurrentSection, firstVisibleSection } =
+  const { currentSection, setCurrentSection, ActiveComponent } =
     useVisibleSection(settings);
 
   const direction = getLanguageDirection(i18n.language);
@@ -324,10 +305,7 @@ function App() {
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
                 <SecureInputWarning />
-                {renderSettingsContent(
-                  currentSection,
-                  SECTIONS_CONFIG[firstVisibleSection].component,
-                )}
+                <ActiveComponent />
               </div>
             </div>
           </div>
