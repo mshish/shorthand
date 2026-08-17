@@ -1,79 +1,95 @@
-# Shorthand is not yet a distinct application
+# Shorthand as a distinct application
 
-Status: findings only, no design yet
+Status: identity done; updater and signing outstanding
 Date: 2026-08-17
 
-Raised while finishing the settings UI work. None of it is addressed by that
-change. Recorded here because the reasoning is not derivable from the code
-without retracing it.
+## Done
 
-## Shorthand still identifies as Handy
+Shorthand now installs and runs alongside Handy rather than replacing it.
 
-`src-tauri/tauri.conf.json` declares `productName: "Handy"` and
-`identifier: "com.pais.handy"`. Three consequences follow from the identifier
-alone:
+- `productName` is `Shorthand` and `identifier` is `com.mshish.shorthand`, so
+  the app has its own install location, uninstall entry, and settings
+  directory. The single-instance plugin keys off the identifier, so the two
+  apps no longer hand off to each other.
+- The Cargo package is `shorthand`, so the binary is `shorthand.exe`.
+- The follow-stream socket is `shorthand.follow-stream.{user}`. Previously both
+  builds raced for one pipe and whichever lost failed silently.
+- `shorthand-core` 0.5.0 and `obsidian-shorthand` follow: binary discovery
+  looks for Shorthand in Shorthand's install locations, and the API,
+  environment variables and note frontmatter keys are renamed to match.
 
-- **It cannot be installed alongside Handy.** Same install location, same
-  Start Menu entry, same uninstall entry. Installing Shorthand replaces Handy
-  rather than joining it.
-- **`tauri-plugin-single-instance` keys off the identifier.** Even with both
-  installed, launching one would hand off to the other and exit.
-- **It shares Handy's settings store**, at
-  `%APPDATA%/com.pais.handy/settings_store.json`. The path derives from the
-  identifier, so Shorthand reads and writes Handy's settings today.
+### How the UI rename works, and why it is not in the locale files
 
-The follow-stream socket collides independently of the identifier:
-`follow_stream/name.rs` builds `handy.follow-stream.{user identity}`, identical
-for both builds. Whichever process starts first owns the pipe; the other's
-stream fails.
+The 24 catalogues under `src/i18n/locales/` are byte-identical to upstream.
+The rename happens at build time, in `src/shorthand/branding.ts`, applied by a
+Vite transform registered in `vite.config.ts` — two lines, the entire upstream
+footprint. The four fork-only strings are merged in there too, rather than
+copied into every catalogue.
 
-Renaming the socket is safe for the Obsidian plugin. `shorthand-core` spawns
-the binary with `--follow-stream json` rather than connecting to the pipe by
-name, so the name is internal to the app.
+Hand-editing the catalogues would have put ~400 changed lines into the files
+upstream churns most, and left every future upstream string containing "Handy"
+to be caught by eye. Forgejo — which rebranded Gitea while continuing to merge
+from it, the closest comparable case — tried that, rejected it, and moved to a
+build-time generator.
 
-Note that changing the identifier would also have largely dissolved the
-`paste_method` migration problem on its own — a new identifier means a fresh
-profile, so the new default applies with nothing stored to override it. The
-migration is still correct for anyone already running this branch or copying a
-store across, but a future identifier change makes it belt-and-braces rather
-than load-bearing.
+`bun run check:branding` is the guard. It fails when a new upstream string
+renders as "Handy", when an entry in `BRAND_EXEMPT_KEYS` goes stale because
+upstream reworded the sentence beneath it, and when one of the four brand
+literals that live outside i18n loses its rename in a merge. Those four are the
+window title, the clap command name, the OpenRouter `X-Title` header, and the
+socket prefix.
 
-## The fork will try to update itself into upstream Handy
+It is worth knowing that no comparable project ships this guard; Forgejo
+explicitly deferred it. It is also the piece most likely to be wrong, since
+there is no prior art to copy.
 
-This is the one worth fixing first, and it is independent of everything else.
+Two things the guard already caught, which are worth remembering as the shape
+of failure to expect:
 
-`tauri.conf.json` sets `plugins.updater.endpoints` to
-`https://github.com/cjpais/Handy/releases/latest/download/latest.json` and
-carries cjpais's minisign `pubkey`. `update_checks_enabled` defaults to `true`
-(`src-tauri/src/settings.rs`).
+- Danish writes the product name with a genitive `s` — "Handys lokale
+  tale-til-tekst". A bare `\bHandy\b` rule leaves that behind while renaming
+  everything around it. The rule carries the genitive now.
+- German uses "Handy" as the everyday word for a mobile phone. No current
+  string means the phone, but German matches still emit a review warning
+  because the text can change under us.
 
-So a running Shorthand polls upstream's releases, and on finding a newer Handy
-offers to install it — over the fork. Either point the updater at a Shorthand
-release feed with a Shorthand signing key, or disable it.
+## Outstanding
 
-## Signing
+### The updater still points at upstream
 
-Needed only for distribution, not for local development:
+`plugins.updater.endpoints` is `cjpais/Handy`'s `latest.json`, carrying
+upstream's minisign `pubkey`, and `update_checks_enabled` defaults to `true`.
+A running Shorthand will offer to install a newer Handy over itself. Decline it
+until this is replaced.
 
-- **Windows.** `bundle.windows.signCommand` invokes cjpais's Azure Trusted
-  Signing account (`-a CJ-Signing -c cjpais-dev`). This fork cannot
-  authenticate to it, so any build running that command fails. Remove it and
-  accept SmartScreen warnings, or supply a certificate.
-- **macOS.** The release workflow expects `APPLE_CERTIFICATE`, `APPLE_ID` and
-  `APPLE_TEAM_ID` secrets this fork does not have.
-- **Auto-updates.** `TAURI_SIGNING_PRIVATE_KEY` is a minisign keypair
-  (`bunx tauri signer generate`). Only required if Shorthand ships update
-  artifacts.
+Deliberately left in place: signing and releases are being set up as their own
+piece of work, and repointing the updater without a signing key and a release
+feed would only half-solve it.
+
+### Signing is not set up
+
+`bundle.windows.signCommand` invokes cjpais's Azure Trusted Signing account
+(`-a CJ-Signing -c cjpais-dev`), which this fork cannot authenticate to, so any
+build running that command fails. macOS release workflows expect
+`APPLE_CERTIFICATE` / `APPLE_ID` / `APPLE_TEAM_ID` secrets that do not exist
+here. Auto-updates additionally need a minisign keypair
+(`bunx tauri signer generate` → `TAURI_SIGNING_PRIVATE_KEY`).
 
 GitHub Actions is disabled at the repository level on `mshish/shorthand`, so
-none of these currently run. That was deliberate: disabling Actions as a repo
-setting keeps upstream's nine workflow files byte-identical, where deleting
+none of these run today. That was deliberate: disabling Actions as a repo
+setting leaves upstream's nine workflow files byte-identical, where deleting
 them would conflict on every merge.
 
-## Unrelated, recorded so it is not rediscovered
+### macOS onboarding asks for a permission it no longer needs
 
-`src/bindings.ts` is generated by tauri-specta from an export call at the top
-of `run()` under `#[cfg(debug_assertions)]`. Neither `cargo build` nor
-`cargo test` reaches it — regenerating requires actually launching the debug
-binary for a moment. There is no headless export path, which matters if CI is
-ever asked to verify the bindings are current.
+`App.tsx` gates first launch on the Accessibility permission, which exists only
+to synthesize keystrokes. With `PasteMethod::None` as the default, Shorthand
+does not type into other windows.
+
+## Worth not rediscovering
+
+`src/bindings.ts` is generated by tauri-specta from an export call at the top of
+`run()`, under `#[cfg(debug_assertions)]`. Neither `cargo build` nor
+`cargo test` reaches it — regenerating means launching the debug binary for a
+moment. There is no headless export path, which matters if CI is ever asked to
+verify the bindings are current.
