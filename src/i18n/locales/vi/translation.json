@@ -19,6 +19,9 @@
     "models": "Mô hình",
     "advanced": "Nâng cao",
     "postProcessing": "Xử lý sau",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "Lịch sử",
     "debug": "Gỡ lỗi",
     "about": "Giới thiệu"
@@ -624,6 +627,10 @@
       "whatsNewUpdates": {
         "label": "Hiển thị điểm mới",
         "description": "Hiển thị ghi chú phát hành sau khi Handy cập nhật"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

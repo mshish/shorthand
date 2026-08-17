@@ -4,6 +4,8 @@ import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
 import HandyTextLogo from "./icons/HandyTextLogo";
 import HandyHand from "./icons/HandyHand";
 import { useSettings } from "../hooks/useSettings";
+import { getVisibleSectionIds } from "@/shorthand/visibility";
+import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
 import {
   GeneralSettings,
   AdvancedSettings,
@@ -32,6 +34,7 @@ interface SectionConfig {
 }
 
 export const SECTIONS_CONFIG = {
+  ...SHORTHAND_SECTIONS,
   general: {
     labelKey: "sidebar.general",
     icon: HandyHand,
@@ -88,9 +91,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { t } = useTranslation();
   const { settings } = useSettings();
 
-  const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([_, config]) => config.enabled(settings))
-    .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
+  const availableSections = getVisibleSectionIds(SECTIONS_CONFIG, settings).map(
+    (id) => ({
+      id: id as SidebarSection,
+      ...SECTIONS_CONFIG[id as SidebarSection],
+    }),
+  );
 
   return (
     <div className="flex flex-col w-40 h-full border-e border-mid-gray/20 items-center px-2">

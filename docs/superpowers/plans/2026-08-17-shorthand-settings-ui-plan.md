@@ -1,7 +1,8 @@
 # Implementation plan: Shorthand settings UI restructure
 
 Spec: `docs/superpowers/specs/2026-08-17-shorthand-settings-ui-design.md`
-Branch: `shorthand/settings-ui`, cut from `shorthand`.
+Branch: `shorthand-settings-ui`, cut from `shorthand`. (Not
+`shorthand/settings-ui` — git cannot hold both that and the `shorthand` ref.)
 
 The spec is the binding authority. Where this plan and the spec disagree, the
 spec wins.

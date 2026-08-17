@@ -19,6 +19,9 @@
     "models": "Modelle",
     "advanced": "Erweitert",
     "postProcessing": "Nachbearbeitung",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "Verlauf",
     "debug": "Debug",
     "about": "Info"
@@ -624,6 +627,10 @@
       "whatsNewUpdates": {
         "label": "Neuerungen anzeigen",
         "description": "Versionshinweise nach Handy-Updates anzeigen"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

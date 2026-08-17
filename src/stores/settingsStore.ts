@@ -191,6 +191,8 @@ const settingUpdaters: {
     commands.changeFillerWordRemovalEnabledSetting(value as boolean),
   show_tray_icon: (value) =>
     commands.changeShowTrayIconSetting(value as boolean),
+  show_all_settings: (value) =>
+    commands.changeShowAllSettingsSetting(value as boolean),
   transcribe_accelerator: (value) =>
     commands.changeTranscribeAcceleratorSetting(
       value as TranscribeAcceleratorSetting,
