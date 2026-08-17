@@ -4,8 +4,12 @@ use std::path::PathBuf;
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
 pub enum FollowStreamMode {
+    /// The full protocol stream, verbatim NDJSON.
     Json,
+    /// One JSONL record per newly-committed suffix.
     Delta,
+    /// The human-readable `me: `/`them: ` rendering of the same committed text.
+    Text,
 }
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -69,7 +73,8 @@ pub struct CliArgs {
     pub json: bool,
 
     /// Attach to the running Handy instance and stream live transcript events to
-    /// stdout as NDJSON. Pass `delta` for append-only committed text instead.
+    /// stdout as NDJSON. Pass `delta` for append-only committed text as JSONL,
+    /// or `text` for the plain human-readable rendering of the same.
     #[arg(
         long,
         value_name = "MODE",
@@ -100,6 +105,14 @@ mod tests {
         assert_eq!(
             CliArgs::parse_from(["handy", "--follow-stream=delta"]).follow_stream,
             Some(FollowStreamMode::Delta)
+        );
+        assert_eq!(
+            CliArgs::parse_from(["handy", "--follow-stream", "text"]).follow_stream,
+            Some(FollowStreamMode::Text)
+        );
+        assert_eq!(
+            CliArgs::parse_from(["handy", "--follow-stream=text"]).follow_stream,
+            Some(FollowStreamMode::Text)
         );
 
         let error = CliArgs::try_parse_from(["handy", "--follow-stream", "--cancel"]).unwrap_err();

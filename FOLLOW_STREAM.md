@@ -1,6 +1,12 @@
 # Follow-stream output
 
-The fork-only `handy --follow-stream` feature lets another process follow live transcription output from an already-running Handy instance. It is off by default; enable **Follow Live Transcript Output** in Advanced settings before connecting. The bare flag and `json` mode write newline-delimited JSON (NDJSON), while `delta` mode writes append-only committed text.
+The fork-only `handy --follow-stream` feature lets another process follow live transcription output from an already-running Handy instance. It is off by default; enable **Follow Live Transcript Output** in Advanced settings before connecting.
+
+| Mode | Output |
+| --- | --- |
+| `json` (default, also the bare flag) | The full protocol as newline-delimited JSON |
+| `delta` | JSONL, one record per newly-committed suffix |
+| `text` | The plain `me: `/`them: ` rendering of that same committed text |
 
 ## NDJSON protocol
 
@@ -62,9 +68,36 @@ Up to eight followers may be connected at once. A ninth receives one `error` eve
 
 ## Delta mode
 
-Run `handy --follow-stream delta` to transform the same NDJSON stream locally. Delta mode tracks committed text separately for each `(session, speaker)` and immediately prints only the newly committed suffix. It prefixes the first output for a speaker with `me: ` or `them: `, inserts a newline and a new prefix when the active speaker changes, and writes a trailing newline for terminal events. Other events and tentative text produce no output.
+Run `handy --follow-stream delta` to transform the same NDJSON stream locally into one JSONL record per newly-committed suffix. Delta mode tracks committed text separately for each `(session, speaker)` and immediately emits only the new suffix. Tentative text produces no output.
 
-Delta mode requires a streaming-capable model because it is built only from `partial.committed`. On a non-streaming `begin`, it prints an error to stderr and exits non-zero; JSON mode continues to work because it passes the eventual `final` event through unchanged.
+```jsonl
+{"t":"delta","schema":1,"session":42,"speaker":"me","text":"Can you hear me?","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
+{"t":"delta","schema":1,"session":42,"speaker":"them","text":"Yes, clearly.","emitted_at":"2026-08-15T14:03:22.900-07:00","session_elapsed_ms":2700}
+{"t":"end","schema":1,"session":42,"reason":"final","emitted_at":"2026-08-15T14:03:23.010-07:00","session_elapsed_ms":2810}
+```
+
+Each session closes with one `end` record whose `reason` is `final`, `no_speech`, `cancel`, or `error`; an `error` also carries its `message`. A connection-level rejection produces an `end` with no `session`.
+
+`schema` versions this format independently of the wire `protocol`, because delta output is produced entirely client-side. It is at 1.
+
+Both timestamp fields are copied straight through from the `partial` the suffix arrived on, and are omitted if the connected Handy did not send them.
+
+```sh
+handy --follow-stream delta | jq -r 'select(.t=="delta") | "\(.emitted_at) \(.speaker): \(.text)"'
+```
+
+## Text mode
+
+Run `handy --follow-stream text` for the plain human-readable rendering of the same committed text. It prefixes the first output for a speaker with `me: ` or `them: `, inserts a newline and a new prefix when the active speaker changes, and writes a trailing newline when a session ends.
+
+```text
+me: Can you hear me?
+them: Yes, clearly.
+```
+
+## Streaming models
+
+Both `delta` and `text` are built only from `partial.committed`, so both require a streaming-capable model. On a non-streaming `begin` they print an error to stderr and exit non-zero; JSON mode continues to work because it passes the eventual `final` event through unchanged.
 
 ## Local transport and security
 

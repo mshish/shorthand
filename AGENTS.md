@@ -180,7 +180,7 @@ Handy supports command-line parameters on all platforms for integration with scr
 | `--toggle-transcription` | Toggle recording on/off on a running instance               |
 | `--toggle-post-process`  | Toggle recording with post-processing on/off                |
 | `--cancel`               | Cancel the current operation on a running instance          |
-| `--follow-stream [MODE]` | Follow live transcript events as NDJSON or committed deltas |
+| `--follow-stream [MODE]` | Follow live transcript events: `json`, `delta`, or `text` |
 | `--start-hidden`         | Launch without showing the main window (tray icon visible)  |
 | `--no-tray`              | Launch without system tray (closing window quits the app)   |
 | `--debug`                | Enable debug mode with verbose (Trace) logging              |
