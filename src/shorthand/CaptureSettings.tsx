@@ -11,6 +11,8 @@ import { ShowOverlay } from "@/components/settings/ShowOverlay";
 import { SystemAudioCapture } from "@/components/settings/advanced/SystemAudioCapture";
 import { SystemAudioDeviceSelector } from "@/components/settings/advanced/SystemAudioDeviceSelector";
 import { FollowStreamOutput } from "@/components/settings/advanced/FollowStreamOutput";
+import { SaveRecordings } from "@/components/settings/SaveRecordings";
+import { SaveTranscripts } from "@/components/settings/SaveTranscripts";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
 import { useSettings } from "@/hooks/useSettings";
 
@@ -46,6 +48,10 @@ export const CaptureSettings: React.FC = () => {
       <SettingsGroup>
         <ShowOverlay descriptionMode="tooltip" grouped={true} />
         <FollowStreamOutput descriptionMode="tooltip" grouped={true} />
+      </SettingsGroup>
+      <SettingsGroup title={t("settings.privacy.title")}>
+        <SaveRecordings descriptionMode="tooltip" grouped={true} />
+        <SaveTranscripts descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
     </div>
   );

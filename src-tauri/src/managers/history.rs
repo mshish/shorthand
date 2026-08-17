@@ -6,7 +6,7 @@ use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_specta::Event;
 
@@ -69,6 +69,22 @@ pub struct HistoryManager {
     app_handle: AppHandle,
     recordings_dir: PathBuf,
     db_path: PathBuf,
+}
+
+/// Resolves the WAV path for a history entry, if it has one to delete.
+///
+/// A history row can exist with an empty `file_name` when the
+/// save-recordings toggle was off for that transcription (only the
+/// transcript text was kept). `dir.join("")` yields `dir` itself, which
+/// exists on disk, so without this guard the cleanup paths would attempt
+/// `fs::remove_file` on the recordings directory. Returns `None` for an
+/// empty `file_name` so callers skip deletion entirely.
+fn recording_file_to_delete(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    if file_name.is_empty() {
+        None
+    } else {
+        Some(dir.join(file_name))
+    }
 }
 
 impl HistoryManager {
@@ -362,14 +378,15 @@ impl HistoryManager {
                 params![id],
             )?;
 
-            // Delete WAV file
-            let file_path = self.recordings_dir.join(file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete WAV file {}: {}", file_name, e);
-                } else {
-                    debug!("Deleted old WAV file: {}", file_name);
-                    deleted_count += 1;
+            // Delete WAV file, if this entry has one
+            if let Some(file_path) = recording_file_to_delete(&self.recordings_dir, file_name) {
+                if file_path.exists() {
+                    if let Err(e) = fs::remove_file(&file_path) {
+                        error!("Failed to delete WAV file {}: {}", file_name, e);
+                    } else {
+                        debug!("Deleted old WAV file: {}", file_name);
+                        deleted_count += 1;
+                    }
                 }
             }
         }
@@ -612,12 +629,15 @@ impl HistoryManager {
 
         // Get the entry to find the file name
         if let Some(entry) = self.get_entry_by_id(id).await? {
-            // Delete the audio file first
-            let file_path = self.get_audio_file_path(&entry.file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete audio file {}: {}", entry.file_name, e);
-                    // Continue with database deletion even if file deletion fails
+            // Delete the audio file first, if this entry has one
+            if let Some(file_path) =
+                recording_file_to_delete(&self.recordings_dir, &entry.file_name)
+            {
+                if file_path.exists() {
+                    if let Err(e) = fs::remove_file(&file_path) {
+                        error!("Failed to delete audio file {}: {}", entry.file_name, e);
+                        // Continue with database deletion even if file deletion fails
+                    }
                 }
             }
         }
@@ -733,5 +753,23 @@ mod tests {
 
         assert_eq!(entry.timestamp, 100);
         assert_eq!(entry.transcription_text, "completed");
+    }
+
+    #[test]
+    fn recording_file_to_delete_skips_empty_file_name() {
+        // An empty file_name means save_recordings was off for this entry.
+        // dir.join("") resolves to the recordings directory itself, which
+        // exists, so this must return None rather than a path to delete.
+        let dir = std::path::Path::new("/recordings");
+        assert_eq!(recording_file_to_delete(dir, ""), None);
+    }
+
+    #[test]
+    fn recording_file_to_delete_joins_non_empty_file_name() {
+        let dir = std::path::Path::new("/recordings");
+        assert_eq!(
+            recording_file_to_delete(dir, "handy-123.wav"),
+            Some(dir.join("handy-123.wav"))
+        );
     }
 }

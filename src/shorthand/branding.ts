@@ -38,6 +38,14 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "settings.about.showAllSettings.label": "Show all Handy settings",
   "settings.about.showAllSettings.description":
     "Reveal every setting from upstream Handy, including features Shorthand hides.",
+  "settings.privacy.title": "Privacy",
+  "settings.privacy.saveRecordings.label": "Save recordings",
+  "settings.privacy.saveRecordings.description":
+    "Keep the audio of each transcription in your recordings folder so you can play it back or re-transcribe it. Off by default; no recording is kept.",
+  "settings.privacy.saveTranscripts.label": "Save transcripts",
+  "settings.privacy.saveTranscripts.description":
+    "Keep the text of each transcription in your local history. Off by default; no transcript is kept.",
+  "settings.history.transcriptNotSaved": "Transcript not saved.",
 };
 
 /**

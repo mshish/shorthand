@@ -135,6 +135,53 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
     style == OverlayStyle::Live && is_streaming
 }
 
+/// Builds the message logged when a transcription finishes.
+///
+/// The file log target runs at `LogLevel::Debug` by default (see
+/// `default_log_level` in settings.rs), so an unconditional `debug!` of the
+/// transcript text would still write it to `<app data dir>/logs/handy.log`
+/// even when the user has turned `save_transcripts` off — defeating the
+/// setting through the log file instead of `history.db`. When it's off,
+/// keep the useful diagnostics (elapsed time, character count) but withhold
+/// the text itself, and say so explicitly so the absence reads as
+/// intentional rather than as an empty transcription.
+fn transcription_completed_message(
+    save_transcripts: bool,
+    elapsed: Duration,
+    transcription: &str,
+) -> String {
+    if save_transcripts {
+        format!("Transcription completed in {elapsed:?}: '{transcription}'")
+    } else {
+        format!(
+            "Transcription completed in {elapsed:?}: <withheld, save_transcripts is off> ({} chars)",
+            transcription.chars().count()
+        )
+    }
+}
+
+/// Decides what the post-processed transcript and its prompt should look
+/// like in a history row, given the `save_transcripts` setting.
+///
+/// `post_processed_text` is itself a transcript — in the post-processing
+/// case it is the text that actually gets pasted — so it must be gated by
+/// `save_transcripts` exactly like the raw transcript is, or the setting
+/// leaks the transcript into `history.db` through a side door. The prompt
+/// that produced it is gated alongside it: it's the user's own template
+/// rather than their speech, but a saved prompt on a row with no saved text
+/// would be a dangling half-guarantee.
+fn gated_post_processed_fields(
+    save_transcripts: bool,
+    post_processed_text: Option<String>,
+    post_process_prompt: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if save_transcripts {
+        (post_processed_text, post_process_prompt)
+    } else {
+        (None, None)
+    }
+}
+
 fn combine_finalize_results<M, S>(
     mic: anyhow::Result<M>,
     system: anyhow::Result<Option<S>>,
@@ -760,15 +807,35 @@ impl ShortcutAction for TranscribeAction {
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
+                    // Persistence toggles: whether to keep the WAV on disk and
+                    // whether to keep the transcript text in history. These
+                    // govern persistence only; delivery (paste/clipboard/
+                    // follow-stream) happens unconditionally below regardless
+                    // of either flag.
+                    let persistence_settings = get_settings(&ah);
+                    let save_recordings = persistence_settings.save_recordings;
+                    let save_transcripts = persistence_settings.save_transcripts;
+
                     // Save WAV concurrently with transcription
                     let sample_count = samples.len();
-                    let file_name = format!("handy-{}.wav", chrono::Utc::now().timestamp());
-                    let wav_path = hm.recordings_dir().join(&file_name);
-                    let wav_path_for_verify = wav_path.clone();
-                    let samples_for_wav = samples.clone();
-                    let wav_handle = tauri::async_runtime::spawn_blocking(move || {
-                        crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
-                    });
+                    let file_name = if save_recordings {
+                        format!("handy-{}.wav", chrono::Utc::now().timestamp())
+                    } else {
+                        String::new()
+                    };
+                    let wav_handle = if save_recordings {
+                        let wav_path = hm.recordings_dir().join(&file_name);
+                        let wav_path_for_verify = wav_path.clone();
+                        let samples_for_wav = samples.clone();
+                        Some((
+                            tauri::async_runtime::spawn_blocking(move || {
+                                crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
+                            }),
+                            wav_path_for_verify,
+                        ))
+                    } else {
+                        None
+                    };
 
                     // Transcribe concurrently with WAV save. If a live stream was
                     // running, finalize it and use its text (all audio was already
@@ -819,28 +886,45 @@ impl ShortcutAction for TranscribeAction {
                         (rendered, merged_dual_speaker)
                     });
 
-                    // Await WAV save and verify
-                    let wav_saved = match wav_handle.await {
-                        Ok(Ok(())) => {
-                            match crate::audio_toolkit::verify_wav_file(
-                                &wav_path_for_verify,
-                                sample_count,
-                            ) {
-                                Ok(()) => true,
-                                Err(e) => {
-                                    error!("WAV verification failed: {}", e);
-                                    false
+                    // Await WAV save and verify (only when save_recordings is on)
+                    let wav_saved = match wav_handle {
+                        Some((handle, wav_path_for_verify)) => match handle.await {
+                            Ok(Ok(())) => {
+                                match crate::audio_toolkit::verify_wav_file(
+                                    &wav_path_for_verify,
+                                    sample_count,
+                                ) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        error!("WAV verification failed: {}", e);
+                                        // The file is on disk but unusable and,
+                                        // since wav_saved stays false below, no
+                                        // history row will reference it — leaving
+                                        // it in place would orphan it from every
+                                        // retention policy. Remove it now.
+                                        if let Err(remove_err) =
+                                            std::fs::remove_file(&wav_path_for_verify)
+                                        {
+                                            error!(
+                                                "Failed to remove unverified WAV file {}: {}",
+                                                wav_path_for_verify.display(),
+                                                remove_err
+                                            );
+                                        }
+                                        false
+                                    }
                                 }
                             }
-                        }
-                        Ok(Err(e)) => {
-                            error!("Failed to save WAV file: {}", e);
-                            false
-                        }
-                        Err(e) => {
-                            error!("WAV save task panicked: {}", e);
-                            false
-                        }
+                            Ok(Err(e)) => {
+                                error!("Failed to save WAV file: {}", e);
+                                false
+                            }
+                            Err(e) => {
+                                error!("WAV save task panicked: {}", e);
+                                false
+                            }
+                        },
+                        None => false,
                     };
 
                     if rm.was_cancelled_since(cancel_generation) {
@@ -850,12 +934,19 @@ impl ShortcutAction for TranscribeAction {
                         return;
                     }
 
+                    // Shared by both branches below: the WAV's file name when
+                    // one was actually saved, otherwise empty.
+                    let history_file_name = if wav_saved { file_name } else { String::new() };
+
                     match transcription_result {
                         Ok((transcription, merged_dual_speaker)) => {
                             debug!(
-                                "Transcription completed in {:?}: '{}'",
-                                transcription_time.elapsed(),
-                                transcription
+                                "{}",
+                                transcription_completed_message(
+                                    save_transcripts,
+                                    transcription_time.elapsed(),
+                                    &transcription
+                                )
                             );
 
                             if post_process {
@@ -884,14 +975,27 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
-                            if wav_saved {
+                            // Save to history when either artifact is being kept:
+                            // the WAV (wav_saved) or the transcript text
+                            // (save_transcripts). The unkept side is stored empty.
+                            if wav_saved || save_transcripts {
+                                let history_text = if save_transcripts {
+                                    transcription
+                                } else {
+                                    String::new()
+                                };
+                                let (history_post_processed, history_prompt) =
+                                    gated_post_processed_fields(
+                                        save_transcripts,
+                                        processed.post_processed_text.clone(),
+                                        processed.post_process_prompt.clone(),
+                                    );
                                 if let Err(err) = hm.save_entry(
-                                    file_name,
-                                    transcription,
+                                    history_file_name,
+                                    history_text,
                                     post_process,
-                                    processed.post_processed_text.clone(),
-                                    processed.post_process_prompt.clone(),
+                                    history_post_processed,
+                                    history_prompt,
                                 ) {
                                     error!("Failed to save history entry: {}", err);
                                 }
@@ -963,9 +1067,9 @@ impl ShortcutAction for TranscribeAction {
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
-                            if wav_saved {
+                            if wav_saved || save_transcripts {
                                 if let Err(save_err) = hm.save_entry(
-                                    file_name,
+                                    history_file_name,
                                     String::new(),
                                     post_process,
                                     None,
@@ -1061,8 +1165,9 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        combine_finalize_results, complete_unless_cancelled, is_blank_transcription,
-        should_use_streaming_overlay, strip_think_block,
+        combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
+        is_blank_transcription, should_use_streaming_overlay, strip_think_block,
+        transcription_completed_message,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1154,5 +1259,49 @@ mod tests {
         );
         assert_eq!(mic.unwrap(), "microphone text");
         assert_eq!(system, None);
+    }
+
+    #[test]
+    fn post_processed_fields_pass_through_when_transcripts_are_saved() {
+        let (text, prompt) = gated_post_processed_fields(
+            true,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text.as_deref(), Some("polished"));
+        assert_eq!(prompt.as_deref(), Some("prompt template"));
+    }
+
+    #[test]
+    fn post_processed_fields_are_emptied_when_transcripts_are_off() {
+        let (text, prompt) = gated_post_processed_fields(
+            false,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text, None);
+        assert_eq!(prompt, None);
+    }
+
+    #[test]
+    fn completed_message_includes_transcript_when_transcripts_are_saved() {
+        let message = transcription_completed_message(
+            true,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(message.contains("a secret transcript"));
+    }
+
+    #[test]
+    fn completed_message_withholds_transcript_when_transcripts_are_off() {
+        let message = transcription_completed_message(
+            false,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(!message.contains("a secret transcript"));
+        // The absence should read as intentional, not as an empty result.
+        assert!(message.contains("save_transcripts"));
     }
 }
