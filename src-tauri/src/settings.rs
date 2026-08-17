@@ -144,11 +144,18 @@ pub enum ModelUnloadTimeout {
     Sec15, // Debug mode only
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteMethod {
     CtrlV,
     Direct,
+    // This fork delivers transcripts to follower processes over a local
+    // socket rather than to the focused window, so keystroke injection
+    // (and the clipboard/script side effects the other variants carry)
+    // is off by default on every platform. The other variants stay
+    // reachable through the escape hatch for anyone who still wants
+    // Handy's original paste-into-focused-window behavior.
+    #[default]
     None,
     ShiftInsert,
     CtrlShiftV,
@@ -195,16 +202,6 @@ impl Default for KeyboardImplementation {
         return KeyboardImplementation::Tauri;
         #[cfg(not(target_os = "linux"))]
         return KeyboardImplementation::HandyKeys;
-    }
-}
-
-impl Default for PasteMethod {
-    fn default() -> Self {
-        // Default to CtrlV for macOS and Windows, Direct for Linux
-        #[cfg(target_os = "linux")]
-        return PasteMethod::Direct;
-        #[cfg(not(target_os = "linux"))]
-        return PasteMethod::CtrlV;
     }
 }
 
