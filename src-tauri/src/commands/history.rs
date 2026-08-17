@@ -114,6 +114,11 @@ pub async fn retry_history_entry_transcription(
 
     let processed =
         process_transcription_output(&app, &transcription, entry.post_process_requested).await;
+    // Deliberately not gated on save_transcripts: retry is an explicit,
+    // user-initiated request to produce this exact transcript, and a retry
+    // that silently discarded its own result would be worse than the toggle
+    // being momentarily overridden. Unlike the normal save path, the user
+    // asked for this text by name.
     history_manager
         .update_transcription(
             id,
