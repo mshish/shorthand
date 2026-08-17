@@ -15,6 +15,11 @@ import { useSettings } from "@/hooks/useSettings";
  * `visibility.ts` rather than adding a new setting: "hide models Shorthand
  * can't use" is the same simplified-vs-everything question about a
  * different list.
+ *
+ * `ModelsSettings.tsx` has its own pre-existing, independent `filterStreaming`
+ * toggle; once this predicate applies, that toggle's only remaining effect is
+ * narrowing the already-downloaded section, since the undownloaded section
+ * this predicate governs is already streaming-only in default mode.
  */
 
 /**

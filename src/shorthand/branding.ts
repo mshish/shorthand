@@ -37,7 +37,7 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   // upstream Handy. Renaming them would make the control describe itself.
   "settings.about.showAllSettings.label": "Show all Handy settings",
   "settings.about.showAllSettings.description":
-    "Reveal every setting from upstream Handy, including features Shorthand hides.",
+    "Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides.",
   "settings.privacy.title": "Privacy",
   "settings.privacy.saveRecordings.label": "Save recordings",
   "settings.privacy.saveRecordings.description":
