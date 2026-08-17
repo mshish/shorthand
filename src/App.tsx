@@ -1,4 +1,10 @@
-import { useEffect, useState, useRef, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  useRef,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { toast, Toaster } from "sonner";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -20,12 +26,20 @@ import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
+import { getVisibleSectionIds } from "@/shorthand/visibility";
 
 type OnboardingStep = "accessibility" | "model" | "done";
 
-const renderSettingsContent = (section: SidebarSection) => {
+// Falls back to `fallbackComponent` rather than a hardcoded section: which
+// section is visible depends on show_all_settings, so the fallback must be
+// computed by the caller from the currently visible sections (see
+// `getVisibleSectionIds`), not hardcoded to a section that may be hidden.
+const renderSettingsContent = (
+  section: SidebarSection,
+  fallbackComponent: ComponentType,
+) => {
   const ActiveComponent =
-    SECTIONS_CONFIG[section]?.component || SECTIONS_CONFIG.general.component;
+    SECTIONS_CONFIG[section]?.component ?? fallbackComponent;
   return <ActiveComponent />;
 };
 
@@ -37,9 +51,17 @@ function App() {
   // Track if this is a returning user who just needs to grant permissions
   // (vs a new user who needs full onboarding including model selection)
   const [isReturningUser, setIsReturningUser] = useState(false);
-  const [currentSection, setCurrentSection] =
-    useState<SidebarSection>("general");
   const { settings, updateSetting } = useSettings();
+  // The first currently-visible section, used both as the initial section
+  // below and as renderSettingsContent's fallback. Computed rather than
+  // hardcoded because which section that is depends on show_all_settings and
+  // the registry in src/shorthand/visibility.ts (e.g. "history" today,
+  // "capture" once Task 5 registers the fork-only sections).
+  const visibleSectionIds = getVisibleSectionIds(SECTIONS_CONFIG, settings);
+  const firstVisibleSection = (visibleSectionIds[0] ??
+    (Object.keys(SECTIONS_CONFIG)[0] as SidebarSection)) as SidebarSection;
+  const [currentSection, setCurrentSection] =
+    useState<SidebarSection>(firstVisibleSection);
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
     (state) => state.refreshAudioDevices,
@@ -309,7 +331,10 @@ function App() {
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
                 <SecureInputWarning />
-                {renderSettingsContent(currentSection)}
+                {renderSettingsContent(
+                  currentSection,
+                  SECTIONS_CONFIG[firstVisibleSection].component,
+                )}
               </div>
             </div>
           </div>
