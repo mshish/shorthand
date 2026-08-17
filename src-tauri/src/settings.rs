@@ -408,6 +408,14 @@ pub struct AppSettings {
     pub history_limit: usize,
     #[serde(default = "default_recording_retention_period")]
     pub recording_retention_period: RecordingRetentionPeriod,
+    /// Whether the WAV of each transcription is written to the recordings
+    /// directory. Off by default: Shorthand treats stored audio as opt-in.
+    #[serde(default)]
+    pub save_recordings: bool,
+    /// Whether the transcript text of each transcription is stored in
+    /// history.db. Off by default, for the same reason.
+    #[serde(default)]
+    pub save_transcripts: bool,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -888,6 +896,8 @@ pub fn get_default_settings() -> AppSettings {
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
+        save_recordings: false,
+        save_transcripts: false,
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),
@@ -1180,6 +1190,8 @@ mod tests {
         assert!(settings.filler_word_removal_enabled);
         // Bindings default to empty; the load path merges the real defaults in.
         assert!(settings.bindings.is_empty());
+        assert!(!settings.save_recordings);
+        assert!(!settings.save_transcripts);
     }
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to
@@ -1442,6 +1454,34 @@ mod tests {
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
         );
+    }
+
+    #[test]
+    fn default_settings_disable_saving_recordings_and_transcripts() {
+        let settings = get_default_settings();
+        assert!(!settings.save_recordings);
+        assert!(!settings.save_transcripts);
+    }
+
+    /// Both settings are opt-in: a store that explicitly enabled them must
+    /// keep them enabled through migration, not get silently reset to the
+    /// off-by-default value.
+    #[test]
+    fn migration_preserves_explicitly_enabled_saving_recordings_and_transcripts() {
+        let mut stored = default_settings_json();
+        let map = stored.as_object_mut().unwrap();
+        map.insert("save_recordings".into(), serde_json::json!(true));
+        map.insert("save_transcripts".into(), serde_json::json!(true));
+
+        let mut settings: AppSettings = serde_json::from_value(stored.clone())
+            .expect("a store with both fields explicitly true must still parse");
+        assert!(settings.save_recordings);
+        assert!(settings.save_transcripts);
+
+        apply_settings_migrations(&mut settings, &stored);
+
+        assert!(settings.save_recordings);
+        assert!(settings.save_transcripts);
     }
 
     #[cfg(not(target_os = "linux"))]
