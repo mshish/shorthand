@@ -231,6 +231,7 @@ This is the full permanent conflict surface. Everything else is new files.
 | File | Edit |
 | --- | --- |
 | `src/components/Sidebar.tsx` | register three fork-only sections; consult the registry |
+| `src/App.tsx` | initial section and unknown-section fallback must resolve to a *visible* section — both currently hardcode `general`, which simplified mode hides |
 | `src/components/settings/about/AboutSettings.tsx` | one row for `show_all_settings` |
 | `src-tauri/src/settings.rs` | one struct field, one default entry, `PasteMethod::None` default |
 | `src-tauri/src/shortcut/mod.rs` | one command |
