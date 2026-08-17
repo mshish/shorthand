@@ -135,6 +135,28 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
     style == OverlayStyle::Live && is_streaming
 }
 
+/// Decides what the post-processed transcript and its prompt should look
+/// like in a history row, given the `save_transcripts` setting.
+///
+/// `post_processed_text` is itself a transcript — in the post-processing
+/// case it is the text that actually gets pasted — so it must be gated by
+/// `save_transcripts` exactly like the raw transcript is, or the setting
+/// leaks the transcript into `history.db` through a side door. The prompt
+/// that produced it is gated alongside it: it's the user's own template
+/// rather than their speech, but a saved prompt on a row with no saved text
+/// would be a dangling half-guarantee.
+fn gated_post_processed_fields(
+    save_transcripts: bool,
+    post_processed_text: Option<String>,
+    post_process_prompt: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if save_transcripts {
+        (post_processed_text, post_process_prompt)
+    } else {
+        (None, None)
+    }
+}
+
 fn combine_finalize_results<M, S>(
     mic: anyhow::Result<M>,
     system: anyhow::Result<Option<S>>,
@@ -850,6 +872,20 @@ impl ShortcutAction for TranscribeAction {
                                     Ok(()) => true,
                                     Err(e) => {
                                         error!("WAV verification failed: {}", e);
+                                        // The file is on disk but unusable and,
+                                        // since wav_saved stays false below, no
+                                        // history row will reference it — leaving
+                                        // it in place would orphan it from every
+                                        // retention policy. Remove it now.
+                                        if let Err(remove_err) =
+                                            std::fs::remove_file(&wav_path_for_verify)
+                                        {
+                                            error!(
+                                                "Failed to remove unverified WAV file {}: {}",
+                                                wav_path_for_verify.display(),
+                                                remove_err
+                                            );
+                                        }
                                         false
                                     }
                                 }
@@ -872,6 +908,10 @@ impl ShortcutAction for TranscribeAction {
                         change_tray_icon(&ah, TrayIconState::Idle);
                         return;
                     }
+
+                    // Shared by both branches below: the WAV's file name when
+                    // one was actually saved, otherwise empty.
+                    let history_file_name = if wav_saved { file_name } else { String::new() };
 
                     match transcription_result {
                         Ok((transcription, merged_dual_speaker)) => {
@@ -911,19 +951,23 @@ impl ShortcutAction for TranscribeAction {
                             // the WAV (wav_saved) or the transcript text
                             // (save_transcripts). The unkept side is stored empty.
                             if wav_saved || save_transcripts {
-                                let history_file_name =
-                                    if wav_saved { file_name } else { String::new() };
                                 let history_text = if save_transcripts {
                                     transcription
                                 } else {
                                     String::new()
                                 };
+                                let (history_post_processed, history_prompt) =
+                                    gated_post_processed_fields(
+                                        save_transcripts,
+                                        processed.post_processed_text.clone(),
+                                        processed.post_process_prompt.clone(),
+                                    );
                                 if let Err(err) = hm.save_entry(
                                     history_file_name,
                                     history_text,
                                     post_process,
-                                    processed.post_processed_text.clone(),
-                                    processed.post_process_prompt.clone(),
+                                    history_post_processed,
+                                    history_prompt,
                                 ) {
                                     error!("Failed to save history entry: {}", err);
                                 }
@@ -996,8 +1040,6 @@ impl ShortcutAction for TranscribeAction {
                             let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
                             if wav_saved || save_transcripts {
-                                let history_file_name =
-                                    if wav_saved { file_name } else { String::new() };
                                 if let Err(save_err) = hm.save_entry(
                                     history_file_name,
                                     String::new(),
@@ -1095,8 +1137,8 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        combine_finalize_results, complete_unless_cancelled, is_blank_transcription,
-        should_use_streaming_overlay, strip_think_block,
+        combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
+        is_blank_transcription, should_use_streaming_overlay, strip_think_block,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1188,5 +1230,27 @@ mod tests {
         );
         assert_eq!(mic.unwrap(), "microphone text");
         assert_eq!(system, None);
+    }
+
+    #[test]
+    fn post_processed_fields_pass_through_when_transcripts_are_saved() {
+        let (text, prompt) = gated_post_processed_fields(
+            true,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text.as_deref(), Some("polished"));
+        assert_eq!(prompt.as_deref(), Some("prompt template"));
+    }
+
+    #[test]
+    fn post_processed_fields_are_emptied_when_transcripts_are_off() {
+        let (text, prompt) = gated_post_processed_fields(
+            false,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text, None);
+        assert_eq!(prompt, None);
     }
 }
