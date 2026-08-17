@@ -228,11 +228,13 @@ pub fn update_tray_menu(app: &AppHandle, locale: Option<&str>) {
         None::<&str>,
     )
     .expect("failed to create check updates item");
-    // With save_transcripts off (the default), get_latest_completed_entry()
-    // never has a row to return — either nothing happens (fresh installs) or,
-    // worse, an upgrading user gets a stale pre-upgrade transcript. Disable
-    // the item rather than let it silently no-op or lie, following the same
-    // enabled-flag pattern used below for check_updates_i / unload_model_i.
+    // get_latest_completed_entry() filters on transcription_text != '', so with
+    // save_transcripts off (the default) this item has nothing current to copy.
+    // Left enabled it either silently does nothing, or — if the setting was on
+    // earlier and rows survive from then — copies a transcript from whenever
+    // saving was last enabled, which the user pastes with no sign it is stale.
+    // Disable it instead, using the same enabled-flag pattern applied below to
+    // check_updates_i / unload_model_i.
     let copy_last_transcript_i = MenuItem::with_id(
         app,
         "copy_last_transcript",
