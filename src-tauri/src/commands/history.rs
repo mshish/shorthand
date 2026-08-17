@@ -6,6 +6,17 @@ use crate::managers::{
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
+/// Rejects a retry attempt for a history entry that has no saved recording
+/// (an empty `file_name`, e.g. because the save-recordings toggle was off
+/// when it was created) — there is no audio file to re-transcribe.
+fn require_recording(file_name: &str) -> Result<(), String> {
+    if file_name.is_empty() {
+        Err("This entry has no saved recording to re-transcribe".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_history_entries(
@@ -73,9 +84,7 @@ pub async fn retry_history_entry_transcription(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("History entry {} not found", id))?;
 
-    if entry.file_name.is_empty() {
-        return Err("This entry has no saved recording to re-transcribe".to_string());
-    }
+    require_recording(&entry.file_name)?;
 
     if let Some(message) =
         crate::tray_i18n::merged_transcript_retry_error_for_app(&app, &entry.transcription_text)
@@ -161,4 +170,20 @@ pub async fn update_recording_retention_period(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_recording_rejects_empty_file_name() {
+        let err = require_recording("").expect_err("empty file_name must be rejected");
+        assert_eq!(err, "This entry has no saved recording to re-transcribe");
+    }
+
+    #[test]
+    fn require_recording_accepts_non_empty_file_name() {
+        assert!(require_recording("handy-123.wav").is_ok());
+    }
 }
