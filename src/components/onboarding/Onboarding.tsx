@@ -7,6 +7,7 @@ import type { ModelCardStatus } from "./ModelCard";
 import ModelCard, { isLegacySource } from "./ModelCard";
 import HandyTextLogo from "../icons/HandyTextLogo";
 import { useModelStore } from "../../stores/modelStore";
+import { useVisibleModels } from "@/shorthand/modelVisibility";
 
 interface OnboardingProps {
   onModelSelected: () => void;
@@ -15,7 +16,7 @@ interface OnboardingProps {
 const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
   const { t } = useTranslation();
   const {
-    models,
+    models: allModels,
     downloadModel,
     selectModel,
     downloadingModels,
@@ -25,6 +26,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
     downloadStats,
     cancelDownload,
   } = useModelStore();
+  const models = useVisibleModels(allModels);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const hasStartedSelection = useRef(false);

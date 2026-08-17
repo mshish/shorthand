@@ -18,6 +18,7 @@ import {
   supportsLanguageCode,
 } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
+import { useVisibleModels } from "@/shorthand/modelVisibility";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
@@ -42,7 +43,7 @@ export const ModelsSettings: React.FC = () => {
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const languageSearchInputRef = useRef<HTMLInputElement>(null);
   const {
-    models,
+    models: allModels,
     currentModel,
     downloadingModels,
     downloadProgress,
@@ -57,6 +58,7 @@ export const ModelsSettings: React.FC = () => {
     deleteModel,
     rescanLocalModels,
   } = useModelStore();
+  const models = useVisibleModels(allModels);
 
   // click outside handler for language dropdown
   useEffect(() => {
