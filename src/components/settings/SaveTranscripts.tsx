@@ -8,8 +8,8 @@ interface SaveTranscriptsToggleProps {
   grouped?: boolean;
 }
 
-export const SaveTranscripts: React.FC<SaveTranscriptsToggleProps> =
-  React.memo(({ descriptionMode = "tooltip", grouped = false }) => {
+export const SaveTranscripts: React.FC<SaveTranscriptsToggleProps> = React.memo(
+  ({ descriptionMode = "tooltip", grouped = false }) => {
     const { t } = useTranslation();
     const { getSetting, updateSetting, isUpdating } = useSettings();
 
@@ -26,4 +26,5 @@ export const SaveTranscripts: React.FC<SaveTranscriptsToggleProps> =
         grouped={grouped}
       />
     );
-  });
+  },
+);
