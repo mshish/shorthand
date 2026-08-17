@@ -135,6 +135,31 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
     style == OverlayStyle::Live && is_streaming
 }
 
+/// Builds the message logged when a transcription finishes.
+///
+/// The file log target runs at `LogLevel::Debug` by default (see
+/// `default_log_level` in settings.rs), so an unconditional `debug!` of the
+/// transcript text would still write it to `<app data dir>/logs/handy.log`
+/// even when the user has turned `save_transcripts` off — defeating the
+/// setting through the log file instead of `history.db`. When it's off,
+/// keep the useful diagnostics (elapsed time, character count) but withhold
+/// the text itself, and say so explicitly so the absence reads as
+/// intentional rather than as an empty transcription.
+fn transcription_completed_message(
+    save_transcripts: bool,
+    elapsed: Duration,
+    transcription: &str,
+) -> String {
+    if save_transcripts {
+        format!("Transcription completed in {elapsed:?}: '{transcription}'")
+    } else {
+        format!(
+            "Transcription completed in {elapsed:?}: <withheld, save_transcripts is off> ({} chars)",
+            transcription.chars().count()
+        )
+    }
+}
+
 /// Decides what the post-processed transcript and its prompt should look
 /// like in a history row, given the `save_transcripts` setting.
 ///
@@ -916,9 +941,12 @@ impl ShortcutAction for TranscribeAction {
                     match transcription_result {
                         Ok((transcription, merged_dual_speaker)) => {
                             debug!(
-                                "Transcription completed in {:?}: '{}'",
-                                transcription_time.elapsed(),
-                                transcription
+                                "{}",
+                                transcription_completed_message(
+                                    save_transcripts,
+                                    transcription_time.elapsed(),
+                                    &transcription
+                                )
                             );
 
                             if post_process {
@@ -1139,6 +1167,7 @@ mod tests {
     use super::{
         combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
         is_blank_transcription, should_use_streaming_overlay, strip_think_block,
+        transcription_completed_message,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1252,5 +1281,27 @@ mod tests {
         );
         assert_eq!(text, None);
         assert_eq!(prompt, None);
+    }
+
+    #[test]
+    fn completed_message_includes_transcript_when_transcripts_are_saved() {
+        let message = transcription_completed_message(
+            true,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(message.contains("a secret transcript"));
+    }
+
+    #[test]
+    fn completed_message_withholds_transcript_when_transcripts_are_off() {
+        let message = transcription_completed_message(
+            false,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(!message.contains("a secret transcript"));
+        // The absence should read as intentional, not as an empty result.
+        assert!(message.contains("save_transcripts"));
     }
 }
