@@ -760,15 +760,35 @@ impl ShortcutAction for TranscribeAction {
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
+                    // Persistence toggles: whether to keep the WAV on disk and
+                    // whether to keep the transcript text in history. These
+                    // govern persistence only; delivery (paste/clipboard/
+                    // follow-stream) happens unconditionally below regardless
+                    // of either flag.
+                    let persistence_settings = get_settings(&ah);
+                    let save_recordings = persistence_settings.save_recordings;
+                    let save_transcripts = persistence_settings.save_transcripts;
+
                     // Save WAV concurrently with transcription
                     let sample_count = samples.len();
-                    let file_name = format!("handy-{}.wav", chrono::Utc::now().timestamp());
-                    let wav_path = hm.recordings_dir().join(&file_name);
-                    let wav_path_for_verify = wav_path.clone();
-                    let samples_for_wav = samples.clone();
-                    let wav_handle = tauri::async_runtime::spawn_blocking(move || {
-                        crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
-                    });
+                    let file_name = if save_recordings {
+                        format!("handy-{}.wav", chrono::Utc::now().timestamp())
+                    } else {
+                        String::new()
+                    };
+                    let wav_handle = if save_recordings {
+                        let wav_path = hm.recordings_dir().join(&file_name);
+                        let wav_path_for_verify = wav_path.clone();
+                        let samples_for_wav = samples.clone();
+                        Some((
+                            tauri::async_runtime::spawn_blocking(move || {
+                                crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
+                            }),
+                            wav_path_for_verify,
+                        ))
+                    } else {
+                        None
+                    };
 
                     // Transcribe concurrently with WAV save. If a live stream was
                     // running, finalize it and use its text (all audio was already
@@ -819,28 +839,31 @@ impl ShortcutAction for TranscribeAction {
                         (rendered, merged_dual_speaker)
                     });
 
-                    // Await WAV save and verify
-                    let wav_saved = match wav_handle.await {
-                        Ok(Ok(())) => {
-                            match crate::audio_toolkit::verify_wav_file(
-                                &wav_path_for_verify,
-                                sample_count,
-                            ) {
-                                Ok(()) => true,
-                                Err(e) => {
-                                    error!("WAV verification failed: {}", e);
-                                    false
+                    // Await WAV save and verify (only when save_recordings is on)
+                    let wav_saved = match wav_handle {
+                        Some((handle, wav_path_for_verify)) => match handle.await {
+                            Ok(Ok(())) => {
+                                match crate::audio_toolkit::verify_wav_file(
+                                    &wav_path_for_verify,
+                                    sample_count,
+                                ) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        error!("WAV verification failed: {}", e);
+                                        false
+                                    }
                                 }
                             }
-                        }
-                        Ok(Err(e)) => {
-                            error!("Failed to save WAV file: {}", e);
-                            false
-                        }
-                        Err(e) => {
-                            error!("WAV save task panicked: {}", e);
-                            false
-                        }
+                            Ok(Err(e)) => {
+                                error!("Failed to save WAV file: {}", e);
+                                false
+                            }
+                            Err(e) => {
+                                error!("WAV save task panicked: {}", e);
+                                false
+                            }
+                        },
+                        None => false,
                     };
 
                     if rm.was_cancelled_since(cancel_generation) {
@@ -884,11 +907,20 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
-                            if wav_saved {
+                            // Save to history when either artifact is being kept:
+                            // the WAV (wav_saved) or the transcript text
+                            // (save_transcripts). The unkept side is stored empty.
+                            if wav_saved || save_transcripts {
+                                let history_file_name =
+                                    if wav_saved { file_name } else { String::new() };
+                                let history_text = if save_transcripts {
+                                    transcription
+                                } else {
+                                    String::new()
+                                };
                                 if let Err(err) = hm.save_entry(
-                                    file_name,
-                                    transcription,
+                                    history_file_name,
+                                    history_text,
                                     post_process,
                                     processed.post_processed_text.clone(),
                                     processed.post_process_prompt.clone(),
@@ -963,9 +995,11 @@ impl ShortcutAction for TranscribeAction {
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
-                            if wav_saved {
+                            if wav_saved || save_transcripts {
+                                let history_file_name =
+                                    if wav_saved { file_name } else { String::new() };
                                 if let Err(save_err) = hm.save_entry(
-                                    file_name,
+                                    history_file_name,
                                     String::new(),
                                     post_process,
                                     None,
