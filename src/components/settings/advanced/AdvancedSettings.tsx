@@ -61,14 +61,17 @@ export const AdvancedSettings: React.FC = () => {
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
+      <SettingsGroup title={t("settings.privacy.title")}>
+        <SaveRecordings descriptionMode="tooltip" grouped={true} />
+        <SaveTranscripts descriptionMode="tooltip" grouped={true} />
+      </SettingsGroup>
+
       <SettingsGroup title={t("settings.advanced.groups.history")}>
         <HistoryLimit descriptionMode="tooltip" grouped={true} />
         <RecordingRetentionPeriodSelector
           descriptionMode="tooltip"
           grouped={true}
         />
-        <SaveRecordings descriptionMode="tooltip" grouped={true} />
-        <SaveTranscripts descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
       {experimentalEnabled && (
