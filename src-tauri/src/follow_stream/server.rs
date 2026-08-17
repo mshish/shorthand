@@ -193,7 +193,7 @@ async fn accept_loop(
         let (follower, backlog) = match hub.subscribe(&app_version) {
             Ok(subscription) => subscription,
             Err(error) => {
-                write_rejection(stream, error.to_event().to_line()).await;
+                write_rejection(stream, hub.rejection_line(error)).await;
                 continue;
             }
         };
@@ -349,7 +349,7 @@ mod tests {
         BufReader::new(stream)
     }
 
-    async fn read_line(reader: &mut BufReader<Stream>) -> String {
+    async fn read_raw_line(reader: &mut BufReader<Stream>) -> String {
         let mut line = String::new();
         let bytes = tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut line))
             .await
@@ -357,6 +357,17 @@ mod tests {
             .expect("client read failed");
         assert_ne!(bytes, 0, "unexpected EOF");
         line
+    }
+
+    /// These tests are about the transport, not the clock, so drop the trailing
+    /// stamp. `stamps_survive_the_transport_unmodified` covers the stamp itself,
+    /// and the hub tests pin its exact bytes.
+    async fn read_line(reader: &mut BufReader<Stream>) -> String {
+        let line = read_raw_line(reader).await;
+        let start = line
+            .find(",\"emitted_at\":")
+            .unwrap_or_else(|| panic!("every event is stamped, got {line}"));
+        format!("{}}}\n", &line[..start])
     }
 
     #[tokio::test]
@@ -388,6 +399,39 @@ mod tests {
         assert_eq!(
             read_line(&mut client).await,
             "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n"
+        );
+
+        server.stop();
+    }
+
+    #[tokio::test]
+    async fn stamps_survive_the_transport_unmodified() {
+        let name = unique_name("stamps");
+        let clock = super::super::hub::TestClock::new();
+        let hub = Arc::new(FollowStreamHub::with_clock(Arc::clone(&clock) as Arc<_>));
+        let server = FollowStreamServer::default();
+        server
+            .start_with_name(name.clone(), "test-version", Arc::clone(&hub))
+            .await
+            .unwrap();
+        let mut client = connect(name).await;
+
+        assert_eq!(
+            read_raw_line(&mut client).await,
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+        );
+        clock.advance(100);
+        hub.begin(true);
+        clock.advance(1112);
+        hub.partial(StreamSource::Mic, "hello ", "wor");
+
+        assert_eq!(
+            read_raw_line(&mut client).await,
+            "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n"
+        );
+        assert_eq!(
+            read_raw_line(&mut client).await,
+            "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\",\"emitted_at\":\"2026-08-15T14:03:21.312-07:00\",\"session_elapsed_ms\":1112}\n"
         );
 
         server.stop();

@@ -487,14 +487,25 @@ mod tests {
         server.stop();
         client.await.unwrap().unwrap();
 
+        // The transport must not reorder or reshape lines. Stamps come from the
+        // real clock here, so assert the payload and the stamp's presence
+        // separately; hub tests pin the exact stamped bytes.
+        let text = output.text();
         assert_eq!(
-            output.text(),
-            concat!(
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\"}\n",
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
-                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
-                "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",
-            )
+            text.lines()
+                .map(|line| {
+                    let start = line
+                        .find(",\"emitted_at\":")
+                        .unwrap_or_else(|| panic!("every event is stamped, got {line}"));
+                    format!("{}}}", &line[..start])
+                })
+                .collect::<Vec<_>>(),
+            [
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\"}",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}",
+                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}",
+                "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}",
+            ]
         );
     }
 }

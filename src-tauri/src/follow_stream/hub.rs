@@ -4,14 +4,16 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    time::Instant,
 };
 
+use chrono::{DateTime, FixedOffset, Local};
 use tokio::sync::Notify;
 
 use crate::managers::transcription::StreamSource;
 
 use super::protocol::{
-    FollowEvent, Speaker, ERR_DISABLED, ERR_FOLLOWER_LIMIT, FOLLOW_PROTOCOL_VERSION,
+    FollowEvent, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT, FOLLOW_PROTOCOL_VERSION,
 };
 
 pub const MAX_FOLLOWERS: usize = 8;
@@ -147,9 +149,73 @@ impl Follower {
     }
 }
 
+/// The two clocks every event is stamped with. Split behind a trait so tests can
+/// assert byte-exact wire output; production always uses [`SystemClock`].
+pub trait FollowClock: Send + Sync {
+    /// Civil time, for `emitted_at`. Carries the machine's current UTC offset.
+    fn wall(&self) -> DateTime<FixedOffset>;
+    /// Monotonic time, for `session_elapsed_ms`.
+    fn mono(&self) -> Instant;
+}
+
+pub struct SystemClock;
+
+impl FollowClock for SystemClock {
+    fn wall(&self) -> DateTime<FixedOffset> {
+        Local::now().fixed_offset()
+    }
+
+    fn mono(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// A clock the test can step by hand. Wall and monotonic time advance together,
+/// so stamps are deterministic without being unrealistic.
+#[cfg(test)]
+pub(crate) struct TestClock {
+    origin_wall: DateTime<FixedOffset>,
+    origin_mono: Instant,
+    offset_ms: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+impl TestClock {
+    /// The wall-clock origin every test clock starts at.
+    pub(crate) const ORIGIN: &'static str = "2026-08-15T14:03:20.100-07:00";
+
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            origin_wall: DateTime::parse_from_rfc3339(Self::ORIGIN).expect("valid origin"),
+            origin_mono: Instant::now(),
+            offset_ms: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    pub(crate) fn advance(&self, ms: u64) {
+        self.offset_ms.fetch_add(ms, Ordering::AcqRel);
+    }
+
+    fn offset(&self) -> u64 {
+        self.offset_ms.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+impl FollowClock for TestClock {
+    fn wall(&self) -> DateTime<FixedOffset> {
+        self.origin_wall + chrono::Duration::milliseconds(self.offset() as i64)
+    }
+
+    fn mono(&self) -> Instant {
+        self.origin_mono + std::time::Duration::from_millis(self.offset())
+    }
+}
+
 pub struct FollowStreamHub {
     enabled: AtomicBool,
     inner: Mutex<HubState>,
+    clock: Arc<dyn FollowClock>,
 }
 
 struct HubState {
@@ -161,9 +227,14 @@ struct HubState {
 
 struct ActiveSession {
     id: u64,
-    streaming: bool,
-    /// Latest committed/tentative per speaker, for the late-attach snapshot.
-    partials: [Option<(String, String)>; 2],
+    /// Monotonic origin for this session's `session_elapsed_ms`.
+    started: Instant,
+    /// The session's own `begin` line, replayed verbatim to late attachers so
+    /// they see when the session actually began, not when they arrived.
+    begin_line: Arc<str>,
+    /// Latest serialized partial line per speaker, for the late-attach snapshot.
+    /// Stored already-stamped, for the same reason as `begin_line`.
+    partial_lines: [Option<Arc<str>>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +244,7 @@ pub enum SubscribeError {
 }
 
 impl SubscribeError {
-    pub fn to_event(&self) -> FollowEvent {
+    fn to_event(self) -> FollowEvent {
         let (code, message) = match self {
             Self::Disabled => (ERR_DISABLED, "follow stream is disabled"),
             Self::LimitReached => (
@@ -191,6 +262,12 @@ impl SubscribeError {
 
 impl Default for FollowStreamHub {
     fn default() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+}
+
+impl FollowStreamHub {
+    pub fn with_clock(clock: Arc<dyn FollowClock>) -> Self {
         Self {
             enabled: AtomicBool::new(false),
             inner: Mutex::new(HubState {
@@ -199,11 +276,23 @@ impl Default for FollowStreamHub {
                 active: None,
                 followers: Vec::new(),
             }),
+            clock,
         }
     }
-}
 
-impl FollowStreamHub {
+    /// Stamp for an event belonging to `started`'s session, or a session-less one
+    /// (`hello`, connection-level `error`) when `started` is `None`.
+    fn stamp(&self, started: Option<Instant>) -> Stamp {
+        let elapsed = started.map(|started| {
+            self.clock
+                .mono()
+                .saturating_duration_since(started)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64
+        });
+        Stamp::new(self.clock.wall(), elapsed)
+    }
+
     pub fn begin(&self, streaming: bool) {
         if !self.enabled.load(Ordering::Acquire) {
             return;
@@ -219,23 +308,28 @@ impl FollowStreamHub {
                 "Cancelling orphaned follow-stream session {} before starting a new one",
                 orphaned.id
             );
-            Self::broadcast(
-                &mut state,
-                FollowEvent::Cancel {
-                    session: orphaned.id,
-                },
-                None,
-            );
+            // Stamped against the orphan's own origin — it is that session's
+            // terminal event, not the incoming one's.
+            let stamp = self.stamp(Some(orphaned.started));
+            let line = FollowEvent::Cancel {
+                session: orphaned.id,
+            }
+            .to_line(&stamp);
+            Self::broadcast(&mut state, line, None);
         }
 
         let session = state.next_session;
         state.next_session += 1;
+
+        let started = self.clock.mono();
+        let line = FollowEvent::Begin { session, streaming }.to_line(&self.stamp(Some(started)));
         state.active = Some(ActiveSession {
             id: session,
-            streaming,
-            partials: [None, None],
+            started,
+            begin_line: Arc::clone(&line),
+            partial_lines: [None, None],
         });
-        Self::broadcast(&mut state, FollowEvent::Begin { session, streaming }, None);
+        Self::broadcast(&mut state, line, None);
     }
 
     pub fn partial(&self, source: StreamSource, committed: &str, tentative: &str) {
@@ -249,22 +343,24 @@ impl FollowStreamHub {
         }
 
         let speaker = Speaker::from(source);
-        let Some(active) = state.active.as_mut() else {
+        let Some(active) = state.active.as_ref() else {
             return;
         };
-        active.partials[speaker.index()] = Some((committed.to_string(), tentative.to_string()));
-        let session = active.id;
+        let stamp = self.stamp(Some(active.started));
+        let line = FollowEvent::Partial {
+            session: active.id,
+            speaker,
+            committed: committed.to_string(),
+            tentative: tentative.to_string(),
+        }
+        .to_line(&stamp);
 
-        Self::broadcast(
-            &mut state,
-            FollowEvent::Partial {
-                session,
-                speaker,
-                committed: committed.to_string(),
-                tentative: tentative.to_string(),
-            },
-            Some(speaker),
-        );
+        state
+            .active
+            .as_mut()
+            .expect("active checked above")
+            .partial_lines[speaker.index()] = Some(Arc::clone(&line));
+        Self::broadcast(&mut state, line, Some(speaker));
     }
 
     pub fn finish(&self, speaker: Option<Speaker>, text: &str) {
@@ -330,41 +426,27 @@ impl FollowStreamHub {
         let follower = Arc::new(Follower::new(state.next_follower_id));
         state.next_follower_id += 1;
 
+        // `hello` describes this connection, so it is stamped now and carries no
+        // `session_elapsed_ms`. Everything after it is replayed verbatim from the
+        // active session, keeping the timestamps the events were produced with.
         let mut backlog = vec![FollowEvent::Hello {
             protocol: FOLLOW_PROTOCOL_VERSION,
             version: app_version.to_string(),
         }
-        .to_line()];
+        .to_line(&self.stamp(None))];
         if let Some(active) = &state.active {
-            backlog.push(
-                FollowEvent::Begin {
-                    session: active.id,
-                    streaming: active.streaming,
-                }
-                .to_line(),
-            );
-            for (index, partial) in active.partials.iter().enumerate() {
-                if let Some((committed, tentative)) = partial {
-                    let speaker = if index == Speaker::Me.index() {
-                        Speaker::Me
-                    } else {
-                        Speaker::Them
-                    };
-                    backlog.push(
-                        FollowEvent::Partial {
-                            session: active.id,
-                            speaker,
-                            committed: committed.clone(),
-                            tentative: tentative.clone(),
-                        }
-                        .to_line(),
-                    );
-                }
-            }
+            backlog.push(Arc::clone(&active.begin_line));
+            backlog.extend(active.partial_lines.iter().flatten().map(Arc::clone));
         }
 
         state.followers.push(Arc::clone(&follower));
         Ok((follower, backlog))
+    }
+
+    /// Renders a rejection for a connection that never became a follower. It has
+    /// no session, so it carries only `emitted_at`.
+    pub fn rejection_line(&self, error: SubscribeError) -> Arc<str> {
+        error.to_event().to_line(&self.stamp(None))
     }
 
     pub fn unsubscribe(&self, id: u64) {
@@ -398,11 +480,12 @@ impl FollowStreamHub {
         let Some(active) = state.active.take() else {
             return;
         };
-        Self::broadcast(&mut state, make_event(active.id), None);
+        let stamp = self.stamp(Some(active.started));
+        let line = make_event(active.id).to_line(&stamp);
+        Self::broadcast(&mut state, line, None);
     }
 
-    fn broadcast(state: &mut HubState, event: FollowEvent, partial_speaker: Option<Speaker>) {
-        let line = event.to_line();
+    fn broadcast(state: &mut HubState, line: Arc<str>, partial_speaker: Option<Speaker>) {
         state.followers.retain(|follower| {
             let overflowed = {
                 let mut buffer = follower.buffer.lock().unwrap();
@@ -435,6 +518,41 @@ mod tests {
 
     fn strings(lines: Vec<Arc<str>>) -> Vec<String> {
         lines.into_iter().map(|line| line.to_string()).collect()
+    }
+
+    /// Lifecycle assertions care about which events arrived, not when. The stamp
+    /// is always the trailing pair of fields, so drop it to keep those
+    /// expectations readable; the stamped bytes are asserted on their own below.
+    fn events(lines: Vec<Arc<str>>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| {
+                let start = line
+                    .find(",\"emitted_at\":")
+                    .unwrap_or_else(|| panic!("every event is stamped, got {line}"));
+                format!("{}}}\n", &line[..start])
+            })
+            .collect()
+    }
+
+    /// The `session_elapsed_ms` of each line, or `None` where the field is
+    /// absent because the event belongs to no session.
+    fn elapsed_values(lines: Vec<Arc<str>>) -> Vec<Option<u64>> {
+        lines
+            .into_iter()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(&line)
+                    .expect("event line is JSON")
+                    .get("session_elapsed_ms")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .collect()
+    }
+
+    fn enabled_hub(clock: &Arc<TestClock>) -> FollowStreamHub {
+        let hub = FollowStreamHub::with_clock(Arc::clone(clock) as Arc<dyn FollowClock>);
+        hub.set_enabled(true);
+        hub
     }
 
     async fn wait_for_line_count(lines: &Arc<Mutex<Vec<Arc<str>>>>, expected: usize) {
@@ -574,7 +692,7 @@ mod tests {
         hub.no_speech();
         hub.error("late error");
         assert_eq!(
-            strings(follower.drain()),
+            events(follower.drain()),
             [
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":false}\n",
                 "{\"t\":\"no_speech\",\"session\":1}\n",
@@ -585,7 +703,7 @@ mod tests {
         hub.cancel();
         hub.finish(Some(Speaker::Me), "late final");
         assert_eq!(
-            strings(follower.drain()),
+            events(follower.drain()),
             [
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":true}\n",
                 "{\"t\":\"cancel\",\"session\":2}\n",
@@ -599,7 +717,7 @@ mod tests {
         hub.set_enabled(true);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
-            strings(initial),
+            events(initial),
             ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\"}\n"]
         );
         let mut observed = Vec::new();
@@ -611,7 +729,7 @@ mod tests {
         observed.extend(follower.drain());
 
         assert_eq!(
-            strings(observed),
+            events(observed),
             [
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
@@ -631,7 +749,7 @@ mod tests {
         let (_, initial) = hub.subscribe("0.9.5").unwrap();
 
         assert_eq!(
-            strings(initial),
+            events(initial),
             [
                 "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
@@ -669,13 +787,119 @@ mod tests {
 
     #[test]
     fn subscribe_errors_have_exact_wire_events() {
+        let clock = TestClock::new();
+        let hub = enabled_hub(&clock);
+
+        // Connection-level rejections belong to no session, so they carry
+        // `emitted_at` and never `session_elapsed_ms`.
         assert_eq!(
-            &*SubscribeError::LimitReached.to_event().to_line(),
-            "{\"t\":\"error\",\"code\":\"follower_limit\",\"message\":\"maximum number of follow-stream followers reached\"}\n"
+            &*hub.rejection_line(SubscribeError::LimitReached),
+            "{\"t\":\"error\",\"code\":\"follower_limit\",\"message\":\"maximum number of follow-stream followers reached\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         assert_eq!(
-            &*SubscribeError::Disabled.to_event().to_line(),
-            "{\"t\":\"error\",\"code\":\"disabled\",\"message\":\"follow stream is disabled\"}\n"
+            &*hub.rejection_line(SubscribeError::Disabled),
+            "{\"t\":\"error\",\"code\":\"disabled\",\"message\":\"follow stream is disabled\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+        );
+    }
+
+    #[test]
+    fn every_broadcast_event_carries_the_wall_clock_and_the_session_elapsed_stamp() {
+        let clock = TestClock::new();
+        let hub = enabled_hub(&clock);
+        let (follower, initial) = hub.subscribe("0.9.5").unwrap();
+
+        // `hello` describes the connection, not a session.
+        assert_eq!(
+            strings(initial),
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
+        );
+
+        // Drain between events: an undrained partial is cleared by the next
+        // lifecycle event, which is the buffer's normal coalescing.
+        let mut observed = Vec::new();
+        clock.advance(100);
+        hub.begin(true);
+        observed.extend(follower.drain());
+        clock.advance(1112);
+        hub.partial(StreamSource::Mic, "hello ", "wor");
+        observed.extend(follower.drain());
+        clock.advance(638);
+        hub.finish(Some(Speaker::Me), "Hello world.");
+        observed.extend(follower.drain());
+
+        assert_eq!(
+            strings(observed),
+            [
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n",
+                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\",\"emitted_at\":\"2026-08-15T14:03:21.312-07:00\",\"session_elapsed_ms\":1112}\n",
+                "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\",\"emitted_at\":\"2026-08-15T14:03:21.950-07:00\",\"session_elapsed_ms\":1750}\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn session_elapsed_restarts_at_zero_for_each_new_session() {
+        let clock = TestClock::new();
+        let hub = enabled_hub(&clock);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.begin(true);
+        clock.advance(5_000);
+        hub.finish(Some(Speaker::Me), "one");
+        clock.advance(60_000);
+        hub.begin(true);
+        clock.advance(250);
+        hub.finish(Some(Speaker::Me), "two");
+
+        let elapsed = elapsed_values(follower.drain());
+        assert_eq!(elapsed, [Some(0), Some(5_000), Some(0), Some(250)]);
+    }
+
+    #[test]
+    fn an_orphaned_sessions_cancel_is_stamped_against_its_own_origin() {
+        let clock = TestClock::new();
+        let hub = enabled_hub(&clock);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.begin(true);
+        clock.advance(4_000);
+        // A second begin cancels the orphan; that cancel closes session 1, so it
+        // must be measured from session 1's start, not session 2's.
+        hub.begin(true);
+
+        let drained = follower.drain();
+        assert_eq!(
+            events(drained.clone()),
+            [
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
+                "{\"t\":\"cancel\",\"session\":1}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":true}\n",
+            ]
+        );
+        assert_eq!(elapsed_values(drained), [Some(0), Some(4_000), Some(0)]);
+    }
+
+    #[test]
+    fn late_attach_replays_the_timestamps_the_events_were_produced_with() {
+        let clock = TestClock::new();
+        let hub = enabled_hub(&clock);
+
+        hub.begin(true);
+        clock.advance(2_000);
+        hub.partial(StreamSource::Mic, "hello", " there");
+
+        // Attach long after the fact: the backlog must still describe when the
+        // session began and when that partial landed, not when we arrived.
+        clock.advance(30_000);
+        let (_, initial) = hub.subscribe("0.9.5").unwrap();
+
+        assert_eq!(
+            strings(initial),
+            [
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
+                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
+            ]
         );
     }
 
@@ -696,7 +920,7 @@ mod tests {
         assert_eq!(initial.len(), 1);
         hub.begin(false);
         assert_eq!(
-            strings(follower.drain()),
+            events(follower.drain()),
             ["{\"t\":\"begin\",\"session\":1,\"streaming\":false}\n"]
         );
     }
@@ -709,14 +933,14 @@ mod tests {
 
         hub.begin(true);
         assert_eq!(
-            strings(existing.drain()),
+            events(existing.drain()),
             ["{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n"]
         );
         hub.partial(StreamSource::Mic, "old", " snapshot");
         hub.begin(false);
 
         assert_eq!(
-            strings(existing.drain()),
+            events(existing.drain()),
             [
                 "{\"t\":\"cancel\",\"session\":1}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false}\n",
@@ -724,7 +948,7 @@ mod tests {
         );
         let (_, late_initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
-            strings(late_initial),
+            events(late_initial),
             [
                 "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\"}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false}\n",
@@ -875,7 +1099,7 @@ mod tests {
             .expect("consumer loop did not terminate after eviction")
             .unwrap();
         assert_eq!(
-            strings(written.lock().unwrap().clone()),
+            events(written.lock().unwrap().clone()),
             [
                 "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
