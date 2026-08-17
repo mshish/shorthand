@@ -19,6 +19,9 @@
     "models": "מודלים",
     "advanced": "מתקדם",
     "postProcessing": "עיבוד משלים",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "היסטוריה",
     "debug": "ניפוי שגיאות",
     "about": "אודות"
@@ -624,6 +627,10 @@
       "whatsNewUpdates": {
         "label": "הצג מה חדש",
         "description": "הצג הערות גרסה לאחר עדכוני Handy"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

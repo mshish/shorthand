@@ -19,6 +19,9 @@
     "models": "Моделі",
     "advanced": "Розширені",
     "postProcessing": "Постобробка",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "Історія",
     "debug": "Дебаг",
     "about": "Інфо"
@@ -624,6 +627,10 @@
       "whatsNewUpdates": {
         "label": "Показувати новини",
         "description": "Показувати примітки до випуску після оновлень Handy"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

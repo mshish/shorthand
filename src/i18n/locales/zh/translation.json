@@ -19,6 +19,9 @@
     "models": "模型",
     "advanced": "高级",
     "postProcessing": "后处理",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "历史记录",
     "debug": "调试",
     "about": "关于"
@@ -624,6 +627,10 @@
       "whatsNewUpdates": {
         "label": "显示新功能",
         "description": "Handy 更新后显示发行说明"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

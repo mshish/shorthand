@@ -19,6 +19,9 @@
     "models": "Modeller",
     "advanced": "Avanceret",
     "postProcessing": "Efterbehandling",
+    "capture": "Capture",
+    "transcription": "Transcription",
+    "app": "App",
     "history": "Historik",
     "debug": "Fejlfinding",
     "about": "Om"
@@ -602,6 +605,10 @@
       "whatsNewUpdates": {
         "label": "Vis nyheder",
         "description": "Vis udgivelsesnoter, efter Handy opdateres"
+      },
+      "showAllSettings": {
+        "label": "Show all Handy settings",
+        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       },
       "appDataDirectory": {
         "title": "Appdatamappe",
