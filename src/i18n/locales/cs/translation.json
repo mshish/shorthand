@@ -19,9 +19,6 @@
     "models": "Modely",
     "advanced": "Pokročilé",
     "postProcessing": "Následné zpracování",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "Historie",
     "debug": "Ladění",
     "about": "O aplikaci"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "Zobrazovat novinky",
         "description": "Zobrazovat poznámky k vydání po aktualizacích Handy"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

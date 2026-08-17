@@ -18,9 +18,6 @@
     "general": "عام",
     "advanced": "متقدم",
     "postProcessing": "معالجة لاحقة",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "السجل",
     "debug": "تصحيح الأخطاء",
     "about": "حول",
@@ -604,10 +601,6 @@
       "whatsNewUpdates": {
         "label": "إظهار الجديد",
         "description": "إظهار ملاحظات الإصدار بعد تحديثات Handy"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     },
     "modelSettings": {

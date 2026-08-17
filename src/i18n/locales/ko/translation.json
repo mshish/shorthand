@@ -19,9 +19,6 @@
     "models": "모델",
     "advanced": "고급",
     "postProcessing": "후처리",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "히스토리",
     "debug": "디버그",
     "about": "정보"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "새 소식 표시",
         "description": "Handy 업데이트 후 릴리스 노트를 표시합니다"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },

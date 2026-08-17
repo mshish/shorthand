@@ -19,9 +19,6 @@
     "models": "Modeller",
     "advanced": "Gelişmiş",
     "postProcessing": "Son İşlem",
-    "capture": "Capture",
-    "transcription": "Transcription",
-    "app": "App",
     "history": "Geçmiş",
     "debug": "Hata Ayıklama",
     "about": "Hakkında"
@@ -627,10 +624,6 @@
       "whatsNewUpdates": {
         "label": "Yenilikleri Göster",
         "description": "Handy güncellemelerinden sonra sürüm notlarını göster"
-      },
-      "showAllSettings": {
-        "label": "Show all Handy settings",
-        "description": "Reveal every setting from upstream Handy, including features Shorthand hides."
       }
     }
   },
