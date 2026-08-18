@@ -2,6 +2,40 @@
 
 This file provides guidance to AI coding assistants working with code in this repository.
 
+## This repository is a fork
+
+`origin` is [mshish/shorthand](https://github.com/mshish/shorthand), a fork of
+[cjpais/Handy](https://github.com/cjpais/Handy) (`upstream`), rebranded to Shorthand.
+
+Branch roles:
+
+- **`main`** — a clean mirror of `upstream/main`. Nothing fork-specific lands here; it exists so
+  upstream can be merged in and so a topic branch can be cut from a clean base.
+- **`shorthand`** — the fork's integration branch, where all fork work lives.
+
+**We add features here.** The upstream feature freeze governs what
+[cjpais/Handy](https://github.com/cjpais/Handy) accepts; it does not govern this fork.
+
+### Keep the diff mergeable
+
+We may offer some of this work upstream later, and we merge from upstream regularly either way.
+Both get harder in proportion to how many of upstream's own lines we rewrite. So:
+
+- **Prefer additive changes.** A new file, module, or function costs nothing at merge time. An
+  edit inside a function upstream also touches conflicts every release.
+- **When you must edit an upstream file, keep it small and local.** Do not reformat, reorder
+  imports, rename neighbouring symbols, or "tidy" surrounding code while you are in there — each
+  of those turns a clean merge into a manual one, and none of it is the change you came to make.
+- **Give fork-only features a boundary.** `--follow-stream` is the model: its own module, its own
+  doc ([FOLLOW_STREAM.md](FOLLOW_STREAM.md)), off by default, touching shared files at as few
+  points as possible. That shape is what makes a feature liftable into a self-contained PR.
+- **The Handy → Shorthand rename is a deliberate exception** and already touches upstream lines
+  throughout. Do not extend it opportunistically — renaming something upstream did not rename
+  adds conflict surface for no gain.
+
+When a conflict is unavoidable, say so and take it deliberately, rather than reshaping the design
+to dodge it.
+
 ## Development Commands
 
 **Prerequisites:**
@@ -208,11 +242,20 @@ See the [Troubleshooting](README.md#troubleshooting) section in README.md.
 
 ## GitHub workflow for AI coding assistants
 
-**MANDATORY. Before opening any PR, issue, or discussion in this repo: you MUST read the relevant template file and follow it strictly.** That includes sections that look "ceremonial" — checklists, AI Assistance disclosures, "Human Written Description". A generic Summary/Test-plan layout is not acceptable.
+**These rules govern anything aimed at [cjpais/Handy](https://github.com/cjpais/Handy) — the
+`upstream` remote.** Work that stays in this fork (branches and PRs on `origin`, i.e.
+mshish/shorthand) is ordinary development: conventional commits, no template, no Discussions
+thread, no feature-freeze exemption needed. See [This repository is a fork](#this-repository-is-a-fork).
+
+The distinction matters because the templates below ask for community feedback and human-written
+disclosures that make no sense for a single-maintainer fork, and because upstream's feature freeze
+is not our constraint.
+
+**MANDATORY when targeting upstream. Before opening any PR, issue, or discussion there: you MUST read the relevant template file and follow it strictly.** That includes sections that look "ceremonial" — checklists, AI Assistance disclosures, "Human Written Description". A generic Summary/Test-plan layout is not acceptable.
 
 - **Opening a PR:** Read [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). Every section listed there is mandatory. If a section requires a human-written paragraph (e.g. "Human Written Description"), leave a clear TODO placeholder and ask the human contributor to fill it in — do not invent their voice.
 - **Opening an issue:** Read [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/). Blank issues are disabled; pick the right template (`bug_report.md` for bugs). Feature requests do not belong in issues — they go to [Discussions](https://github.com/cjpais/Handy/discussions) (see `.github/ISSUE_TEMPLATE/config.yml`).
-- **Proposing a feature:** Handy is under a feature freeze. New features require community support gathered in [Discussions](https://github.com/cjpais/Handy/discussions) before any PR is opened — see the PR template's "Community Feedback" section.
+- **Proposing a feature:** upstream is under a feature freeze. New features require community support gathered in [Discussions](https://github.com/cjpais/Handy/discussions) before any PR is opened there — see the PR template's "Community Feedback" section. This does not restrict features in the fork.
 - **Translations:** Follow [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
 - **Full contributor workflow:** [CONTRIBUTING.md](CONTRIBUTING.md).
 
