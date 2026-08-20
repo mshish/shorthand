@@ -169,14 +169,16 @@ mod tests {
         settings.dictation.save_recordings = false;
         settings.dictation.save_transcripts = false;
         settings.dictation.post_process_enabled = false;
-        settings.dictation.post_process_selected_prompt_id =
-            Some("dictation-prompt".to_string());
+        settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
 
         let result = apply_mode(settings, Mode::Meeting);
 
         assert!(!result.push_to_talk);
         assert_eq!(result.paste_method, PasteMethod::CtrlV);
-        assert_eq!(result.clipboard_handling, ClipboardHandling::CopyToClipboard);
+        assert_eq!(
+            result.clipboard_handling,
+            ClipboardHandling::CopyToClipboard
+        );
         assert!(result.auto_submit);
         assert_eq!(result.auto_submit_key, AutoSubmitKey::CtrlEnter);
         assert!(result.append_trailing_space);
@@ -219,14 +221,16 @@ mod tests {
         settings.dictation.save_recordings = true;
         settings.dictation.save_transcripts = true;
         settings.dictation.post_process_enabled = true;
-        settings.dictation.post_process_selected_prompt_id =
-            Some("dictation-prompt".to_string());
+        settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
 
         let result = apply_mode(settings, Mode::Dictation);
 
         assert!(result.push_to_talk);
         assert_eq!(result.paste_method, PasteMethod::CtrlV);
-        assert_eq!(result.clipboard_handling, ClipboardHandling::CopyToClipboard);
+        assert_eq!(
+            result.clipboard_handling,
+            ClipboardHandling::CopyToClipboard
+        );
         assert!(result.auto_submit);
         assert_eq!(result.auto_submit_key, AutoSubmitKey::CmdEnter);
         assert!(result.append_trailing_space);

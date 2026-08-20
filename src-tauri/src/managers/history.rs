@@ -1,3 +1,4 @@
+use crate::shorthand::mode::{active, Mode};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local, Utc};
 use log::{debug, error, info};
@@ -9,7 +10,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_specta::Event;
-use crate::shorthand::mode::{active, Mode};
 
 /// Database migrations for transcription history.
 /// Each migration is applied in order. The library tracks which migrations
