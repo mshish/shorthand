@@ -488,6 +488,11 @@ pub struct AppSettings {
     pub overlay_style: OverlayStyle,
     #[serde(default)]
     pub show_all_settings: bool,
+    /// Dictation-mode settings, applied over the equivalent fields above when
+    /// the capture in flight is `shorthand::mode::Mode::Dictation`. See
+    /// `shorthand::dictation::apply_mode`.
+    #[serde(default)]
+    pub dictation: crate::shorthand::dictation::DictationSettings,
 }
 
 fn default_model() -> String {
@@ -931,6 +936,7 @@ pub fn get_default_settings() -> AppSettings {
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
         show_all_settings: false,
+        dictation: crate::shorthand::dictation::DictationSettings::default(),
     }
 }
 
