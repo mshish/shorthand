@@ -176,7 +176,7 @@
         "bindings": {
           "transcribe": {
             "name": "Capture Shortcut",
-            "description": "The keyboard shortcut to record and transcribe a meeting or note."
+            "description": "आपकी आवाज़ रिकॉर्ड और ट्रांसक्राइब करने के लिए कीबोर्ड शॉर्टकट."
           },
           "cancel": {
             "name": "रद्द करने का शॉर्टकट",

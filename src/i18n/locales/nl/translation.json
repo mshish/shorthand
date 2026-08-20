@@ -176,7 +176,7 @@
         "bindings": {
           "transcribe": {
             "name": "Capture Shortcut",
-            "description": "The keyboard shortcut to record and transcribe a meeting or note."
+            "description": "De sneltoets om je stem op te nemen en te transcriberen."
           },
           "cancel": {
             "name": "Sneltoets voor annuleren",

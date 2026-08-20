@@ -196,7 +196,7 @@
         "bindings": {
           "transcribe": {
             "name": "Capture Shortcut",
-            "description": "The keyboard shortcut to record and transcribe a meeting or note."
+            "description": "El atajo de teclado para grabar y transcribir tu voz."
           },
           "cancel": {
             "name": "Atajo de cancelar",

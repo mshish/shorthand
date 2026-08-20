@@ -196,7 +196,7 @@
         "bindings": {
           "transcribe": {
             "name": "Capture Shortcut",
-            "description": "The keyboard shortcut to record and transcribe a meeting or note."
+            "description": "用于录制和转录语音的键盘快捷键。"
           },
           "cancel": {
             "name": "取消快捷键",

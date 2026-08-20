@@ -173,7 +173,7 @@
         "bindings": {
           "transcribe": {
             "name": "Capture Shortcut",
-            "description": "The keyboard shortcut to record and transcribe a meeting or note."
+            "description": ".اختصار لوحة المفاتيح لتسجيل وتفريغ صوتك"
           },
           "cancel": {
             "name": "اختصار الإلغاء",
