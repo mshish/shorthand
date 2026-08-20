@@ -432,6 +432,7 @@ This is the full permanent conflict surface. Everything else is a new file under
 | `src-tauri/src/clipboard.rs` | one line: `get_settings` → resolver |
 | `src-tauri/src/overlay.rs` | one line: `get_settings` → resolver |
 | `src-tauri/src/managers/history.rs` | one migration; one struct field; `save_entry` reads the cell |
+| `src-tauri/src/tray.rs` | one line in a test-only `HistoryEntry` builder, forced by the new `source` field |
 | `src-tauri/src/shortcut/mod.rs` | one command; two skip-guard sites |
 | `src-tauri/src/shortcut/tauri_impl.rs` | one skip-guard site |
 | `src-tauri/src/shortcut/handy_keys.rs` | one skip-guard site |
