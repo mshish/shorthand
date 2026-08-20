@@ -730,6 +730,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_show_all_settings_setting,
             shortcut::change_save_recordings_setting,
             shortcut::change_save_transcripts_setting,
+            shortcut::change_dictation_settings,
             shortcut::change_transcribe_accelerator_setting,
             shortcut::change_ort_accelerator_setting,
             shortcut::change_transcribe_gpu_device,

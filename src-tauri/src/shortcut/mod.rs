@@ -1349,6 +1349,70 @@ pub fn change_save_transcripts_setting(app: AppHandle, enabled: bool) -> Result<
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn change_dictation_settings(
+    app: AppHandle,
+    dictation: crate::shorthand::dictation::DictationSettings,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let was_registered = settings.dictation.enabled;
+    let was_post_process_registered = was_registered && settings.dictation.post_process_enabled;
+
+    settings.dictation = dictation;
+    let now_registered = settings.dictation.enabled;
+    let now_post_process_registered = now_registered && settings.dictation.post_process_enabled;
+    settings::write_settings(&app, settings.clone());
+
+    // Registering the two dictation shortcuts only at the next app start
+    // would leave "Enable Dictation" doing nothing until a restart — the
+    // exact "silently does nothing on first try" failure this feature must
+    // avoid. Register/unregister immediately, mirroring
+    // change_post_process_enabled_setting's handling of the meeting-mode
+    // post-process binding.
+    // The results are propagated rather than discarded. register_shortcut
+    // returns Err when the combo is already claimed, and init_shortcuts only
+    // error!-logs that — so a user whose chosen key is taken by another app
+    // would otherwise see the toggle turn on and the key do nothing, with a
+    // log line as the only explanation. Returning Err makes the store's
+    // updateSetting revert its optimistic write, so the toggle visibly does
+    // not stick, and Task 8's enable toggle turns that into a message.
+    let mut failures: Vec<String> = Vec::new();
+
+    if now_registered != was_registered {
+        if let Some(binding) = settings.bindings.get("dictate").cloned() {
+            let result = if now_registered {
+                register_shortcut(&app, binding)
+            } else {
+                unregister_shortcut(&app, binding)
+            };
+            if let Err(e) = result {
+                failures.push(e);
+            }
+        }
+    }
+    if now_post_process_registered != was_post_process_registered {
+        if let Some(binding) = settings.bindings.get("dictate_with_post_process").cloned() {
+            let result = if now_post_process_registered {
+                register_shortcut(&app, binding)
+            } else {
+                unregister_shortcut(&app, binding)
+            };
+            if let Err(e) = result {
+                failures.push(e);
+            }
+        }
+    }
+
+    crate::secure_input::reconcile_fallback(&app);
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
 /// Save accelerator settings and make the next model use reload with them.
 /// The currently running transcription, if any, keeps its existing engine.
 fn save_accelerator_and_reload_next_use(app: &AppHandle, s: settings::AppSettings) {

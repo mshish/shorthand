@@ -6,6 +6,7 @@ import type {
   AudioDevice,
   TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
+  DictationSettings,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -207,6 +208,8 @@ const settingUpdaters: {
     commands.changeTranscribeGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  dictation: (value) =>
+    commands.changeDictationSettings(value as DictationSettings),
 };
 
 export const useSettingsStore = create<SettingsStore>()(
