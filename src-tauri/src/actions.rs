@@ -547,6 +547,7 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+        crate::shorthand::mode::set_active(app, binding_id);
 
         // Load model in the background
         let rm = app.state::<Arc<AudioRecordingManager>>();
@@ -592,8 +593,14 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        if let Some(hub) = crate::follow_stream::hub(app) {
-            hub.begin(model_supports_streaming);
+        // A dictation capture must never reach the follow-stream hub. Skipping
+        // `begin` alone is sufficient: every terminal hub call and `partial`
+        // check for an active session first and silently no-op without one
+        // (pinned in follow_stream::hub::tests).
+        if crate::shorthand::mode::active(app) == crate::shorthand::mode::Mode::Meeting {
+            if let Some(hub) = crate::follow_stream::hub(app) {
+                hub.begin(model_supports_streaming);
+            }
         }
         if model_supports_streaming {
             let managers = transcription_managers(app);

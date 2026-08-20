@@ -680,6 +680,25 @@ mod tests {
     }
 
     #[test]
+    fn finish_no_speech_and_partial_without_begin_broadcast_nothing() {
+        // Dictation must never reach the follow-stream hub: `TranscribeAction::start`
+        // skips `hub.begin()` for a dictation capture (see the actions.rs change in
+        // this task), and this test pins the consequence that makes that single skip
+        // sufficient — every other hub call is already a silent no-op without a
+        // preceding `begin`. If a later refactor to `finish_with` or `partial` ever
+        // breaks that, this test catches it even though nothing here calls `begin`.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.finish(Some(Speaker::Me), "orphaned final");
+        hub.no_speech();
+        hub.partial(StreamSource::Mic, "ignored", "");
+
+        assert!(follower.drain().is_empty());
+    }
+
+    #[test]
     fn sessions_emit_at_most_one_terminal_event() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
