@@ -1019,6 +1019,20 @@ impl ShortcutAction for TranscribeAction {
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
                                 let rm_for_paste = Arc::clone(&rm);
+                                // The mode cell records "the mode of the most recently
+                                // started capture" and is never cleared (see
+                                // shorthand::mode), so it is only guaranteed correct for
+                                // the capture in flight at the moment it is read.
+                                // run_on_main_thread only *queues* this closure — the
+                                // FinishGuard above has already dropped by the time we
+                                // get here, so the coordinator can accept a new capture
+                                // (of the other mode) before this closure actually runs
+                                // on the main thread. Resolving now, while the cell still
+                                // reflects this capture, and moving the snapshot into the
+                                // closure avoids `paste()` re-reading a cell that may by
+                                // then belong to a different capture.
+                                let paste_settings =
+                                    crate::shorthand::dictation::resolve_settings(&ah);
                                 // run_on_main_thread queues the closure, so keep the
                                 // wire backstop alive until final can be published.
                                 let follow_stream_guard = follow_stream_guard;
@@ -1035,7 +1049,8 @@ impl ShortcutAction for TranscribeAction {
                                         let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
                                         hub.finish(speaker, &final_text);
                                     }
-                                    match utils::paste(final_text, ah_clone.clone()) {
+                                    match utils::paste(final_text, ah_clone.clone(), paste_settings)
+                                    {
                                         Ok(()) => debug!(
                                             "Text pasted successfully in {:?}",
                                             paste_time.elapsed()
