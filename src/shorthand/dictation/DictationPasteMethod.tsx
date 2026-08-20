@@ -60,9 +60,7 @@ export const DictationPasteMethod: React.FC<DictationPasteMethodProps> = ({
       },
       {
         value: "shift_insert",
-        label: t(
-          "settings.advanced.pasteMethod.options.clipboardShiftInsert",
-        ),
+        label: t("settings.advanced.pasteMethod.options.clipboardShiftInsert"),
       },
     );
   }

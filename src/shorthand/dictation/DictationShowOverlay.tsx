@@ -47,7 +47,10 @@ export const DictationShowOverlay: React.FC<DictationShowOverlayProps> = ({
       value: "bottom",
       label: t("settings.advanced.overlay.position.options.bottom"),
     },
-    { value: "top", label: t("settings.advanced.overlay.position.options.top") },
+    {
+      value: "top",
+      label: t("settings.advanced.overlay.position.options.top"),
+    },
   ];
 
   const selectedStyle = (dictation?.overlay_style || "minimal") as OverlayStyle;
@@ -79,7 +82,9 @@ export const DictationShowOverlay: React.FC<DictationShowOverlayProps> = ({
       {selectedStyle !== "none" && (
         <SettingContainer
           title={t("settings.advanced.overlay.position.title")}
-          description={t("settings.dictation.overlayPosition.sharedDescription")}
+          description={t(
+            "settings.dictation.overlayPosition.sharedDescription",
+          )}
           descriptionMode={descriptionMode}
           grouped={grouped}
           disabled={disabled}

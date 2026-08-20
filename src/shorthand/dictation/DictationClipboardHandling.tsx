@@ -27,9 +27,7 @@ export const DictationClipboardHandling: React.FC<
     },
     {
       value: "copy_to_clipboard",
-      label: t(
-        "settings.advanced.clipboardHandling.options.copyToClipboard",
-      ),
+      label: t("settings.advanced.clipboardHandling.options.copyToClipboard"),
     },
   ];
 
