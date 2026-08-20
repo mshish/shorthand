@@ -1,7 +1,10 @@
 //! Dictation-mode settings and the per-mode field resolver. See
 //! docs/superpowers/specs/2026-08-20-shorthand-dictation-mode-design.md.
 
-use crate::settings::{AutoSubmitKey, ClipboardHandling, OverlayStyle, PasteMethod, TypingTool};
+use super::mode::{self, Mode};
+use crate::settings::{
+    AppSettings, AutoSubmitKey, ClipboardHandling, OverlayStyle, PasteMethod, TypingTool,
+};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -65,6 +68,19 @@ impl Default for DictationSettings {
     }
 }
 
+/// Whether push-to-talk applies to `binding_id`'s capture. Read at dispatch
+/// time in `shortcut::handler::handle_shortcut_event`, before
+/// `TranscribeAction::start` runs — so, unlike every other resolver in this
+/// module, it cannot go through the mode cell (`mode::active` isn't updated
+/// for this press yet). It derives the mode from `binding_id` directly
+/// instead, the same way `mode::set_active` will a moment later.
+pub fn resolve_push_to_talk(settings: &AppSettings, binding_id: &str) -> bool {
+    match mode::mode_for_binding(binding_id) {
+        Mode::Dictation => settings.dictation.push_to_talk,
+        Mode::Meeting => settings.push_to_talk,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +88,17 @@ mod tests {
     #[test]
     fn default_paste_method_is_not_none() {
         assert_ne!(DictationSettings::default().paste_method, PasteMethod::None);
+    }
+
+    #[test]
+    fn resolve_push_to_talk_reads_the_matching_mode_field() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.push_to_talk = false;
+        settings.dictation.push_to_talk = true;
+
+        assert!(!resolve_push_to_talk(&settings, "transcribe"));
+        assert!(!resolve_push_to_talk(&settings, "cancel"));
+        assert!(resolve_push_to_talk(&settings, "dictate"));
+        assert!(resolve_push_to_talk(&settings, "dictate_with_post_process"));
     }
 }

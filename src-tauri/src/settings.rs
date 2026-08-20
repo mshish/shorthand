@@ -818,12 +818,15 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
+    // Dictation mode (below) takes Handy's original combos, so meeting mode
+    // moves off them — that lets this fork and a plain Handy install run
+    // side by side during a transition.
     #[cfg(target_os = "windows")]
-    let default_shortcut = "ctrl+space";
+    let default_shortcut = "ctrl+alt+space";
     #[cfg(target_os = "macos")]
-    let default_shortcut = "option+space";
+    let default_shortcut = "ctrl+shift+space";
     #[cfg(target_os = "linux")]
-    let default_shortcut = "ctrl+space";
+    let default_shortcut = "ctrl+alt+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let default_shortcut = "alt+space";
 
@@ -839,11 +842,11 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
     #[cfg(target_os = "windows")]
-    let default_post_process_shortcut = "ctrl+shift+space";
+    let default_post_process_shortcut = "ctrl+alt+shift+space";
     #[cfg(target_os = "macos")]
-    let default_post_process_shortcut = "option+shift+space";
+    let default_post_process_shortcut = "ctrl+shift+option+space";
     #[cfg(target_os = "linux")]
-    let default_post_process_shortcut = "ctrl+shift+space";
+    let default_post_process_shortcut = "ctrl+alt+shift+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let default_post_process_shortcut = "alt+shift+space";
 
@@ -866,6 +869,50 @@ pub fn get_default_settings() -> AppSettings {
             description: "Cancels the current recording.".to_string(),
             default_binding: "escape".to_string(),
             current_binding: "escape".to_string(),
+        },
+    );
+
+    // Dictation takes the combos meeting mode used before this fork added
+    // dictation, so muscle memory from plain Handy transfers.
+    #[cfg(target_os = "windows")]
+    let default_dictate_shortcut = "ctrl+space";
+    #[cfg(target_os = "macos")]
+    let default_dictate_shortcut = "option+space";
+    #[cfg(target_os = "linux")]
+    let default_dictate_shortcut = "ctrl+space";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_dictate_shortcut = "ctrl+alt+space";
+
+    bindings.insert(
+        "dictate".to_string(),
+        ShortcutBinding {
+            id: "dictate".to_string(),
+            name: "Dictate".to_string(),
+            description: "Converts your speech into text and pastes it into the focused window."
+                .to_string(),
+            default_binding: default_dictate_shortcut.to_string(),
+            current_binding: default_dictate_shortcut.to_string(),
+        },
+    );
+    #[cfg(target_os = "windows")]
+    let default_dictate_post_process_shortcut = "ctrl+shift+space";
+    #[cfg(target_os = "macos")]
+    let default_dictate_post_process_shortcut = "option+shift+space";
+    #[cfg(target_os = "linux")]
+    let default_dictate_post_process_shortcut = "ctrl+shift+space";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_dictate_post_process_shortcut = "ctrl+alt+shift+space";
+
+    bindings.insert(
+        "dictate_with_post_process".to_string(),
+        ShortcutBinding {
+            id: "dictate_with_post_process".to_string(),
+            name: "Dictate with Post-Processing".to_string(),
+            description:
+                "Converts your speech into text, applies AI post-processing, and pastes it into the focused window."
+                    .to_string(),
+            default_binding: default_dictate_post_process_shortcut.to_string(),
+            current_binding: default_dictate_post_process_shortcut.to_string(),
         },
     );
 
@@ -1467,6 +1514,40 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.save_recordings);
         assert!(!settings.save_transcripts);
+    }
+
+    /// The five default bindings must not collide with each other on this
+    /// platform. `cfg` means this only covers the host platform; the other
+    /// two are a review-time reading of the `cfg` branches in
+    /// `get_default_settings`, not a test.
+    #[test]
+    fn default_bindings_have_distinct_shortcuts_on_this_platform() {
+        let bindings = get_default_settings().bindings;
+        let ids = [
+            "transcribe",
+            "transcribe_with_post_process",
+            "dictate",
+            "dictate_with_post_process",
+            "cancel",
+        ];
+        let mut shortcuts: Vec<&str> = ids
+            .iter()
+            .map(|id| {
+                bindings
+                    .get(*id)
+                    .unwrap_or_else(|| panic!("missing default binding '{id}'"))
+                    .current_binding
+                    .as_str()
+            })
+            .collect();
+        let before_dedup = shortcuts.len();
+        shortcuts.sort_unstable();
+        shortcuts.dedup();
+        assert_eq!(
+            shortcuts.len(),
+            before_dedup,
+            "default shortcuts must be pairwise distinct on this platform"
+        );
     }
 
     /// Both settings are opt-in: a store that explicitly enabled them must

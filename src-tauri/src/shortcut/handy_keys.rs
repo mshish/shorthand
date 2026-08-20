@@ -437,6 +437,14 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
             continue;
         }
+        if id == "dictate" && !user_settings.dictation.enabled {
+            continue;
+        }
+        if id == "dictate_with_post_process"
+            && !(user_settings.dictation.enabled && user_settings.dictation.post_process_enabled)
+        {
+            continue;
+        }
 
         let binding = user_settings
             .bindings
