@@ -3699,6 +3699,7 @@ locale" convention):
 | `sidebar.dictation` | `Dictation` |
 | `settings.dictation.enable.label` | `Enable Dictation` |
 | `settings.dictation.enable.description` | `Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.` |
+| `settings.dictation.enable.shortcutConflict` | `Could not enable dictation: another application is already using one of its shortcuts. Choose a different shortcut below and try again.` |
 | `settings.dictation.groups.shortcut` | `Shortcut` |
 | `settings.dictation.groups.aiCleanup` | `AI Cleanup` |
 | `settings.dictation.groups.privacy` | `Privacy` |
