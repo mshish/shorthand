@@ -1023,12 +1023,16 @@ impl ShortcutAction for TranscribeAction {
                                 // started capture" and is never cleared (see
                                 // shorthand::mode), so it is only guaranteed correct for
                                 // the capture in flight at the moment it is read.
-                                // run_on_main_thread only *queues* this closure — the
-                                // FinishGuard above has already dropped by the time we
-                                // get here, so the coordinator can accept a new capture
-                                // (of the other mode) before this closure actually runs
-                                // on the main thread. Resolving now, while the cell still
-                                // reflects this capture, and moving the snapshot into the
+                                // run_on_main_thread only *queues* this closure. The
+                                // FinishGuard is still alive here, but it drops as soon as
+                                // this async block returns — which is right after the
+                                // queueing call below, not after the closure runs. So by
+                                // the time the closure reaches the main thread the
+                                // coordinator may already have accepted a new capture of
+                                // the other mode, and the cell would describe that one
+                                // instead. Resolving now, while the guard still holds the
+                                // coordinator and the cell still reflects this capture,
+                                // and moving the snapshot into the
                                 // closure avoids `paste()` re-reading a cell that may by
                                 // then belong to a different capture.
                                 let paste_settings =
