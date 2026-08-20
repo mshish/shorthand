@@ -92,6 +92,12 @@ pub fn resolve_push_to_talk(settings: &AppSettings, binding_id: &str) -> bool {
 pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
     match mode {
         Mode::Meeting => settings,
+        // Defence in depth: even if a `dictate*` binding somehow gets
+        // registered while dictation is off (see the fix for the
+        // GlobalShortcutInput/HandyKeysShortcutInput disabled-row bug), a
+        // capture it starts must still behave exactly like meeting mode
+        // rather than delivering through dictation's paste method.
+        Mode::Dictation if !settings.dictation.enabled => settings,
         Mode::Dictation => {
             let dictation = settings.dictation.clone();
             AppSettings {
@@ -196,6 +202,7 @@ mod tests {
     #[test]
     fn apply_mode_overrides_every_per_mode_field_for_dictation() {
         let mut settings = crate::settings::get_default_settings();
+        settings.dictation.enabled = true;
         settings.selected_model = "whisper-large-v3-turbo".to_string();
         settings.push_to_talk = false;
         settings.paste_method = PasteMethod::None;
@@ -245,5 +252,31 @@ mod tests {
         );
         // A field `apply_mode` does not own must survive from the base settings.
         assert_eq!(result.selected_model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn apply_mode_leaves_settings_unchanged_for_dictation_when_disabled() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.dictation.enabled = false;
+        // Give the per-mode fields values that would visibly leak through
+        // the meeting-mode fields below if the `enabled` guard were skipped.
+        settings.paste_method = PasteMethod::None;
+        settings.overlay_style = OverlayStyle::Live;
+        settings.dictation.paste_method = PasteMethod::CtrlV;
+        settings.dictation.overlay_style = OverlayStyle::Minimal;
+
+        // AppSettings has no PartialEq (deriving it would ripple into every
+        // nested type upstream owns), so compare via serialization instead
+        // of a literal `==` — this is exactly the "unchanged" assertion the
+        // design calls for, just expressed without adding a trait bound to
+        // an upstream struct.
+        let before = serde_json::to_value(&settings).expect("settings must serialize");
+        let result = apply_mode(settings, Mode::Dictation);
+        let after = serde_json::to_value(&result).expect("settings must serialize");
+
+        assert_eq!(
+            after, before,
+            "apply_mode must return settings unchanged for Mode::Dictation while dictation.enabled is false"
+        );
     }
 }

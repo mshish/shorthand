@@ -39,11 +39,15 @@ export const DictationSettings: React.FC = () => {
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.dictation.groups.shortcut")}>
-        <ShortcutInput
-          shortcutId="dictate"
-          grouped={true}
-          disabled={!dictationEnabled}
-        />
+        {/* Not rendered-disabled like the row below: SettingContainer's
+            `disabled` prop only fades the label text, it never reaches
+            these rows' key-recorder chip or Reset button, so a disabled
+            row here would still register a live global shortcut while
+            dictation is off. Hide instead of disable until that is fixed
+            upstream. */}
+        {dictationEnabled && (
+          <ShortcutInput shortcutId="dictate" grouped={true} />
+        )}
         <DictationToggleField
           field="push_to_talk"
           label={t("settings.general.pushToTalk.label")}
@@ -51,11 +55,12 @@ export const DictationSettings: React.FC = () => {
           grouped={true}
           disabled={!dictationEnabled}
         />
-        <ShortcutInput
-          shortcutId="dictate_with_post_process"
-          grouped={true}
-          disabled={!dictationEnabled}
-        />
+        {dictationEnabled && (
+          <ShortcutInput
+            shortcutId="dictate_with_post_process"
+            grouped={true}
+          />
+        )}
       </SettingsGroup>
 
       {/* Not disabled-when-off like the rows above: AccessibilityPermissions
