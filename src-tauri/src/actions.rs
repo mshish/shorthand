@@ -819,7 +819,7 @@ impl ShortcutAction for TranscribeAction {
                     // govern persistence only; delivery (paste/clipboard/
                     // follow-stream) happens unconditionally below regardless
                     // of either flag.
-                    let persistence_settings = get_settings(&ah);
+                    let persistence_settings = crate::shorthand::dictation::resolve_settings(&ah);
                     let save_recordings = persistence_settings.save_recordings;
                     let save_transcripts = persistence_settings.save_transcripts;
 
