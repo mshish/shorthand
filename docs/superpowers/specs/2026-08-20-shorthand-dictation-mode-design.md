@@ -143,6 +143,14 @@ possible first run.
 This must be an explicit `Default` impl with a comment saying why, so a later
 upstream merge does not "tidy" it back to `#[default]`.
 
+#### No per-mode external script
+
+`external_script_path` stays global and is **not** in `DictationSettings`, so
+dictation does not offer the `ExternalScript` paste method at all. Offering it
+while sharing the path would reintroduce exactly the cross-mode bleed this
+design exists to prevent. Adding a per-mode path is a later change if anyone
+asks for it.
+
 ### Per-mode and shared settings
 
 Per-mode, in `DictationSettings`:
@@ -215,9 +223,19 @@ but `init_shortcuts` only `error!`-logs the result. A dictation shortcut that
 collides with something the user already bound therefore fails to register with
 no UI trace, and pressing it does nothing.
 
-Two guards: verify at review time that the five defaults do not collide with
-each other on any platform, and surface a registration failure for the dictation
-bindings in the Dictation settings section.
+Two guards.
+
+First, verify at review time that the five defaults do not collide with each
+other on any platform.
+
+Second, surface the failure when the user enables dictation — the case that
+matters, because that is when they choose a combo another app may already own.
+`change_dictation_settings` registers the bindings and **returns the error**
+rather than discarding it. The store's `updateSetting` catches a rejected
+update and reverts its optimistic write, so the toggle visibly springs back;
+the Dictation section compares the requested value against the persisted one
+and explains why. Startup registration stays log-only, as it is for every other
+binding — fixing that generally is upstream-facing work.
 
 ### Shortcuts
 
@@ -365,11 +383,12 @@ New file `src/shorthand/DictationSettings.tsx`, rows in order:
    disabled when off, not hidden: an empty section reads as broken, and a
    disabled one previews what enabling buys.
 2. *Shortcut* — `ShortcutInput shortcutId="dictate"`, `PushToTalk` (per-mode),
-   macOS Accessibility status row.
+   `ShortcutInput shortcutId="dictate_with_post_process"`, macOS Accessibility
+   status row. Both shortcuts sit together so the two keys can be read and
+   compared at a glance.
 3. *Output* — `PasteMethod`, `TypingTool` (Linux), `ClipboardHandling`,
    `AutoSubmit`, `AppendTrailingSpace`, `ShowOverlay`.
-4. *AI cleanup* — enable toggle, prompt picker,
-   `ShortcutInput shortcutId="dictate_with_post_process"`, and a link to the
+4. *AI cleanup* — enable toggle, prompt picker, and a link to the
    Post-processing section for provider and key setup.
 5. *Privacy* — `SaveRecordings`, `SaveTranscripts`.
 6. A footer line stating that microphone, model and language come from Capture
