@@ -21,7 +21,8 @@
     "postProcessing": "Xử lý sau",
     "history": "Lịch sử",
     "debug": "Gỡ lỗi",
-    "about": "Giới thiệu"
+    "about": "Giới thiệu",
+    "dictation": "Dictation"
   },
   "onboarding": {
     "subtitle": "Để bắt đầu, hãy chọn một mô hình chuyển đổi giọng nói",
@@ -194,7 +195,7 @@
         "pressKeys": "Nhấn phím...",
         "bindings": {
           "transcribe": {
-            "name": "Phím tắt chuyển đổi",
+            "name": "Capture Shortcut",
             "description": "Phím tắt để ghi âm và chuyển đổi giọng nói của bạn."
           },
           "cancel": {
@@ -204,6 +205,14 @@
           "transcribe_with_post_process": {
             "name": "Phím tắt xử lý sau",
             "description": "Tùy chọn: Phím tắt chuyên dụng luôn áp dụng xử lý sau bằng AI cho bản chuyển đổi của bạn."
+          },
+          "dictate": {
+            "name": "Dictation Shortcut",
+            "description": "The keyboard shortcut to start and stop dictation."
+          },
+          "dictate_with_post_process": {
+            "name": "Dictation AI Cleanup Hotkey",
+            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -456,6 +465,35 @@
         "createFirst": "Nhấn 'Tạo Prompt mới' ở trên để tạo prompt xử lý sau đầu tiên của bạn."
       }
     },
+    "dictation": {
+      "enable": {
+        "label": "Enable Dictation",
+        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
+        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
+      },
+      "groups": {
+        "shortcut": "Shortcut",
+        "aiCleanup": "AI Cleanup",
+        "privacy": "Privacy"
+      },
+      "postProcessing": {
+        "hint": "Configure providers, API keys and models in the Post-Processing section."
+      },
+      "privacy": {
+        "saveRecordings": {
+          "label": "Save Recordings",
+          "description": "Keep the audio recording for each dictation."
+        },
+        "saveTranscripts": {
+          "label": "Save Transcripts",
+          "description": "Keep the transcript text for each dictation."
+        }
+      },
+      "overlayPosition": {
+        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
+      },
+      "footer": "Microphone, model and language come from the Capture and Transcription sections."
+    },
     "history": {
       "title": "Lịch sử",
       "openFolder": "Mở thư mục ghi âm",
@@ -469,7 +507,11 @@
       "retranscribe": "Phiên âm lại",
       "retranscribeError": "Không thể phiên âm lại. Vui lòng thử lại.",
       "transcribing": "Đang phiên âm...",
-      "transcriptionFailed": "Phiên âm thất bại. Bạn có thể phiên âm lại bằng biểu tượng thử lại."
+      "transcriptionFailed": "Phiên âm thất bại. Bạn có thể phiên âm lại bằng biểu tượng thử lại.",
+      "source": {
+        "meeting": "Meeting",
+        "dictation": "Dictation"
+      }
     },
     "debug": {
       "title": "Gỡ lỗi",

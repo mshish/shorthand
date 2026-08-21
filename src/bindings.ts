@@ -451,6 +451,14 @@ async changeSaveTranscriptsSetting(enabled: boolean) : Promise<Result<null, stri
     else return { status: "error", error: e  as any };
 }
 },
+async changeDictationSettings(dictation: DictationSettings) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_dictation_settings", { dictation }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeTranscribeAcceleratorSetting(accelerator: TranscribeAcceleratorSetting) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_transcribe_accelerator_setting", { accelerator }) };
@@ -1021,13 +1029,26 @@ reliable_paste?: boolean; typing_tool?: TypingTool; external_script_path?: strin
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle; show_all_settings?: boolean }
+overlay_style?: OverlayStyle; show_all_settings?: boolean; 
+/**
+ * Dictation-mode settings, applied over the equivalent fields above when
+ * the capture in flight is `shorthand::mode::Mode::Dictation`. See
+ * `shorthand::dictation::apply_mode`.
+ */
+dictation?: DictationSettings }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
 export type BindingResponse = { success: boolean; binding: ShortcutBinding | null; error: string | null }
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
 export type CustomSounds = { start: boolean; stop: boolean }
+/**
+ * Dictation's own copy of settings meeting mode also has, so enabling or
+ * configuring dictation never touches a meeting-mode value. See "Per-mode
+ * and shared settings" in the design doc for which fields live here versus
+ * staying shared on `AppSettings`.
+ */
+export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null }
 export type EngineType = 
 /**
  * Any GGML/GGUF model loaded through transcribe-cpp (Whisper, Parakeet,
@@ -1036,7 +1057,7 @@ export type EngineType =
  */
 "TranscribeCpp" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
 export type GpuDeviceOption = { id: number; name: string; total_vram_mb: number }
-export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
+export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; source: string }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**
  * Result of changing keyboard implementation

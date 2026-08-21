@@ -502,7 +502,7 @@ pub(crate) async fn process_transcription_output(
     transcription: &str,
     post_process: bool,
 ) -> ProcessedTranscription {
-    let settings = get_settings(app);
+    let settings = crate::shorthand::dictation::resolve_settings(app);
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
     let mut post_process_prompt: Option<String> = None;
@@ -547,6 +547,7 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+        crate::shorthand::mode::set_active(app, binding_id);
 
         // Load model in the background
         let rm = app.state::<Arc<AudioRecordingManager>>();
@@ -592,8 +593,14 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        if let Some(hub) = crate::follow_stream::hub(app) {
-            hub.begin(model_supports_streaming);
+        // A dictation capture must never reach the follow-stream hub. Skipping
+        // `begin` alone is sufficient: every terminal hub call and `partial`
+        // check for an active session first and silently no-op without one
+        // (pinned in follow_stream::hub::tests).
+        if crate::shorthand::mode::active(app) == crate::shorthand::mode::Mode::Meeting {
+            if let Some(hub) = crate::follow_stream::hub(app) {
+                hub.begin(model_supports_streaming);
+            }
         }
         if model_supports_streaming {
             let managers = transcription_managers(app);
@@ -614,7 +621,7 @@ impl ShortcutAction for TranscribeAction {
         // doesn't stream (or whose capability is not known yet) gets the compact
         // pill instead of an oversized transparent live window.
         let overlay_started = Instant::now();
-        match settings.overlay_style {
+        match crate::shorthand::dictation::resolve_settings(app).overlay_style {
             OverlayStyle::Live if model_supports_streaming => utils::show_streaming_overlay(app),
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
             OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
@@ -746,7 +753,7 @@ impl ShortcutAction for TranscribeAction {
         // the larger panel, but it still switches from listening to a working
         // spinner while the stream finalizes. Non-streaming paths use the
         // compact transcribing pill (None no-ops in show_*).
-        let style = get_settings(app).overlay_style;
+        let style = crate::shorthand::dictation::resolve_settings(app).overlay_style;
         // Capture this before finalizing the stream so every later working state
         // targets the same overlay that was shown for this transcription.
         let use_streaming_overlay = should_use_streaming_overlay(style, tm.is_streaming());
@@ -812,7 +819,7 @@ impl ShortcutAction for TranscribeAction {
                     // govern persistence only; delivery (paste/clipboard/
                     // follow-stream) happens unconditionally below regardless
                     // of either flag.
-                    let persistence_settings = get_settings(&ah);
+                    let persistence_settings = crate::shorthand::dictation::resolve_settings(&ah);
                     let save_recordings = persistence_settings.save_recordings;
                     let save_transcripts = persistence_settings.save_transcripts;
 
@@ -1012,6 +1019,24 @@ impl ShortcutAction for TranscribeAction {
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
                                 let rm_for_paste = Arc::clone(&rm);
+                                // The mode cell records "the mode of the most recently
+                                // started capture" and is never cleared (see
+                                // shorthand::mode), so it is only guaranteed correct for
+                                // the capture in flight at the moment it is read.
+                                // run_on_main_thread only *queues* this closure. The
+                                // FinishGuard is still alive here, but it drops as soon as
+                                // this async block returns — which is right after the
+                                // queueing call below, not after the closure runs. So by
+                                // the time the closure reaches the main thread the
+                                // coordinator may already have accepted a new capture of
+                                // the other mode, and the cell would describe that one
+                                // instead. Resolving now, while the guard still holds the
+                                // coordinator and the cell still reflects this capture,
+                                // and moving the snapshot into the
+                                // closure avoids `paste()` re-reading a cell that may by
+                                // then belong to a different capture.
+                                let paste_settings =
+                                    crate::shorthand::dictation::resolve_settings(&ah);
                                 // run_on_main_thread queues the closure, so keep the
                                 // wire backstop alive until final can be published.
                                 let follow_stream_guard = follow_stream_guard;
@@ -1028,7 +1053,8 @@ impl ShortcutAction for TranscribeAction {
                                         let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
                                         hub.finish(speaker, &final_text);
                                     }
-                                    match utils::paste(final_text, ah_clone.clone()) {
+                                    match utils::paste(final_text, ah_clone.clone(), paste_settings)
+                                    {
                                         Ok(()) => debug!(
                                             "Text pasted successfully in {:?}",
                                             paste_time.elapsed()
@@ -1149,6 +1175,16 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map.insert(
         "transcribe_with_post_process".to_string(),
+        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "dictate".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "dictate_with_post_process".to_string(),
         Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
     );
     map.insert(

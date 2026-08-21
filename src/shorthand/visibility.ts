@@ -26,14 +26,16 @@ export const SIMPLIFIED_MODE_HIDDEN_SECTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Fork-only section ids hidden when `show_all_settings` is true. These
- * sections are not registered in `SECTIONS_CONFIG` yet, so naming them here
- * has no effect until they are added.
+ * Fork-only section ids hidden when `show_all_settings` is true. `dictation`
+ * has no upstream equivalent to fall back to, so it disappears along with
+ * capture/transcription/app when the escape hatch is on — same rule, same
+ * reason: don't show two settings surfaces for the same concern at once.
  */
 export const FORK_ONLY_SECTIONS: ReadonlySet<string> = new Set([
   "capture",
   "transcription",
   "app",
+  "dictation",
 ]);
 
 /**

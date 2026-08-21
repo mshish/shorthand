@@ -527,6 +527,14 @@ mod imp {
                 if id == "transcribe_with_post_process" && !settings.post_process_enabled {
                     continue;
                 }
+                if id == "dictate" && !settings.dictation.enabled {
+                    continue;
+                }
+                if id == "dictate_with_post_process"
+                    && !(settings.dictation.enabled && settings.dictation.post_process_enabled)
+                {
+                    continue;
+                }
 
                 if register_fallback_binding(app, id, binding, &mut next) {
                     immune += 1;

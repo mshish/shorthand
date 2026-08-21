@@ -21,7 +21,8 @@
     "postProcessing": "Efterbehandling",
     "history": "Historik",
     "debug": "Fejlfinding",
-    "about": "Om"
+    "about": "Om",
+    "dictation": "Dictation"
   },
   "onboarding": {
     "subtitle": "For at komme i gang skal du vælge en transskriptionsmodel",
@@ -174,7 +175,7 @@
         "pressKeys": "Tryk på ønskede taster...",
         "bindings": {
           "transcribe": {
-            "name": "Transskriptionsgenvej",
+            "name": "Capture Shortcut",
             "description": "Tastaturgenvejen til at optage og transskribere din stemme."
           },
           "cancel": {
@@ -184,6 +185,14 @@
           "transcribe_with_post_process": {
             "name": "Genvej til efterbehandling",
             "description": "Valgfrit: En dedikeret genvej, der altid anvender AI-efterbehandling på din transskription."
+          },
+          "dictate": {
+            "name": "Dictation Shortcut",
+            "description": "The keyboard shortcut to start and stop dictation."
+          },
+          "dictate_with_post_process": {
+            "name": "Dictation AI Cleanup Hotkey",
+            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -456,6 +465,35 @@
         "createFirst": "Klik på 'Opret ny prompt' ovenfor for at oprette din første efterbehandlingsprompt."
       }
     },
+    "dictation": {
+      "enable": {
+        "label": "Enable Dictation",
+        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
+        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
+      },
+      "groups": {
+        "shortcut": "Shortcut",
+        "aiCleanup": "AI Cleanup",
+        "privacy": "Privacy"
+      },
+      "postProcessing": {
+        "hint": "Configure providers, API keys and models in the Post-Processing section."
+      },
+      "privacy": {
+        "saveRecordings": {
+          "label": "Save Recordings",
+          "description": "Keep the audio recording for each dictation."
+        },
+        "saveTranscripts": {
+          "label": "Save Transcripts",
+          "description": "Keep the transcript text for each dictation."
+        }
+      },
+      "overlayPosition": {
+        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
+      },
+      "footer": "Microphone, model and language come from the Capture and Transcription sections."
+    },
     "history": {
       "title": "Historik",
       "openFolder": "Åbn optagelsesmappe",
@@ -469,7 +507,11 @@
       "retranscribe": "Transskribér igen",
       "retranscribeError": "Kunne ikke transskribere igen. Prøv igen.",
       "transcribing": "Transskriberer...",
-      "transcriptionFailed": "Transskription mislykkedes. Du kan transskribere igen ved hjælp af genforsøgsikonet."
+      "transcriptionFailed": "Transskription mislykkedes. Du kan transskribere igen ved hjælp af genforsøgsikonet.",
+      "source": {
+        "meeting": "Meeting",
+        "dictation": "Dictation"
+      }
     },
     "debug": {
       "title": "Fejlfinding",
