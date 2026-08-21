@@ -47,7 +47,7 @@ found only by a reviewer reading code rather than by anything automated:
    would have caught it in seconds. It survived eleven task-level reviews.
 
 2. **The `dictation` store updater swallowed backend errors.** tauri-specta
-   returns a backend `Err` as a *resolved* `{status: "error"}` value, not a
+   returns a backend `Err` as a _resolved_ `{status: "error"}` value, not a
    rejection, so the updater never threw, the optimistic write never reverted,
    and a whole component written to detect that revert was dead code. Four
    sibling updaters in the same table handle this correctly. A store-level test
@@ -74,12 +74,12 @@ command. It is ordinary work, not research.
 
 ## Options
 
-| Option | Dependency cost | Conflict surface | Catches the two bugs above? |
-| --- | --- | --- | --- |
-| **Status quo** — manual checklist per feature | none | none | No. Both shipped. |
-| **Playwright specs in a fork-only file** | **none — already installed** | one new file | Yes, both |
-| vitest + testing-library | new devDeps in upstream's `package.json` + `bun.lock` | permanent | Yes, both, and faster to run |
-| Contribute a harness upstream first | none, eventually | none | Only after upstream accepts |
+| Option                                        | Dependency cost                                       | Conflict surface | Catches the two bugs above?  |
+| --------------------------------------------- | ----------------------------------------------------- | ---------------- | ---------------------------- |
+| **Status quo** — manual checklist per feature | none                                                  | none             | No. Both shipped.            |
+| **Playwright specs in a fork-only file**      | **none — already installed**                          | one new file     | Yes, both                    |
+| vitest + testing-library                      | new devDeps in upstream's `package.json` + `bun.lock` | permanent        | Yes, both, and faster to run |
+| Contribute a harness upstream first           | none, eventually                                      | none             | Only after upstream accepts  |
 
 ## Recommendation
 
@@ -112,4 +112,4 @@ depends on a human remembering to run it.
 upstream's `package.json`" appears in both specs and in every dispatch on the
 dictation branch. Half of it is true. The half that matters — that the frontend
 therefore cannot be tested — is not, because Playwright was already installed
-the whole time. Future specs should say "no *unit* harness; use Playwright."
+the whole time. Future specs should say "no _unit_ harness; use Playwright."
