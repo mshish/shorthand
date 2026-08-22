@@ -1,7 +1,9 @@
 Read @AGENTS.md
 
-This is a fork with branch roles that matter — `AGENTS.md` covers them first for
-a reason, and getting the target branch wrong is the expensive mistake here.
+This is a fork of cjpais/Handy. `main` is the fork's branch and the default; there is no
+local upstream mirror, so take upstream by merging the `upstream/main` remote-tracking ref.
+`AGENTS.md` leads with that and with keeping the diff mergeable, which is the constraint most
+changes here are actually paying for.
 
 The rest is deliberately not imported — open it only when the work calls for it.
 

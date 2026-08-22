@@ -9,9 +9,12 @@ This file provides guidance to AI coding assistants working with code in this re
 
 Branch roles:
 
-- **`main`** — a clean mirror of `upstream/main`. Nothing fork-specific lands here; it exists so
-  upstream can be merged in and so a topic branch can be cut from a clean base.
-- **`shorthand`** — the fork's integration branch, where all fork work lives.
+- **`main`** — the fork's integration branch, where all fork work lives. This is the default
+  branch and the one to target.
+- **`upstream/main`** — the clean upstream base, used directly as a remote-tracking ref. Merge
+  it in to take upstream, and cut topic branches from it (`git checkout -b topic upstream/main`)
+  when you need a base with no fork commits. There is deliberately no local mirror branch: one
+  only went stale, and the remote-tracking ref already does both jobs.
 
 **We add features here.** The upstream feature freeze governs what
 [cjpais/Handy](https://github.com/cjpais/Handy) accepts; it does not govern this fork.
