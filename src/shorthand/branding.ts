@@ -33,8 +33,38 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "sidebar.capture": "Capture",
   "sidebar.transcription": "Transcription",
   "sidebar.app": "App",
-  // These two say "Handy" on purpose: the toggle reveals the settings of
-  // upstream Handy. Renaming them would make the control describe itself.
+
+  // ---- The redesigned settings sections --------------------------------
+  "sidebar.modes": "Modes",
+  "sidebar.audio": "Audio",
+  "sidebar.model": "Model",
+  "sidebar.aiCleanup": "AI cleanup",
+
+  "settings.modes.heading": "How each mode behaves",
+  "settings.modes.description":
+    "Transcription streams a meeting to whatever is following along. Dictation types what you say into whatever window you are in.",
+  "settings.modes.tabs.label": "Capture mode",
+  "settings.modes.tabs.transcription": "Transcription",
+  "settings.modes.tabs.dictation": "Dictation",
+  "settings.modes.shared.title": "Shared by both modes",
+  "settings.modes.shared.description":
+    "One setting, used by whichever mode is recording.",
+
+  "settings.audio.groups.input": "Where sound comes from",
+  "settings.model.groups.output": "How transcripts read",
+  "settings.aiCleanup.title": "How AI cleans up what you said",
+  "settings.aiCleanup.sharedNote":
+    "The connection and the prompt library are shared. Whether cleanup runs, and which prompt it uses, is set per mode under Modes.",
+
+  // The advanced switch. It used to swap in upstream Handy's own settings
+  // screens, which is what the old wording described; it now reveals more rows
+  // in the section you are already looking at, so the old wording would be
+  // actively misleading rather than merely stale.
+  "settings.advanced.switch.label": "Advanced settings",
+  "settings.advanced.switch.description":
+    "Show every setting, not just the ones most people need. Nothing moves — the extra rows appear in the sections they belong to.",
+
+  // These two say "Handy" on purpose: they name the upstream project.
   "settings.about.showAllSettings.label": "Show all Handy settings",
   "settings.about.showAllSettings.description":
     "Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides.",

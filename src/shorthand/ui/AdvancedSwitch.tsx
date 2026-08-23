@@ -31,9 +31,7 @@ export const AdvancedSwitch: React.FC = () => {
       onClick={() => setAdvanced(!advanced)}
       className="flex w-full items-center justify-between gap-2 rounded-lg border-0 bg-transparent px-2 py-1.5 text-start text-xs text-mid-gray transition-colors hover:bg-mid-gray/15 hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary disabled:opacity-50"
     >
-      <span className="truncate">
-        {t("settings.about.showAllSettings.label")}
-      </span>
+      <span className="truncate">{t("settings.advanced.switch.label")}</span>
       <span
         aria-hidden="true"
         className={`h-3 w-3 shrink-0 rounded-full border transition-colors ${

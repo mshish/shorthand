@@ -1,20 +1,12 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
-import { ShorthandMark, ShorthandWordmark } from "@/shorthand/brand";
+import { FlaskConical } from "lucide-react";
+import { ShorthandWordmark } from "@/shorthand/brand";
 import { AdvancedSwitch } from "@/shorthand/ui/AdvancedSwitch";
 import { useSettings } from "../hooks/useSettings";
 import { getVisibleSectionIds } from "@/shorthand/visibility";
 import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
-import {
-  GeneralSettings,
-  AdvancedSettings,
-  HistorySettings,
-  DebugSettings,
-  AboutSettings,
-  PostProcessingSettings,
-  ModelsSettings,
-} from "./settings";
+import { DebugSettings } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -33,51 +25,28 @@ interface SectionConfig {
   enabled: (settings: any) => boolean;
 }
 
+// The fork's sections are the whole registry now, not an addition to
+// upstream's. General, Models, Advanced and Post-processing are deliberately
+// not registered: their rows live in the fork's sections instead, reachable by
+// default or behind the Advanced switch. History and About are fork-owned too,
+// so they can lose the card and hold rows upstream's versions have no home for.
+//
+// The unregistered components are NOT deleted. Deleting a file upstream still
+// maintains turns every future edit to it into a delete/modify conflict, which
+// is the expensive kind. `tests/settings-coverage.spec.ts` is what makes
+// leaving them unregistered safe: it fails if any leaf setting control stops
+// being reachable.
+//
+// Debug is the one upstream section kept as-is. It holds diagnostics rather
+// than preferences, it is already gated behind `debug_mode`, and nothing in the
+// redesign has an opinion about it.
 export const SECTIONS_CONFIG = {
   ...SHORTHAND_SECTIONS,
-  general: {
-    labelKey: "sidebar.general",
-    icon: ShorthandMark,
-    component: GeneralSettings,
-    enabled: () => true,
-  },
-  history: {
-    labelKey: "sidebar.history",
-    icon: History,
-    component: HistorySettings,
-    enabled: () => true,
-  },
-  models: {
-    labelKey: "sidebar.models",
-    icon: Cpu,
-    component: ModelsSettings,
-    enabled: () => true,
-  },
-  advanced: {
-    labelKey: "sidebar.advanced",
-    icon: Cog,
-    component: AdvancedSettings,
-    enabled: () => true,
-  },
-  postprocessing: {
-    labelKey: "sidebar.postProcessing",
-    icon: Sparkles,
-    component: PostProcessingSettings,
-    enabled: (settings) =>
-      (settings?.post_process_enabled ?? false) ||
-      (settings?.dictation?.post_process_enabled ?? false),
-  },
   debug: {
     labelKey: "sidebar.debug",
     icon: FlaskConical,
     component: DebugSettings,
     enabled: (settings) => settings?.debug_mode ?? false,
-  },
-  about: {
-    labelKey: "sidebar.about",
-    icon: Info,
-    component: AboutSettings,
-    enabled: () => true,
   },
 } as const satisfies Record<string, SectionConfig>;
 

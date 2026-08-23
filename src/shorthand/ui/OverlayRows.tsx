@@ -68,6 +68,67 @@ export const OverlayStyleRow: React.FC<{
 };
 
 /**
+ * The dictation mode's own `overlay_style`, without the position row.
+ *
+ * `DictationShowOverlay` renders both, the same way upstream's `ShowOverlay`
+ * does, and for the same historical reason: each screen used to own its whole
+ * overlay story. Now that the shared position appears exactly once in App,
+ * rendering `DictationShowOverlay` in the Modes pane would put a second copy of
+ * that one control on screen, bound to the same field — two inputs writing the
+ * same value, which is a bug users find before designers do.
+ *
+ * A fork-owned row rather than a prop on `DictationShowOverlay`: that component
+ * is fork-owned too, but it is the surface the previous dictation design
+ * documented and it stays valid for anyone rendering the pair together.
+ */
+export const DictationOverlayStyleRow: React.FC<{
+  descriptionMode?: "inline" | "tooltip";
+  grouped?: boolean;
+  disabled?: boolean;
+}> = ({ descriptionMode = "inline", grouped = true, disabled = false }) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  const dictation = getSetting("dictation");
+
+  const selectedStyle = (dictation?.overlay_style || "minimal") as OverlayStyle;
+
+  return (
+    <SettingContainer
+      title={t("settings.advanced.overlay.style.title")}
+      description={t("settings.advanced.overlay.style.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+      disabled={disabled}
+    >
+      <Dropdown
+        options={[
+          {
+            value: "none",
+            label: t("settings.advanced.overlay.style.options.none"),
+          },
+          {
+            value: "minimal",
+            label: t("settings.advanced.overlay.style.options.minimal"),
+          },
+          {
+            value: "live",
+            label: t("settings.advanced.overlay.style.options.live"),
+          },
+        ]}
+        selectedValue={selectedStyle}
+        onSelect={(value) =>
+          updateSetting("dictation", {
+            ...dictation,
+            overlay_style: value as OverlayStyle,
+          } as NonNullable<typeof dictation>)
+        }
+        disabled={disabled || isUpdating("dictation")}
+      />
+    </SettingContainer>
+  );
+};
+
+/**
  * The shared position. Self-hides when *no* mode would draw an overlay at all,
  * because a position for something that never appears is a dead control.
  *
