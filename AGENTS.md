@@ -35,6 +35,10 @@ Both get harder in proportion to how many of upstream's own lines we rewrite. So
 - **The Handy → Shorthand rename is a deliberate exception** and already touches upstream lines
   throughout. Do not extend it opportunistically — renaming something upstream did not rename
   adds conflict surface for no gain.
+- **The fork's visual identity lives in `src/shorthand/brand/`** and is documented in
+  [BRANDING.md](BRANDING.md). It re-declares CSS custom properties upstream already defines
+  rather than restyling components, so a restyle upstream still merges cleanly. Change a colour,
+  a typeface or a radius there, not in `src/styles/theme.css`.
 
 When a conflict is unavoidable, say so and take it deliberately, rather than reshaping the design
 to dodge it.

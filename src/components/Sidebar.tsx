@@ -1,8 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
-import HandyTextLogo from "./icons/HandyTextLogo";
-import HandyHand from "./icons/HandyHand";
+import { ShorthandMark, ShorthandWordmark } from "@/shorthand/brand";
 import { useSettings } from "../hooks/useSettings";
 import { getVisibleSectionIds } from "@/shorthand/visibility";
 import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
@@ -37,7 +36,7 @@ export const SECTIONS_CONFIG = {
   ...SHORTHAND_SECTIONS,
   general: {
     labelKey: "sidebar.general",
-    icon: HandyHand,
+    icon: ShorthandMark,
     component: GeneralSettings,
     enabled: () => true,
   },
@@ -100,9 +99,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }),
   );
 
+  // The trailing edge is the ruled margin of a steno pad, in the accent rather
+  // than in neutral grey: the one place the fork spends colour.
   return (
-    <div className="flex flex-col w-40 h-full border-e border-mid-gray/20 items-center px-2">
-      <HandyTextLogo width={120} className="m-4" />
+    <div className="flex flex-col w-40 h-full border-e-2 border-logo-primary items-center px-2">
+      <ShorthandWordmark height={24} className="m-4" />
       <div className="flex flex-col w-full items-center gap-1 pt-2 border-t border-mid-gray/20">
         {availableSections.map((section) => {
           const Icon = section.icon;
@@ -111,10 +112,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           return (
             <div
               key={section.id}
-              className={`flex gap-2 items-center p-2 w-full rounded-lg cursor-pointer transition-colors ${
+              // Active rows are marked by a stroke in the margin — the same
+              // device as the sidebar's own rule — instead of a filled pill.
+              // The inactive rows carry a transparent border of the same width
+              // so nothing shifts when the selection moves.
+              className={`flex gap-2 items-center p-2 w-full rounded-lg cursor-pointer transition-colors border-s-2 ${
                 isActive
-                  ? "bg-logo-primary/80"
-                  : "hover:bg-mid-gray/20 hover:opacity-100 opacity-85"
+                  ? "border-background-ui bg-logo-primary/25"
+                  : "border-transparent hover:bg-mid-gray/15 hover:opacity-100 opacity-80"
               }`}
               onClick={() => onSectionChange(section.id)}
             >
