@@ -29,6 +29,27 @@ pub struct DictationSettings {
     pub save_transcripts: bool,
     pub post_process_enabled: bool,
     pub post_process_selected_prompt_id: Option<String>,
+    /// Whether dictation also captures system audio. Meetings and dictation
+    /// want opposite answers often enough that one shared switch was wrong:
+    /// a meeting usually wants the other participants, and dictation almost
+    /// never wants whatever is playing.
+    ///
+    /// The *device* stays shared on `AppSettings` — which loopback endpoint
+    /// exists is a fact about the machine, not a preference about the mode.
+    pub system_audio_enabled: bool,
+    /// Whether this mode's transcript is published to `--follow-stream`
+    /// followers. Meetings default this on, because streaming a meeting to a
+    /// note-taker is the fork's whole reason to exist; dictation defaults it
+    /// off, because text going into the focused window has already arrived
+    /// where it was wanted.
+    pub follow_stream_enabled: bool,
+    /// Which post-processing provider this mode uses. Long meeting transcripts
+    /// and two-second dictations do not want the same model.
+    pub post_process_provider_id: String,
+    /// The model, when this mode wants one other than the provider's shared
+    /// choice. `None` falls back to `AppSettings::post_process_models`, so a
+    /// user who never sets it per mode sees no change in behaviour.
+    pub post_process_model: Option<String>,
 }
 
 impl Default for DictationSettings {
@@ -65,6 +86,13 @@ impl Default for DictationSettings {
             save_transcripts: false,
             post_process_enabled: false,
             post_process_selected_prompt_id: None,
+            // Dictation types into the focused window; whatever is playing
+            // through the speakers is not part of what the user is saying.
+            system_audio_enabled: false,
+            // The text has already been delivered where it was wanted.
+            follow_stream_enabled: false,
+            post_process_provider_id: crate::settings::default_post_process_provider_id(),
+            post_process_model: None,
         }
     }
 }
@@ -113,6 +141,20 @@ pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
                 save_transcripts: dictation.save_transcripts,
                 post_process_enabled: dictation.post_process_enabled,
                 post_process_selected_prompt_id: dictation.post_process_selected_prompt_id,
+                system_audio_enabled: dictation.system_audio_enabled,
+                follow_stream_enabled: dictation.follow_stream_enabled,
+                post_process_provider_id: dictation.post_process_provider_id.clone(),
+                // The per-mode model is expressed as an override *into* the
+                // shared provider->model map rather than as a separate lookup,
+                // so every existing read of `post_process_models` keeps working
+                // untouched. `None` leaves the map exactly as it was.
+                post_process_models: {
+                    let mut models = settings.post_process_models.clone();
+                    if let Some(model) = dictation.post_process_model.clone() {
+                        models.insert(dictation.post_process_provider_id.clone(), model);
+                    }
+                    models
+                },
                 ..settings
             }
         }
@@ -177,6 +219,14 @@ mod tests {
         settings.dictation.post_process_enabled = false;
         settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
 
+        settings.system_audio_enabled = true;
+        settings.follow_stream_enabled = true;
+        settings.post_process_provider_id = "meeting-provider".to_string();
+        settings.dictation.system_audio_enabled = false;
+        settings.dictation.follow_stream_enabled = false;
+        settings.dictation.post_process_provider_id = "dictation-provider".to_string();
+        settings.dictation.post_process_model = Some("dictation-model".to_string());
+
         let result = apply_mode(settings, Mode::Meeting);
 
         assert!(!result.push_to_talk);
@@ -193,6 +243,11 @@ mod tests {
         assert!(result.save_recordings);
         assert!(result.save_transcripts);
         assert!(result.post_process_enabled);
+        assert!(result.system_audio_enabled);
+        assert!(result.follow_stream_enabled);
+        assert_eq!(result.post_process_provider_id, "meeting-provider");
+        // The dictation model override must not reach the shared map.
+        assert_eq!(result.post_process_models.get("dictation-provider"), None);
         assert_eq!(
             result.post_process_selected_prompt_id,
             Some("meeting-prompt".to_string())
@@ -230,6 +285,14 @@ mod tests {
         settings.dictation.post_process_enabled = true;
         settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
 
+        settings.system_audio_enabled = false;
+        settings.follow_stream_enabled = false;
+        settings.post_process_provider_id = "meeting-provider".to_string();
+        settings.dictation.system_audio_enabled = true;
+        settings.dictation.follow_stream_enabled = true;
+        settings.dictation.post_process_provider_id = "dictation-provider".to_string();
+        settings.dictation.post_process_model = Some("dictation-model".to_string());
+
         let result = apply_mode(settings, Mode::Dictation);
 
         assert!(result.push_to_talk);
@@ -249,6 +312,19 @@ mod tests {
         assert_eq!(
             result.post_process_selected_prompt_id,
             Some("dictation-prompt".to_string())
+        );
+        assert!(result.system_audio_enabled);
+        assert!(result.follow_stream_enabled);
+        assert_eq!(result.post_process_provider_id, "dictation-provider");
+        // The per-mode model is expressed as an override into the shared
+        // provider->model map, so the resolved settings read it through the
+        // ordinary lookup rather than a second code path.
+        assert_eq!(
+            result
+                .post_process_models
+                .get("dictation-provider")
+                .map(String::as_str),
+            Some("dictation-model")
         );
         // A field `apply_mode` does not own must survive from the base settings.
         assert_eq!(result.selected_model, "whisper-large-v3-turbo");

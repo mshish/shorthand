@@ -1,0 +1,183 @@
+/*
+ * Fork-only. Shorthand's visual identity, layered over upstream Handy's.
+ *
+ * Almost everything here is a re-declaration of a custom property that upstream
+ * (or Tailwind) already defines, so the fork owns the *values* and upstream keeps
+ * owning the *structure*. This file introduces no utility and no component
+ * selector. It does mirror upstream's own theme-selection selectors — the
+ * `prefers-color-scheme` query and the two `[data-theme]` blocks — because
+ * `--color-mid-gray` provably cannot be a single value (see below), and upstream
+ * declares it as one. Every line is still in a fork-only file, so a restyle
+ * upstream still merges without conflict, which is the point the original
+ * "introduces no new selector" promise was protecting.
+ *
+ * Imported from `src/App.css` and `src/overlay/RecordingOverlay.css`, in both
+ * cases immediately after `src/styles/theme.css` so these values win. Tailwind v4
+ * emits its theme variables inside `@layer theme`, and unlayered declarations
+ * outrank any layer, so a plain `:root` here beats Tailwind's own value without
+ * an `@theme` block — which matters because the overlay window never imports
+ * Tailwind and gets this same file.
+ *
+ * ---------------------------------------------------------------------------
+ * Design direction — "a marked-up transcript"
+ *
+ *   A transcript is plain until someone marks it. Almost the whole UI is paper
+ *   and ink; colour appears only on the thing that is currently live. Playful
+ *   because the mark is a surprise against an otherwise quiet page; useful
+ *   because colour is never decorative — it always means "this one".
+ *
+ *   Two colours, because the page has two: the blue-black ink the words are
+ *   written in, and the highlighter someone swept over the part that mattered.
+ *   Blue and yellow sit opposite each other on the wheel, so the sweep pops
+ *   against the ink rather than competing with it — which is exactly why
+ *   highlighters are yellow and ink is blue in the first place.
+ *
+ *   This replaces an earlier "copying pencil" direction (violet on pad stock,
+ *   IBM Plex, halved radii). Every one of those choices said clerical and
+ *   archival, which is the feeling this pivot is moving away from.
+ *
+ * ---------------------------------------------------------------------------
+ * The contract each token has to satisfy, and why the values are what they are.
+ *
+ * `--color-logo-primary` is used ~96 times across ~34 files in four different
+ * roles: a light tint behind dark text (`/20`–`/30`), a solid fill, a foreground
+ * colour (`text-logo-primary`), and a focus ring. The old BRANDING.md rule that
+ * it "must stay a light tint in both themes" was wrong as written — at 20–30%
+ * over paper every hue blends to a pale wash, so the tint role constrains
+ * nothing. The binding constraints are the foreground and focus-ring roles,
+ * which need >= 4.5:1 and >= 3:1 against the background. That forces a
+ * theme-flipping value: dark on paper, light on night. Upstream already resolves
+ * this token from a --light-/--dark- pair, so it costs nothing to do.
+ *
+ * `--color-background-ui` carries white text (ui/Button.tsx `primary`) and must
+ * also separate from both grounds as a non-text fill. Those pull opposite ways
+ * and leave a narrow luminance window: >= 0.119 to clear 3:1 against the dark
+ * ground, <= 0.183 to keep white at 4.5:1. A deep navy cannot reach it at all —
+ * at luminance 0.097, sapphire can never hit 3:1 against *any* dark background.
+ * #1e5bd6 sits inside the window: white 5.96:1, and 5.61:1 / 3.09:1 against the
+ * two grounds. The dark-ground margin is thin but real; today's #6e3d9b manages
+ * only 2.94:1, so this fixes an inherited failure rather than inheriting it.
+ *
+ * `--color-mid-gray` cannot be one value. Clearing 4.5:1 against the light paper
+ * needs luminance <= 0.17; clearing it against the dark paper needs >= 0.203.
+ * There is no overlap — an exhaustive search of all 256 greys finds none, the
+ * best worst-case being #777777 at 4.17:1. Upstream declares it once (#808080,
+ * which is 3.43:1 on this paper), so the theme blocks below are the only way to
+ * make secondary text readable at all.
+ *
+ * `--brand-highlighter` is new and fork-only. It exists precisely so the sweep
+ * does not have to be `--color-logo-primary`: "colour appears only on the live
+ * thing" is unachievable by substituting a token that 34 files already use for
+ * spinners, progress bars, focus rings and badges. Giving the mark its own token
+ * and quieting the general accent is what makes the idea deliverable.
+ */
+
+/* Atkinson Hyperlegible. Drawn by the Braille Institute so characters cannot be
+   confused with one another — its whole thesis is legibility of the written
+   record, which is the thing this app produces. It carries warmth and quirk (the
+   tail on the l, the open g) without being a novelty face, which matters because
+   a UI this achromatic cannot carry personality in colour.
+
+   Self-hosted, and not optional: the app is offline-first, and a webfont fetched
+   at runtime would drop the UI into a fallback face exactly when it cannot reach
+   the network. */
+@import "@fontsource-variable/atkinson-hyperlegible-next/index.css";
+@import "@fontsource-variable/atkinson-hyperlegible-mono/index.css";
+
+:root {
+  /* ---- Palette --------------------------------------------------------- */
+  /* Same light/dark pair shape as upstream's theme.css, so the active-token
+     blocks there keep working untouched. */
+
+  /* Ink: near-black carrying the same blue cast as the accent, so text and
+     accent read as one ink rather than two. 17.15:1 on paper. */
+  --light-color-text: #12151f;
+  /* Paper: a warm near-white. Not cream — cream is what every off-white
+     surface defaults to. */
+  --light-color-background: #faf8f2;
+  /* Ink at writing strength. Dark enough to be read as text and as a focus
+     ring on paper (8.34:1), which is the role that actually binds. */
+  --light-color-logo-primary: #12459e;
+  --light-color-logo-stroke: #0b2c66;
+
+  /* Night. Slightly blue-cast rather than neutral, so the paper metaphor
+     survives the lights going out. */
+  --dark-color-text: #eceef4;
+  --dark-color-background: #12141a;
+  /* The same ink, diluted, because on a dark ground a dark accent is
+     invisible. 7.54:1 on night. */
+  --dark-color-logo-primary: #6aa9f5;
+  --dark-color-logo-stroke: #c9dcfa;
+
+  /* Secondary text. Two values because one provably cannot work — see the
+     header. Overridden per theme in the blocks below. */
+  --light-color-mid-gray: #66697a;
+  --dark-color-mid-gray: #969aab;
+
+  /* Ink at full strength: the primary action. Theme-invariant because
+     ui/Button.tsx hardcodes white on it, and white needs a dark fill in both
+     themes. */
+  --color-background-ui: #1e5bd6;
+
+  /* The highlighter. Fork-only, and used only by fork components, always as a
+     background behind text whose colour the fork also sets — never as a
+     foreground and never with white on it. Complementary to the ink, which is
+     why the sweep reads as a mark rather than as another accent. */
+  --brand-highlighter: #e8f35c;
+  --brand-highlighter-ink: var(--light-color-text);
+
+  /* Light is the base case, declared here at `:root` specificity so every
+     override below (all of which are `:root` plus an attribute or `:not`, and
+     so strictly more specific) wins over it regardless of source order. */
+  --color-mid-gray: var(--light-color-mid-gray);
+
+  /* ---- Type ------------------------------------------------------------ */
+  --brand-font-sans:
+    "Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --brand-font-mono:
+    "Atkinson Hyperlegible Mono Variable", "Atkinson Hyperlegible Mono",
+    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-sans: var(--brand-font-sans);
+  --font-mono: var(--brand-font-mono);
+  --default-font-family: var(--brand-font-sans);
+  --default-mono-font-family: var(--brand-font-mono);
+
+  font-family: var(--brand-font-sans);
+
+  /* ---- Geometry -------------------------------------------------------- */
+  /* The previous direction halved this scale to get crisp ledger corners.
+     "Containers are paper, marks are hand-made" wants the opposite split:
+     containers stay near upstream's values, and the fork's own marks — tabs,
+     the active row, chips — use full rounding, applied in marks.css rather
+     than here. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+
+/* Upstream resolves --color-mid-gray once and never per theme, so these three
+   blocks mirror its own selection structure to add that. The attribute
+   selectors must come after the media query, for the same reason they do in
+   upstream's file: an explicit theme choice has to beat the OS preference. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --color-mid-gray: var(--dark-color-mid-gray);
+    --brand-highlighter: #d9e84a;
+    --brand-highlighter-ink: var(--dark-color-background);
+  }
+}
+
+:root[data-theme="light"] {
+  --color-mid-gray: var(--light-color-mid-gray);
+  --brand-highlighter: #e8f35c;
+  --brand-highlighter-ink: var(--light-color-text);
+}
+
+:root[data-theme="dark"] {
+  --color-mid-gray: var(--dark-color-mid-gray);
+  --brand-highlighter: #d9e84a;
+  --brand-highlighter-ink: var(--dark-color-background);
+}

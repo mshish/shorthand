@@ -1,5 +1,11 @@
 @import "tailwindcss";
 @import "./styles/theme.css";
+/* Fork-only: Shorthand's palette, type and radius, layered over the tokens
+   theme.css and Tailwind declare above. See the header of that file. */
+@import "./shorthand/brand/theme.css";
+/* Fork-only: the highlighter sweep and its one animation. Separate from
+   theme.css so that file keeps introducing no selector of its own. */
+@import "./shorthand/brand/marks.css";
 
 /* Register the shared color tokens (src/styles/theme.css) as Tailwind
    utilities */

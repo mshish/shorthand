@@ -1,0 +1,186 @@
+/*
+ * Fork-only. The mark: a highlighter sweep, and the one motion primitive.
+ *
+ * Kept out of `theme.css` deliberately. That file's job is to re-declare token
+ * *values*, so an upstream restyle merges without conflict; the moment it grows
+ * a class it stops being only that. Everything here introduces selectors, so it
+ * lives in its own file, imported alongside.
+ *
+ * The idea is "a marked-up transcript": the UI is paper and ink, and colour
+ * appears only on the thing that is currently live. This file is the only place
+ * in the fork that spends colour on purpose.
+ *
+ * One meaning, one motif. `.sh-sweep` marks the active sidebar row, the active
+ * tab, and the recording state — and nothing else. If it starts appearing on
+ * things that are merely important rather than current, the idea is gone and
+ * the file should be reverted, not extended.
+ */
+
+/*
+ * A real highlighter is not a rectangle of flat colour:
+ *
+ *   - the felt tip is round, so the stroke has softened ends;
+ *   - it deposits unevenly, heavier where the nib first lands and lighter as it
+ *     runs out, hence the gradient rather than one colour;
+ *   - a hand does not travel perfectly level, hence the fractional rotation and
+ *     the asymmetric radii.
+ *
+ * None of that is decoration for its own sake. A perfectly rectangular flat
+ * fill is what every UI framework already draws for an active state, and using
+ * one here would throw away the entire reason for the direction.
+ *
+ * What this deliberately does NOT do is `mix-blend-mode: multiply`, even though
+ * a highlighter is physically translucent. Multiply is only a valid model on
+ * light paper. On the dark theme it is physically correct and visually fatal —
+ * a highlighter over black paper deposits nothing, and `#d9e84a` multiplied by
+ * `#12141a` resolves to about `#0f1208`, which put the dark label ink at
+ * roughly 1.05:1 against its own mark. Every mark in the dark theme rendered as
+ * a black smudge with only the pen line surviving. This was found by
+ * screenshotting the two themes, not by reasoning, which is the argument for
+ * screenshotting them.
+ *
+ * The translucency that actually reads is at the two ends, and the gradient's
+ * alpha supplies that in both themes without a blend mode.
+ */
+/*
+ * Applied to the *text* of the live thing, never to its container — and only
+ * where that text is long enough. Both halves of that rule were learned by
+ * screenshotting, not by reasoning.
+ *
+ * Applied to a whole 40px sidebar row it degenerated into a flat yellow
+ * lozenge: the rotation imperceptible, the gradient unevenness invisible, the
+ * asymmetric radii reading as plain "rounded". That is precisely the
+ * rectangular active-state fill this file exists to avoid — yellow substituted
+ * for blue, corners rounded. So: wrap the label, not the row, and there is no
+ * row-height variant.
+ *
+ * But moving it to the label only moved the failure one scale down. What
+ * actually governs is the mark's ASPECT RATIO, measured on the rendered box:
+ *
+ *   running text, "hold to talk, release to send"   163 x 16   10.4:1   works
+ *   tab, "Transcription"                             82 x 16    5.2:1   works
+ *   sidebar, "AI cleanup"                            68 x 22    3.0:1   weak
+ *   sidebar, "Modes"                                 44 x 22    1.9:1   a chip
+ *   sidebar, "App"                                   28 x 22    1.2:1   a square
+ *
+ * Below roughly 5:1 the four corner radii consume most of the perimeter, no
+ * straight section survives, and the pen line below detaches along the whole
+ * bottom edge — so it reads as two objects, a badge with an underline under it,
+ * rather than one stroke. A stroke needs a length to be a stroke.
+ *
+ * The rule, therefore: only mark text that is long enough to hold a stroke.
+ * Running prose and tab labels qualify. Nav labels do not, and the sidebar
+ * marks its selection with an accent icon and a full-weight label against
+ * dimmed neighbours instead — which is quieter, and right for a rail that is on
+ * screen permanently. Spending the one coloured mark on something merely
+ * navigated-to would also weaken the rule the whole direction rests on: colour
+ * means *live*, not *selected*.
+ *
+ * No `isolation: isolate` here. It creates a stacking context, and a
+ * `mix-blend-mode` inside one blends against that context's own (empty)
+ * backdrop rather than the page — which silently turns the multiply below into
+ * a no-op. The z-index pair on the pseudo-element and the children is enough to
+ * order them without it.
+ */
+.sh-sweep {
+  position: relative;
+}
+
+.sh-sweep > * {
+  position: relative;
+  z-index: 1;
+}
+
+.sh-sweep::before {
+  content: "";
+  position: absolute;
+  /* Overshoots the box slightly on purpose: a hand marking a line does not stop
+     exactly at the word. Kept to ~0.15em because at 0.25–0.35em it ate the
+     adjacent word spaces and the mark visually merged with the words either
+     side of it. */
+  inset: 0.08em -0.16em 0.02em -0.12em;
+  z-index: 0;
+
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 0%,
+    var(--brand-highlighter) 14%,
+    var(--brand-highlighter) 72%,
+    /* Not lower than ~78%: at 62% the trailing end resolved to a muddy olive
+       over the dark ground, so the mark looked dirty rather than lighter. */
+      color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 100%
+  );
+
+  /* No two corners alike, but in absolute units and NOT elliptical.
+     `… / 50%` made the vertical radius half the height, so on a short label
+     ("Modes", five characters at 14px) the curves met in the middle and the
+     mark became a bean with no straight section — the same degeneration as the
+     deleted row variant, one scale down. Fixed radii keep a flat top and
+     bottom at every word length, which is what makes it read as a stroke. */
+  border-radius: 7px 11px 8px 12px;
+  transform: rotate(-0.45deg);
+}
+
+/*
+ * The pen line under the highlighter.
+ *
+ * It is here for a reason that is not styling. `#e8f35c` against `#faf8f2` is
+ * 1.14:1. A saturated yellow on white is perfectly visible to an eye — hue and
+ * chroma carry it — but WCAG 2.x measures luminance alone and cannot see that,
+ * so the sweep on its own can never satisfy the 3:1 required of a non-text
+ * indicator. The hairline is in the accent (8.34:1 light, 7.54:1 dark) and
+ * supplies the boundary the sweep cannot.
+ *
+ * That constraint improved the design rather than taxing it: a highlighter
+ * stroke with a pen line under it is what a marked-up page actually looks like.
+ */
+.sh-sweep::after {
+  content: "";
+  position: absolute;
+  left: -0.1em;
+  right: -0.14em;
+  bottom: 0;
+  height: 2px;
+  z-index: 0;
+  border-radius: 2px;
+  background: var(--color-logo-primary);
+  transform: rotate(-0.45deg);
+}
+
+/* Dark theme flips the ink on the sweep, because a bright highlighter needs
+   dark text on it in both themes. `--brand-highlighter-ink` is resolved per
+   theme in theme.css. */
+.sh-sweep {
+  color: var(--brand-highlighter-ink);
+}
+
+/*
+ * The one motion primitive: a sweep is *drawn*, left to right. Used on tab
+ * change, section change and recording start. Nothing else in the settings
+ * window animates beyond `transition-colors`.
+ *
+ * 180ms because that is about how long the eye needs to register a direction
+ * without the UI feeling like it is waiting for the animation.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .sh-sweep::before,
+  .sh-sweep::after {
+    animation: sh-draw 180ms ease-out;
+  }
+}
+
+@keyframes sh-draw {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/*
+ * There is intentionally no row-height or container variant. See the note on
+ * `.sh-sweep` above: at container scale the mark stops being a mark. The
+ * sidebar's active row and the active tab both wrap their *label* in
+ * `.sh-sweep` and leave the row itself unstyled.
+ */

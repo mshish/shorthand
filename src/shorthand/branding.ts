@@ -33,8 +33,126 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "sidebar.capture": "Capture",
   "sidebar.transcription": "Transcription",
   "sidebar.app": "App",
-  // These two say "Handy" on purpose: the toggle reveals the settings of
-  // upstream Handy. Renaming them would make the control describe itself.
+
+  // ---- The redesigned settings sections --------------------------------
+  "sidebar.modes": "Modes",
+  "sidebar.audio": "Audio",
+  "sidebar.model": "Model",
+  "sidebar.aiCleanup": "AI cleanup",
+
+  "settings.modes.heading": "How each mode behaves",
+  "settings.modes.description":
+    "Meetings streams what it hears to whatever is following along. Dictation types what you say into whatever window you are in.",
+  "settings.modes.tabs.label": "Capture mode",
+  // The mode formerly called "Transcription". Renamed because "transcription"
+  // is what both modes do; "Meetings" names the thing this mode is for. The
+  // rename is user-facing only — the `transcribe` binding ids and the Rust
+  // fields keep their names.
+  "settings.modes.tabs.meetings": "Meetings",
+  "settings.modes.shared.title": "Shared by both modes",
+  "settings.modes.shared.description":
+    "One setting, used by whichever mode is recording.",
+
+  "settings.audio.groups.input": "Where sound comes from",
+  "settings.model.groups.output": "How transcripts read",
+  "settings.aiCleanup.title": "How AI cleans up what you said",
+  "settings.aiCleanup.sharedNote":
+    "The connection and the prompt library are shared. Whether cleanup runs, and which prompt it uses, is set per mode under Modes.",
+
+  // The advanced switch. It used to swap in upstream Handy's own settings
+  // screens, which is what the old wording described; it now reveals more rows
+  // in the section you are already looking at, so the old wording would be
+  // actively misleading rather than merely stale.
+  "settings.advanced.switch.label": "Advanced settings",
+  "settings.advanced.switch.description":
+    "Show every setting, not just the ones most people need. Nothing moves — the extra rows appear in the sections they belong to.",
+
+  // ---- Sentence case, and one name per feature -------------------------
+  //
+  // Upstream labels settings in Title Case; the redesign's copy rule is
+  // sentence case, because a settings row is a phrase, not a heading, and Title
+  // Case makes every row look equally important.
+  //
+  // This is all-or-nothing on purpose. An earlier pass overrode three labels
+  // and left the rest, which moved the inconsistency from between-tabs to
+  // *within* a single screen — "Capture Shortcut / Push to talk / Overlay /
+  // AI cleanup / Save recordings" in one list. Half-converted reads as a bug in
+  // a way that uniformly Title Case did not. So every Title Case label the
+  // settings tree renders is overridden here.
+  //
+  // Acronyms and proper nouns keep their capitals: API, URL, ONNX, English,
+  // Handy, Beta, What's New.
+  //
+  // Done here rather than in the locale files for the usual reason: those stay
+  // byte-identical to upstream so merges never conflict on them, and
+  // check:translations compares key parity against en, which these never enter.
+  // The cost is that they are English-only — acceptable, because the alternative
+  // is 24 files of churn in the files upstream touches most.
+  "appLanguage.title": "Application language",
+  "settings.about.appDataDirectory.title": "App data directory",
+  "settings.about.sourceCode.title": "Source code",
+  "settings.about.supportDevelopment.title": "Support development",
+  "settings.advanced.acceleration.ort.title": "ONNX acceleration",
+  "settings.advanced.autoSubmit.title": "Auto submit",
+  "settings.advanced.autostart.label": "Launch on startup",
+  "settings.advanced.clipboardHandling.title": "Clipboard handling",
+  "settings.advanced.customWords.title": "Custom words",
+  "settings.advanced.experimentalToggle.label": "Experimental features",
+  "settings.advanced.fillerWordRemoval.title": "Remove filler words",
+  "settings.advanced.followStream.label": "Follow live transcript output",
+  "settings.advanced.lazyStreamClose.label":
+    "Keep mic open between transcriptions",
+  "settings.advanced.modelUnload.title": "Unload model",
+  "settings.advanced.overlay.position.title": "Overlay position",
+  "settings.advanced.pasteMethod.title": "Paste method",
+  "settings.advanced.showTrayIcon.label": "Show tray icon",
+  "settings.advanced.startHidden.label": "Start hidden",
+  "settings.advanced.systemAudio.label": "Capture system audio",
+  "settings.advanced.systemAudioDevice.title": "System audio device",
+  "settings.advanced.typingTool.title": "Typing tool",
+  "settings.advanced.voiceActivityDetection.title": "Voice activity detection",
+  "settings.debug.appendTrailingSpace.label": "Append trailing space",
+  "settings.debug.clamshellMicrophone.title": "Clamshell microphone",
+  "settings.debug.historyLimit.title": "History limit",
+  "settings.debug.keyboardDiagnostic.title": "Keyboard diagnostic",
+  "settings.debug.keyboardImplementation.title": "Keyboard implementation",
+  "settings.debug.liveLogs.title": "Live logs",
+  "settings.debug.logDirectory.title": "Log directory",
+  "settings.debug.logLevel.title": "Log level",
+  "settings.debug.muteWhileRecording.label": "Mute while recording",
+  "settings.debug.postProcessingToggle.label": "AI cleanup",
+  "settings.debug.recordingBuffer.title": "Extra recording buffer",
+  "settings.debug.reliablePaste.title": "Reliable paste (Beta)",
+  "settings.debug.soundTheme.label": "Sound theme",
+  "settings.debug.updateChecks.label": "Check for updates",
+  "settings.debug.wordCorrectionThreshold.title": "Word correction threshold",
+  "settings.dictation.enable.label": "Enable dictation",
+  "settings.dictation.privacy.saveRecordings.label": "Save recordings",
+  "settings.dictation.privacy.saveTranscripts.label": "Save transcripts",
+  "settings.general.pushToTalk.label": "Push to talk",
+  "settings.general.shortcut.title": "Handy shortcuts",
+
+  // Shortcut row labels. These end in `.name`, not `.label`/`.title`, which is
+  // why the first sweep missed them — and they are the first row of each tab,
+  // so the two survivors were the most prominent labels on the screen. They
+  // also settle the naming: every one is a "shortcut", and post-processing is
+  // AI cleanup here as everywhere else.
+  "settings.general.shortcut.bindings.transcribe.name": "Capture shortcut",
+  "settings.general.shortcut.bindings.cancel.name": "Cancel shortcut",
+  "settings.general.shortcut.bindings.transcribe_with_post_process.name":
+    "AI cleanup shortcut",
+  "settings.general.shortcut.bindings.dictate.name": "Dictation shortcut",
+  "settings.general.shortcut.bindings.dictate_with_post_process.name":
+    "Dictation AI cleanup shortcut",
+  "settings.models.title": "Transcription models",
+  "settings.postProcessing.api.apiKey.title": "API key",
+  "settings.postProcessing.prompts.selectedPrompt.title": "Selected prompt",
+  "settings.sound.audioFeedback.label": "Audio feedback",
+  "settings.sound.channel.title": "Input channel",
+  "settings.sound.outputDevice.title": "Output device",
+  "theme.title": "Application theme",
+
+  // These two say "Handy" on purpose: they name the upstream project.
   "settings.about.showAllSettings.label": "Show all Handy settings",
   "settings.about.showAllSettings.description":
     "Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides.",

@@ -1048,7 +1048,7 @@ export type CustomSounds = { start: boolean; stop: boolean }
  * and shared settings" in the design doc for which fields live here versus
  * staying shared on `AppSettings`.
  */
-export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null }
+export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; system_audio_enabled: boolean; follow_stream_enabled: boolean; post_process_provider_id: string; post_process_model: string | null }
 export type EngineType = 
 /**
  * Any GGML/GGUF model loaded through transcribe-cpp (Whisper, Parakeet,

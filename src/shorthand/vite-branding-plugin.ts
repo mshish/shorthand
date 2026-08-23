@@ -10,7 +10,8 @@
 import type { Plugin } from "vite";
 import { applyBranding, type BrandingWarning } from "./branding";
 
-const LOCALE_FILE = /[\\/]src[\\/]i18n[\\/]locales[\\/]([^\\/]+)[\\/]translation\.json$/;
+const LOCALE_FILE =
+  /[\\/]src[\\/]i18n[\\/]locales[\\/]([^\\/]+)[\\/]translation\.json$/;
 
 export function shorthandBranding(): Plugin {
   const seen: BrandingWarning[] = [];

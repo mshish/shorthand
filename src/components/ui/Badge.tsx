@@ -12,7 +12,10 @@ const Badge: React.FC<BadgeProps> = ({
   className = "",
 }) => {
   const variantClasses = {
-    primary: "bg-logo-primary",
+    // `text-background` is required, not cosmetic: this variant sets a solid
+    // accent fill and no foreground, so it inherits body ink. The accent is a
+    // dark blue in the light theme, which put this at 2.47:1.
+    primary: "bg-logo-primary text-background",
     success: "bg-green-500/20 text-green-400",
     secondary: "bg-mid-gray/20 text-text/70",
   };

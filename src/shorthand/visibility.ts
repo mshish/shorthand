@@ -1,59 +1,24 @@
 /**
  * Single source of truth for settings-sidebar section visibility.
  *
- * Handy (upstream) ships every section. Shorthand adds a `show_all_settings`
- * escape hatch that swaps between two modes:
+ * This used to encode a swap between two whole section trees: `show_all_settings`
+ * hid a set of upstream sections in favour of fork-only replacements, or the
+ * reverse. That is gone. The two trees shared no vocabulary, so turning the
+ * escape hatch on moved you into what felt like a different application, and
+ * finding the setting you had just been looking at meant starting over.
  *
- * - `false` (simplified, the default/product mode): a handful of upstream
- *   sections are hidden in favour of fork-only replacements.
- * - `true` (the hatch): upstream's sections are shown exactly as upstream
- *   intends, and the fork-only replacement sections are hidden instead, so
- *   the two versions of the same settings never both appear at once.
+ * `show_all_settings` now means "reveal more rows in place" and is read by
+ * `useAdvanced` / `AdvancedOnly` at the row level instead. Sections no longer
+ * appear and disappear with it, so all that is left here is each section's own
+ * `enabled` predicate — `postprocessing` gating on post-processing being on for
+ * either mode, `debug` gating on `debug_mode`.
  *
- * Section ids are typed as `string`, not `SidebarSection`
- * (`keyof typeof SECTIONS_CONFIG` in `src/components/Sidebar.tsx`), because
- * the fork-only ids (`capture`, `transcription`, `app`) are named here before
- * they are registered in `SECTIONS_CONFIG`. Typing against `SidebarSection`
- * would make this module fail to compile until those sections exist.
+ * The fork owns settings presentation outright as a result: upstream's General,
+ * Advanced, Models and Post-processing screens are never registered. Their files
+ * stay in the tree, untouched and unregistered, because deleting a file upstream
+ * still maintains turns every future edit into a delete/modify conflict — the
+ * expensive kind.
  */
-
-/** Upstream section ids hidden when `show_all_settings` is false. */
-export const SIMPLIFIED_MODE_HIDDEN_SECTIONS: ReadonlySet<string> = new Set([
-  "general",
-  "models",
-  "advanced",
-  "postprocessing",
-]);
-
-/**
- * Fork-only section ids hidden when `show_all_settings` is true. `dictation`
- * has no upstream equivalent to fall back to, so it disappears along with
- * capture/transcription/app when the escape hatch is on — same rule, same
- * reason: don't show two settings surfaces for the same concern at once.
- */
-export const FORK_ONLY_SECTIONS: ReadonlySet<string> = new Set([
-  "capture",
-  "transcription",
-  "app",
-  "dictation",
-]);
-
-/**
- * Whether a section should be visible for a given `show_all_settings` value.
- *
- * This only encodes the simplified-mode/escape-hatch split above; it does
- * not know about a section's own `enabled` predicate in `SECTIONS_CONFIG`
- * (e.g. `postprocessing` gating on `post_process_enabled`, `debug` gating on
- * `debug_mode`). Callers must compose both — see `getVisibleSectionIds`.
- */
-export function isSectionVisible(
-  sectionId: string,
-  showAllSettings: boolean,
-): boolean {
-  return showAllSettings
-    ? !FORK_ONLY_SECTIONS.has(sectionId)
-    : !SIMPLIFIED_MODE_HIDDEN_SECTIONS.has(sectionId);
-}
 
 interface VisibilitySectionConfig {
   enabled: (settings: any) => boolean;
@@ -61,21 +26,16 @@ interface VisibilitySectionConfig {
 
 /**
  * Section ids from a `SECTIONS_CONFIG`-shaped object that are currently
- * visible, in declaration order: sections that pass both their own `enabled`
- * predicate and `isSectionVisible`.
+ * visible, in declaration order.
  *
  * Shared by `Sidebar.tsx` (to build the rendered section list) and
- * `App.tsx` (to resolve the initial/fallback section) so both apply
- * identical rules and never disagree about what's on screen.
+ * `useVisibleSection` (to resolve the initial/fallback section) so both apply
+ * identical rules and never disagree about what is on screen.
  */
 export function getVisibleSectionIds<
   T extends Record<string, VisibilitySectionConfig>,
 >(sectionsConfig: T, settings: any): string[] {
-  const showAllSettings = settings?.show_all_settings ?? false;
-
-  return Object.keys(sectionsConfig).filter(
-    (id) =>
-      sectionsConfig[id].enabled(settings) &&
-      isSectionVisible(id, showAllSettings),
+  return Object.keys(sectionsConfig).filter((id) =>
+    sectionsConfig[id].enabled(settings),
   );
 }
