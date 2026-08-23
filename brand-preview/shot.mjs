@@ -135,6 +135,31 @@ await expectAdvanced(false);
 await settings.getByRole("tab", { name: "Dictation" }).click();
 await shoot(settings, "settings-dictation");
 
+// --- The dependent block ---------------------------------------------------
+//
+// `ui/Dependents` only exists in its revealed state, so a shot of the default
+// view photographs nothing of it. This clicks AI cleanup on in the Dictation
+// tab, which is the case the primitive was built for: one toggle, two rows
+// beneath it (the cleanup hotkey and the prompt picker) that were previously
+// scattered eight rows apart in a flat list.
+//
+// Clicked, not seeded, for the same reason as every other state here.
+const cleanupToggle = settings
+  .locator('h3:text-is("AI cleanup")')
+  .locator('xpath=ancestor::div[.//input[@type="checkbox"]][1]')
+  .locator('input[type="checkbox"]');
+// `force` because ToggleSwitch renders its input `sr-only`.
+await cleanupToggle.click({ force: true });
+// The prompt picker is the row that only exists inside the block, so waiting
+// on it asserts the reveal rather than the click.
+await settings
+  .getByText("Prompt", { exact: false })
+  .first()
+  .waitFor({ timeout: 5000 });
+await shoot(settings, "settings-dependents");
+// Back off, so the shots below photograph the same mock state they always did.
+await cleanupToggle.click({ force: true });
+
 // --- Cancel, which only exists with dictation switched off -----------------
 //
 // Cancel is hidden while *either* mode has push-to-talk on (`anyPushToTalk`

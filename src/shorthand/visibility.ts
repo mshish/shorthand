@@ -10,8 +10,13 @@
  * `show_all_settings` now means "reveal more rows in place" and is read by
  * `useAdvanced` / `AdvancedOnly` at the row level instead. Sections no longer
  * appear and disappear with it, so all that is left here is each section's own
- * `enabled` predicate — `postprocessing` gating on post-processing being on for
- * either mode, `debug` gating on `debug_mode`.
+ * `enabled` predicate — and only `debug` still uses one, gating on `debug_mode`.
+ *
+ * AI cleanup used to have one too, gating on post-processing being on for
+ * either mode. It was removed: the section holds the prompt library, so gating
+ * it hid the instructions behind the feature that runs them. See the note in
+ * `sections.ts`. A section that vanishes is a poor way to say "not configured
+ * yet", and a good way to say "this app cannot do that".
  *
  * The fork owns settings presentation outright as a result: upstream's General,
  * Advanced, Models and Post-processing screens are never registered. Their files

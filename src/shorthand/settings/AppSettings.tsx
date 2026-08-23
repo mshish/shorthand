@@ -16,6 +16,7 @@ import { VolumeSlider } from "@/components/settings/VolumeSlider";
 import { KeyboardImplementationSelector } from "@/components/settings/debug/KeyboardImplementationSelector";
 import { useSettings } from "@/hooks/useSettings";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
+import { Dependents } from "@/shorthand/ui/Dependents";
 import { OverlayPositionRow } from "@/shorthand/ui/OverlayRows";
 import { Sheet } from "@/shorthand/ui/Sheet";
 
@@ -60,28 +61,35 @@ export const AppSettings: React.FC = () => {
       <Sheet title={t("settings.sound.title")}>
         <AudioFeedback descriptionMode="inline" grouped={true} />
         <AdvancedOnly>
-          {/* Both follow the feedback toggle: an output device and a volume
-              for sounds that are never played are dead controls. */}
-          <OutputDeviceSelector
-            descriptionMode="tooltip"
-            grouped={true}
-            disabled={!audioFeedbackEnabled}
-          />
-          {/* `VolumeSlider` takes only `disabled` — it hardcodes its own
-              tooltip description and exposes no `descriptionMode`. It is an
-              Advanced row, which is allowed to keep a tooltip, so it keeps
-              one rather than earning an edit to an upstream file. */}
-          <VolumeSlider disabled={!audioFeedbackEnabled} />
-          {/* `SoundPicker` is Debug-only upstream, and promoting it is the
-              same deliberate call as `UpdateChecksToggle`: which sound plays
-              when recording starts is a preference, not a diagnostic. It
-              takes `label`/`description` strings instead of the usual
-              title/description key pair, and has no `descriptionMode` at
-              all. */}
-          <SoundPicker
-            label={t("settings.debug.soundTheme.label")}
-            description={t("settings.debug.soundTheme.description")}
-          />
+          {/* All three follow the feedback toggle: an output device, a volume
+              and a sound theme for sounds that are never played are dead
+              controls. They were greyed out before, which said they were
+              unavailable without ever saying what would make them available;
+              nesting them under the toggle says both at once. See
+              ui/Dependents.
+
+              `SoundPicker` was not even greyed — it takes no `disabled` prop —
+              so it sat live next to two dead rows governed by the same switch.
+              Hiding the block fixes that without an edit to an upstream
+              file. */}
+          <Dependents on={audioFeedbackEnabled}>
+            <OutputDeviceSelector descriptionMode="tooltip" grouped={true} />
+            {/* `VolumeSlider` takes only `disabled` — it hardcodes its own
+                tooltip description and exposes no `descriptionMode`. It is an
+                Advanced row, which is allowed to keep a tooltip, so it keeps
+                one rather than earning an edit to an upstream file. */}
+            <VolumeSlider />
+            {/* `SoundPicker` is Debug-only upstream, and promoting it is the
+                same deliberate call as `UpdateChecksToggle`: which sound plays
+                when recording starts is a preference, not a diagnostic. It
+                takes `label`/`description` strings instead of the usual
+                title/description key pair, and has no `descriptionMode` at
+                all. */}
+            <SoundPicker
+              label={t("settings.debug.soundTheme.label")}
+              description={t("settings.debug.soundTheme.description")}
+            />
+          </Dependents>
         </AdvancedOnly>
       </Sheet>
 

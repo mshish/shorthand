@@ -54,15 +54,26 @@ export const SHORTHAND_SECTIONS = {
     component: ModelSettings,
     enabled: () => true,
   },
-  // Same predicate the section had before the redesign: the LLM connection is
-  // only worth a sidebar row once one of the modes will actually use it.
+  // Always registered, unlike before the redesign and unlike upstream, both of
+  // which gated this on `post_process_enabled || dictation.post_process_enabled`
+  // — the LLM connection is "only worth a sidebar row once a mode will use it".
+  //
+  // That reasoning inverts the order a person actually works in. The section
+  // holds the *prompt library*: the instructions cleanup runs, which is the
+  // thing someone wants to read and write before deciding whether to switch
+  // cleanup on, not after. Gating it meant the only route to the prompts was to
+  // enable a feature blind, in another section, and hope a new sidebar row
+  // appeared — and in practice it read as the app simply not having editable
+  // prompts at all, because on a fresh profile both toggles ship off and the
+  // whole feature area is invisible.
+  //
+  // A settings sidebar should say what the app can do. Hiding a capability
+  // until it is already in use is the one thing it must not do.
   aicleanup: {
     labelKey: "sidebar.aiCleanup",
     icon: Sparkles,
     component: AICleanupSettings,
-    enabled: (settings: any) =>
-      (settings?.post_process_enabled ?? false) ||
-      (settings?.dictation?.post_process_enabled ?? false),
+    enabled: () => true,
   },
   app: {
     labelKey: "sidebar.app",

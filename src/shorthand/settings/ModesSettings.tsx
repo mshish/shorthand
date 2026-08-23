@@ -24,6 +24,7 @@ import { DictationOverlayStyleRow } from "../ui/OverlayRows";
 import { DictationToggleField } from "../dictation/DictationToggleField";
 import { DictationTypingTool } from "../dictation/DictationTypingTool";
 import { AdvancedOnly } from "../ui/AdvancedOnly";
+import { Dependents } from "../ui/Dependents";
 import { useAdvanced } from "../useAdvanced";
 import { OverlayStyleRow } from "../ui/OverlayRows";
 import { Sheet } from "../ui/Sheet";
@@ -159,18 +160,18 @@ export const ModesSettings: React.FC = () => {
                   shows it at the weight that mode gives it. Do not "fix" this
                   by making the two tabs match. */}
               <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
-              {/* Hidden rather than disabled while cleanup is off. A shortcut
-                  row is never inert: SettingContainer's `disabled` only fades
-                  the label, so the recorder would still bind a live global key
-                  for a feature that will not run. Showing it under a toggle
-                  that is off also reads as a broken control. */}
-              {meetingsPostProcessEnabled && (
+              {/* The one row this toggle unlocks, drawn as belonging to it —
+                  see ui/Dependents. It was already hidden rather than
+                  disabled, because a "disabled" shortcut row still binds a
+                  live global key; what it was missing was any indication that
+                  the row above is what makes it appear. */}
+              <Dependents on={meetingsPostProcessEnabled}>
                 <ShortcutInput
                   shortcutId="transcribe_with_post_process"
                   descriptionMode="tooltip"
                   grouped={true}
                 />
-              )}
+              </Dependents>
               {/* Meeting mode's copy of the follow-stream field; Dictation has
                   its own, also Advanced. It is a hook for local tooling, not
                   something anyone sets while learning the app. */}
@@ -192,153 +193,144 @@ export const ModesSettings: React.FC = () => {
         <TabPanel id="dictation">
           <Sheet>
             <DictationEnableToggle />
-            {/* Hidden, not disabled, while dictation is off:
-                SettingContainer's `disabled` prop only fades the label text,
-                it never reaches these rows' key-recorder chip or Reset
-                button, so a disabled row here would still register a live
-                global shortcut. */}
+            {/* Everything below is hidden, not greyed, while dictation is off.
+                It used to be a wall of about a dozen disabled rows, which said
+                "this mode has a lot of settings" at exactly the moment the user
+                had not chosen the mode. Hiding them makes the off state one
+                switch.
+
+                It also removes a hazard the greyed version carried:
+                SettingContainer's `disabled` prop fades the title and nothing
+                else, so a "disabled" ShortcutInput still registered a live
+                global hotkey for a mode that was switched off. Two rows here
+                were already hiding rather than disabling for that reason; this
+                makes the whole panel consistent instead of carrying the
+                exception in a comment. */}
             {dictationEnabled && (
-              <ShortcutInput
-                shortcutId="dictate"
-                descriptionMode="inline"
-                grouped={true}
-              />
-            )}
-            <DictationToggleField
-              field="push_to_talk"
-              label={t("settings.general.pushToTalk.label")}
-              description={t("settings.general.pushToTalk.description")}
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            {/* Gated on cleanup being ON, not merely on dictation being on —
-                the same rule as the Meetings tab. A hotkey that always
-                applies AI cleanup is a dead control while cleanup is off, and
-                a shortcut row is never inert: it would still bind a live global
-                key. The two tabs have to agree about this or the same row looks
-                broken in one of them. */}
-            {postProcessEnabled && (
-              <ShortcutInput
-                shortcutId="dictate_with_post_process"
-                descriptionMode="inline"
-                grouped={true}
-              />
-            )}
-            {/* Also hidden rather than disabled, for a different reason:
-                AccessibilityPermissions has no disabled state at all, only
-                self-hide and show-a-Grant-button, so gating it on dictation
-                means not rendering it rather than rendering it inert. */}
-            {dictationEnabled && <AccessibilityPermissions />}
-            {/* Tooltip, matching the Meetings tab. Its description runs to six
-                lines; left inline here it became the loudest thing on this
-                tab, which is the defect that was just fixed on the other one.
-                Same setting, same weight. */}
-            <DictationOverlayStyleRow
-              descriptionMode="tooltip"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            {/* Dictation's copy of system-audio capture. It borrows the
-                shared row's strings, because it is the same setting for the
-                other mode — and its Windows-only guard, because
-                DictationToggleField is a plain boolean row with no predicates
-                of its own. Without the guard this offers macOS and Linux users
-                a switch for a feature that does not exist there, in the one
-                tab where the Meetings row correctly hides itself. */}
-            {isWindows && (
-              <DictationToggleField
-                field="system_audio_enabled"
-                label={t("settings.advanced.systemAudio.label")}
-                description={t("settings.advanced.systemAudio.description")}
-                descriptionMode="inline"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-            )}
-            {/* In the default view here and Advanced on the Meetings tab — see
-                the note above that tab's <AdvancedOnly>. */}
-            <DictationToggleField
-              field="post_process_enabled"
-              label={t("settings.debug.postProcessingToggle.label")}
-              description={t("settings.debug.postProcessingToggle.description")}
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            {/* Hidden, not disabled — the same rule as the AI-cleanup
-                shortcut above and on the other tab. A greyed-out prompt picker
-                under an off toggle is a dead control. */}
-            {postProcessEnabled && (
-              <DictationPostProcessPrompt grouped={true} />
-            )}
-            <DictationToggleField
-              field="save_recordings"
-              label={t("settings.dictation.privacy.saveRecordings.label")}
-              description={t(
-                "settings.dictation.privacy.saveRecordings.description",
-              )}
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            <DictationToggleField
-              field="save_transcripts"
-              label={t("settings.dictation.privacy.saveTranscripts.label")}
-              description={t(
-                "settings.dictation.privacy.saveTranscripts.description",
-              )}
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            {/* Default here and advanced on the Meetings tab: a field is shown
-                by default in the tab where it is load-bearing, and dictation
-                is the mode whose entire job is putting text into another
-                window. */}
-            <DictationPasteMethod
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!dictationEnabled}
-            />
-            <AdvancedOnly>
-              {/* Dictation's copy of the follow-stream field. Advanced in both
-                  tabs, unlike AI cleanup — a tooling hook is a tooling hook in
-                  either mode. */}
-              <DictationToggleField
-                field="follow_stream_enabled"
-                label={t("settings.advanced.followStream.label")}
-                description={t("settings.advanced.followStream.description")}
-                descriptionMode="tooltip"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-              <DictationTypingTool
-                descriptionMode="tooltip"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-              <DictationClipboardHandling
-                descriptionMode="tooltip"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-              <DictationAutoSubmit
-                descriptionMode="tooltip"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-              <DictationToggleField
-                field="append_trailing_space"
-                label={t("settings.debug.appendTrailingSpace.label")}
-                description={t(
-                  "settings.debug.appendTrailingSpace.description",
+              <>
+                <ShortcutInput
+                  shortcutId="dictate"
+                  descriptionMode="inline"
+                  grouped={true}
+                />
+                <DictationToggleField
+                  field="push_to_talk"
+                  label={t("settings.general.pushToTalk.label")}
+                  description={t("settings.general.pushToTalk.description")}
+                  descriptionMode="inline"
+                  grouped={true}
+                />
+                <AccessibilityPermissions />
+                {/* Tooltip, matching the Meetings tab. Its description runs to
+                    six lines; left inline here it became the loudest thing on
+                    this tab, which is the defect that was just fixed on the
+                    other one. Same setting, same weight. */}
+                <DictationOverlayStyleRow
+                  descriptionMode="tooltip"
+                  grouped={true}
+                />
+                {/* Dictation's copy of system-audio capture. It borrows the
+                    shared row's strings, because it is the same setting for
+                    the other mode, and its Windows-only guard, because
+                    DictationToggleField is a plain boolean row with no
+                    predicates of its own. Without the guard this offers macOS
+                    and Linux users a switch for a feature that does not exist
+                    there, in the one tab where the Meetings row correctly
+                    hides itself. */}
+                {isWindows && (
+                  <DictationToggleField
+                    field="system_audio_enabled"
+                    label={t("settings.advanced.systemAudio.label")}
+                    description={t("settings.advanced.systemAudio.description")}
+                    descriptionMode="inline"
+                    grouped={true}
+                  />
                 )}
-                descriptionMode="tooltip"
-                grouped={true}
-                disabled={!dictationEnabled}
-              />
-            </AdvancedOnly>
+                {/* In the default view here and Advanced on the Meetings tab.
+                    See the note above that tab's <AdvancedOnly>. */}
+                <DictationToggleField
+                  field="post_process_enabled"
+                  label={t("settings.debug.postProcessingToggle.label")}
+                  description={t(
+                    "settings.debug.postProcessingToggle.description",
+                  )}
+                  descriptionMode="inline"
+                  grouped={true}
+                />
+                {/* Both rows cleanup unlocks, gathered directly beneath it.
+                    See ui/Dependents. The hotkey used to render eight rows
+                    higher, beside the plain dictation shortcut, so turning
+                    cleanup on made one row appear in a part of the pane the
+                    user was not looking at and another appear further down.
+                    One toggle, one place its consequences show up. */}
+                <Dependents on={postProcessEnabled}>
+                  <ShortcutInput
+                    shortcutId="dictate_with_post_process"
+                    descriptionMode="inline"
+                    grouped={true}
+                  />
+                  <DictationPostProcessPrompt grouped={true} />
+                </Dependents>
+                <DictationToggleField
+                  field="save_recordings"
+                  label={t("settings.dictation.privacy.saveRecordings.label")}
+                  description={t(
+                    "settings.dictation.privacy.saveRecordings.description",
+                  )}
+                  descriptionMode="inline"
+                  grouped={true}
+                />
+                <DictationToggleField
+                  field="save_transcripts"
+                  label={t("settings.dictation.privacy.saveTranscripts.label")}
+                  description={t(
+                    "settings.dictation.privacy.saveTranscripts.description",
+                  )}
+                  descriptionMode="inline"
+                  grouped={true}
+                />
+                {/* Default here and advanced on the Meetings tab: a field is
+                    shown by default in the tab where it is load-bearing, and
+                    dictation is the mode whose entire job is putting text into
+                    another window. */}
+                <DictationPasteMethod descriptionMode="inline" grouped={true} />
+                <AdvancedOnly>
+                  {/* Dictation's copy of the follow-stream field. Advanced in
+                      both tabs, unlike AI cleanup: a tooling hook is a tooling
+                      hook in either mode. */}
+                  <DictationToggleField
+                    field="follow_stream_enabled"
+                    label={t("settings.advanced.followStream.label")}
+                    description={t(
+                      "settings.advanced.followStream.description",
+                    )}
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
+                  <DictationTypingTool
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
+                  <DictationClipboardHandling
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
+                  <DictationAutoSubmit
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
+                  <DictationToggleField
+                    field="append_trailing_space"
+                    label={t("settings.debug.appendTrailingSpace.label")}
+                    description={t(
+                      "settings.debug.appendTrailingSpace.description",
+                    )}
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
+                </AdvancedOnly>
+              </>
+            )}
           </Sheet>
         </TabPanel>
       )}
