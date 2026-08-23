@@ -177,7 +177,13 @@ export const ModesSettings: React.FC = () => {
               grouped={true}
               disabled={!dictationEnabled}
             />
-            {dictationEnabled && (
+            {/* Gated on cleanup being ON, not merely on dictation being on —
+                the same rule as the Transcription tab. A hotkey that always
+                applies AI cleanup is a dead control while cleanup is off, and
+                a shortcut row is never inert: it would still bind a live global
+                key. The two tabs have to agree about this or the same row looks
+                broken in one of them. */}
+            {postProcessEnabled && (
               <ShortcutInput
                 shortcutId="dictate_with_post_process"
                 descriptionMode="inline"
@@ -189,8 +195,12 @@ export const ModesSettings: React.FC = () => {
                 self-hide and show-a-Grant-button, so gating it on dictation
                 means not rendering it rather than rendering it inert. */}
             {dictationEnabled && <AccessibilityPermissions />}
+            {/* Tooltip, matching the Transcription tab. Its description runs
+                to six lines; left inline here it became the loudest thing on
+                this tab, which is the defect that was just fixed on the other
+                one. Same setting, same weight. */}
             <DictationOverlayStyleRow
-              descriptionMode="inline"
+              descriptionMode="tooltip"
               grouped={true}
               disabled={!dictationEnabled}
             />
