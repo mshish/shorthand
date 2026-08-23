@@ -261,7 +261,60 @@ for (const file of required) {
   }
 }
 
+/**
+ * Every `t("…")` key the settings tree uses must actually resolve.
+ *
+ * Added after shipping one that did not. An edit to `FORK_ONLY_STRINGS` dropped
+ * two entries, and the sidebar footer rendered the literal string
+ * `settings.advanced.switch.label` to the user. Nothing failed: not tsc, not
+ * ESLint, not `check:translations` — which compares key parity *between
+ * locales* and so cannot see a key that is missing from all of them. It was
+ * caught by looking at a screenshot, which is not a guarantee.
+ *
+ * Only literal keys are checked. A computed key (`t(\`x.${y}\`)`) is invisible
+ * here, and that is a reason to prefer literals in this tree.
+ */
+const literalKeys = new Set<string>();
+for (const file of REQUIRED_DIRS.flatMap(walkDir)) {
+  if (!/\.tsx?$/.test(file)) continue;
+  for (const match of readFileSync(file, "utf8").matchAll(
+    /\bt\(\s*"([a-zA-Z0-9_.]+)"/g,
+  )) {
+    literalKeys.add(match[1]);
+  }
+}
+
+const { applyBranding } = await import("../src/shorthand/branding");
+const enCatalogue = JSON.parse(
+  readFileSync(join(SRC, "i18n/locales/en/translation.json"), "utf8"),
+);
+const { translation } = applyBranding(enCatalogue, "en");
+
+const unresolved = [...literalKeys]
+  .filter((key) => {
+    const value = key
+      .split(".")
+      .reduce<any>(
+        (node, part) => (node == null ? node : node[part]),
+        translation,
+      );
+    return typeof value !== "string";
+  })
+  .sort();
+
 let failed = false;
+
+if (unresolved.length) {
+  failed = true;
+  console.error(
+    `\n[31m✗ ${unresolved.length} translation key(s) used by the settings tree do not resolve:[0m\n`,
+  );
+  for (const key of unresolved) console.error(`    ${key}`);
+  console.error(
+    "\n  These render to the user as the raw key. Add them to FORK_ONLY_STRINGS\n" +
+      "  in src/shorthand/branding.ts, or correct the call site.\n",
+  );
+}
 
 if (missing.length) {
   failed = true;

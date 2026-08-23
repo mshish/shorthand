@@ -53,6 +53,16 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "settings.audio.groups.input": "Where sound comes from",
   "settings.model.groups.output": "How transcripts read",
   "settings.aiCleanup.title": "How AI cleans up what you said",
+  "settings.aiCleanup.sharedNote":
+    "The connection and the prompt library are shared. Whether cleanup runs, and which prompt it uses, is set per mode under Modes.",
+
+  // The advanced switch. It used to swap in upstream Handy's own settings
+  // screens, which is what the old wording described; it now reveals more rows
+  // in the section you are already looking at, so the old wording would be
+  // actively misleading rather than merely stale.
+  "settings.advanced.switch.label": "Advanced settings",
+  "settings.advanced.switch.description":
+    "Show every setting, not just the ones most people need. Nothing moves — the extra rows appear in the sections they belong to.",
 
   // ---- Sentence case, and one name per feature -------------------------
   //
