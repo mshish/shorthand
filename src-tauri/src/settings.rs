@@ -506,7 +506,13 @@ fn default_settings_schema_version() -> u32 {
 }
 
 fn default_push_to_talk() -> bool {
-    true
+    // Meetings only. Dictation keeps its own `true` in DictationSettings.
+    //
+    // A meeting runs for an hour: holding a key for the duration is not a
+    // thing anyone does, so meetings toggle. Dictation is seconds long and is
+    // held. The two modes genuinely want opposite answers, which is why this
+    // field is per-mode at all.
+    false
 }
 
 fn default_always_on_microphone() -> bool {
@@ -548,12 +554,20 @@ fn default_overlay_position() -> OverlayPosition {
 }
 
 fn default_overlay_style() -> OverlayStyle {
-    // Linux hides the overlay by default; other platforms show the live overlay.
-    // Position is independent and only selects top vs. bottom placement.
+    // Meetings only; dictation keeps its own Minimal in DictationSettings.
+    //
+    // Minimal rather than Live. The live panel is a genuinely useful thing to
+    // be able to turn on, but as a default it puts a running transcript on
+    // screen for the entire length of a meeting, over whatever the user is
+    // actually working in. The compact pill says "recording" and gets out of
+    // the way, which is what a default should do.
+    //
+    // Linux still hides it entirely. Position is independent and only selects
+    // top versus bottom placement.
     #[cfg(target_os = "linux")]
     return OverlayStyle::None;
     #[cfg(not(target_os = "linux"))]
-    return OverlayStyle::Live;
+    return OverlayStyle::Minimal;
 }
 
 fn default_vad_enabled() -> bool {
@@ -622,7 +636,7 @@ fn default_show_tray_icon() -> bool {
     true
 }
 
-fn default_post_process_provider_id() -> String {
+pub(crate) fn default_post_process_provider_id() -> String {
     "openai".to_string()
 }
 
@@ -936,7 +950,10 @@ pub fn get_default_settings() -> AppSettings {
         clamshell_microphone: None,
         selected_output_device: None,
         system_audio_enabled: false,
-        follow_stream_enabled: false,
+        // Meetings default this ON: streaming a meeting transcript to a
+        // follower (the Obsidian plugin) is the reason this fork exists.
+        // Dictation defaults it off in DictationSettings.
+        follow_stream_enabled: true,
         system_audio_device: None,
         translate_to_english: false,
         selected_language: "auto".to_string(),
@@ -1238,7 +1255,9 @@ mod tests {
     fn empty_store_parses_with_defaults() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
             .expect("all AppSettings fields need serde defaults");
-        assert!(settings.push_to_talk);
+        // Meetings toggle rather than hold; dictation is the one that holds.
+        assert!(!settings.push_to_talk);
+        assert!(settings.dictation.push_to_talk);
         assert!(!settings.audio_feedback);
         assert!(settings.filler_word_removal_enabled);
         // Bindings default to empty; the load path merges the real defaults in.
@@ -1571,11 +1590,40 @@ mod tests {
         assert!(settings.save_transcripts);
     }
 
+    /// Minimal, not Live. The live panel is worth being able to turn on, but
+    /// as a default it puts a running transcript over whatever the user is
+    /// working in for the whole length of a meeting.
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn default_overlay_style_is_live_when_overlay_defaults_on() {
+    fn default_overlay_style_is_minimal() {
         let settings = get_default_settings();
-        assert_eq!(settings.overlay_style, OverlayStyle::Live);
+        assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
+        assert_eq!(settings.dictation.overlay_style, OverlayStyle::Minimal);
+    }
+
+    /// The four settings that became per-mode, asserted as a pair so a future
+    /// edit cannot quietly collapse them back onto one shared value.
+    #[test]
+    fn per_mode_defaults_differ_where_the_modes_differ() {
+        let settings = get_default_settings();
+
+        // Streaming a meeting to a follower is the reason this fork exists.
+        // Dictated text has already arrived where it was wanted.
+        assert!(settings.follow_stream_enabled);
+        assert!(!settings.dictation.follow_stream_enabled);
+
+        // A meeting may want the other participants; dictation does not want
+        // whatever happens to be playing.
+        assert!(!settings.system_audio_enabled);
+        assert!(!settings.dictation.system_audio_enabled);
+
+        // Same provider until someone chooses otherwise, and no per-mode model
+        // override, so behaviour is unchanged for anyone who never sets one.
+        assert_eq!(
+            settings.dictation.post_process_provider_id,
+            settings.post_process_provider_id
+        );
+        assert_eq!(settings.dictation.post_process_model, None);
     }
 
     #[test]
