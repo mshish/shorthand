@@ -1,6 +1,6 @@
 # Shorthand: brand pivot and settings redesign
 
-Status: proposed (revision 3)
+Status: built
 Date: 2026-08-23
 
 Revision 1 was rewritten after a Codex review found eight blockers. Revision 2
@@ -11,10 +11,10 @@ dark ground, the mark degrades into a chip below a ~5:1 aspect ratio, and the
 `Badge` contrast failure predicted from the maths is exactly as bad on screen as
 the numbers said.
 
-**Already implemented and visually verified:** `brand/theme.css` (palette, type,
-geometry), `brand/marks.css` (the sweep), `ui/Sheet.tsx` (the borderless group),
-the two CSS imports, and the Atkinson font dependencies. The settings IA in
-Parts 2–3 is designed but not yet built.
+Both halves are now implemented on `brand-ux-redesign` and verified against the
+rendered UI rather than only against the code. **"As built" at the end records
+where the implementation diverged from what is specified below, and why** — read
+it before trusting any specific claim above it.
 
 ## What this is for
 
@@ -785,3 +785,88 @@ Rust is not touched, so `cargo test` is unaffected.
 - Onboarding beyond inheriting the palette and typeface.
 - The pre-existing CRLF/LF mismatch that makes `bun run format:check` fail on 86
   files at HEAD. Reformatting would be an enormous conflict surface for no gain.
+
+## As built
+
+Where the implementation diverged from the design above. Every entry was forced
+by rendering the thing and looking at it — none of it survived contact with a
+screenshot, and none of it was visible to two rounds of Codex review.
+
+### The sweep is narrower than specified
+
+Part 1 gave the sweep to the active sidebar row, the active tab and running
+text. It now marks **running text and the active tab only**.
+
+Below roughly a 5:1 aspect ratio the corner radii consume the whole perimeter,
+no straight section survives, and the pen line detaches along the entire bottom
+edge — the mark reads as a badge with an underline rather than a stroke.
+Measured on the rendered boxes: running text 10.4:1 works, a tab label 5.2:1
+works, `AI cleanup` 3.0:1 is weak, `Modes` 1.9:1 is a chip, `App` 1.2:1 is a
+square. The sidebar marks its selection with an accent icon and a full-weight
+label against dimmed neighbours instead.
+
+`mix-blend-mode: multiply` was specified and then removed. A highlighter is
+translucent, so it looked right — and on a dark ground it is physically right
+and fatal, because a highlighter over black paper deposits nothing. Every dark
+mark rendered as a black smudge at about 1.05:1.
+
+### Four rows the rendered UI exposed
+
+None of these are visible in source review:
+
+- The recording-overlay row's description runs to six lines and was the loudest
+  thing in the default view, for a secondary setting. It takes a tooltip. The
+  "descriptions inline by default" rule holds until one description outweighs
+  every control around it.
+- The dedicated AI-cleanup hotkey rendered under an AI-cleanup toggle that was
+  off. Hidden now, not disabled — a shortcut row is never inert.
+- "Shared by both modes" rendered as a heading with nothing beneath it, because
+  its only row has three independent reasons to be absent. The heading moved
+  inside the guard. Consequence worth knowing: push-to-talk is on by default in
+  both modes, so on a fresh install that group renders nowhere and the cancel
+  shortcut is reachable only after turning push-to-talk off _and_ finding the
+  Advanced switch.
+- Fixes applied to one tab and not the other are worse than the original defect,
+  because the disagreement is visible in a single flip.
+
+### The advanced switch did nothing observable
+
+At the window size `lib.rs` actually ships — 680x570 — the content pane is 532px,
+the default Modes section is 539px, and the first row the switch reveals starts
+at y=539. Seven pixels below the fold. Clicking it changed nothing on screen
+except a 12px dot in the sidebar footer.
+
+It now scrolls the first revealed row into view, behind `prefers-reduced-motion`.
+It stays in the sidebar footer rather than moving beside the content, because it
+governs every section and per-section copies would multiply it by seven.
+
+### Copy is sentence case everywhere, or it is worse than not at all
+
+Overriding three labels moved the inconsistency from between-tabs to within a
+single screen. All 49 Title Case labels the settings tree renders are overridden
+in `FORK_ONLY_STRINGS`, acronyms and proper nouns preserved, and post-processing
+settles on one name — AI cleanup — rather than the three it had.
+
+### The exhaustiveness check is a script, not a Playwright spec
+
+`bun run check:settings`. The question is answerable from source, and answering
+it in a browser would mean rendering every section against a Tauri backend CI
+does not have. It follows `check-branding` and `check-translations`.
+
+It had to be made barrel-aware: `Sidebar` imports one name from the settings
+barrel, and following that barrel wholesale made `GeneralSettings`,
+`AdvancedSettings` and `PostProcessingSettings` all look reachable — precisely
+the claim the script exists to disprove.
+
+Two limits, both found by trying to make it fail rather than by reasoning about
+it. It proves reachability, not rendering. And because Debug is still
+registered, a row demoted to debug-only would not trip it — deleting
+`AlwaysOnMicrophone` from Audio passes, because Debug renders it too. Deleting
+`SystemAudioCapture` fails, as it should.
+
+### The preview harness renders the real thing
+
+`brand-preview/` mocks Tauri's IPC seam via `@tauri-apps/api/mocks`, so the real
+`Sidebar`, the real `SECTIONS_CONFIG` and the real section components render in
+a plain browser. Every defect in this section was found there. It is committed
+rather than left as scratch, which is what happened to its predecessor.
