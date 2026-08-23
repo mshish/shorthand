@@ -53,6 +53,23 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "settings.audio.groups.input": "Where sound comes from",
   "settings.model.groups.output": "How transcripts read",
   "settings.aiCleanup.title": "How AI cleans up what you said",
+
+  // One feature, one name. Upstream calls it "Post Processing" in the toggle,
+  // "Post-Processing" in the hotkey and "post-processing" in prose; the fork's
+  // own section calls it AI cleanup. Flipping between the Transcription and
+  // Dictation tabs put three of those names on screen inside one interaction,
+  // which reads as three features rather than one seen twice. Overriding the
+  // labels here settles it without touching a locale file.
+  "settings.debug.postProcessingToggle.label": "AI cleanup",
+  "settings.debug.postProcessingToggle.description":
+    "Rewrite the transcript with an AI model after it is transcribed — to fix punctuation, drop filler, or apply your own prompt.",
+
+  // Casing, for the same reason. Upstream mixes Title Case and sentence case
+  // between the two modes' copies of the same row, and the difference is only
+  // visible when you switch tabs — which is exactly when it looks like a bug.
+  "settings.general.pushToTalk.label": "Push to talk",
+  "settings.dictation.privacy.saveRecordings.label": "Save recordings",
+  "settings.dictation.privacy.saveTranscripts.label": "Save transcripts",
   "settings.aiCleanup.sharedNote":
     "The connection and the prompt library are shared. Whether cleanup runs, and which prompt it uses, is set per mode under Modes.",
 

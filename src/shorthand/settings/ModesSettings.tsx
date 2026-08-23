@@ -22,6 +22,7 @@ import { DictationOverlayStyleRow } from "../ui/OverlayRows";
 import { DictationToggleField } from "../dictation/DictationToggleField";
 import { DictationTypingTool } from "../dictation/DictationTypingTool";
 import { AdvancedOnly } from "../ui/AdvancedOnly";
+import { useAdvanced } from "../useAdvanced";
 import { OverlayStyleRow } from "../ui/OverlayRows";
 import { Sheet } from "../ui/Sheet";
 import { TabPanel, Tabs } from "../ui/Tabs";
@@ -84,6 +85,16 @@ export const ModesSettings: React.FC = () => {
   const anyPushToTalk =
     (getSetting("push_to_talk") ?? false) || (dictation?.push_to_talk ?? false);
 
+  // Gates the dedicated AI-cleanup hotkey in the Transcription tab, the same
+  // way `postProcessEnabled` above gates the prompt picker in the Dictation
+  // one. Both are per-mode fields, so neither can stand in for the other.
+  const transcriptionPostProcessEnabled =
+    getSetting("post_process_enabled") ?? false;
+
+  // Read directly rather than via <AdvancedOnly>, because the shared group's
+  // heading has to be inside the same condition as its only row.
+  const { advanced } = useAdvanced();
+
   const tabs = [
     { id: "transcription" as const, label: t("sidebar.transcription") },
     { id: "dictation" as const, label: t("sidebar.dictation") },
@@ -107,13 +118,25 @@ export const ModesSettings: React.FC = () => {
               grouped={true}
             />
             <PushToTalk descriptionMode="inline" grouped={true} />
-            <OverlayStyleRow descriptionMode="inline" grouped={true} />
+            {/* Tooltip, not inline: this row's description runs to six lines
+                and was visually the loudest thing in the default view — for a
+                secondary setting. "Descriptions inline by default" is a good
+                rule right up to the point where one description outweighs
+                every control around it. */}
+            <OverlayStyleRow descriptionMode="tooltip" grouped={true} />
             <PostProcessingToggle descriptionMode="inline" grouped={true} />
-            <ShortcutInput
-              shortcutId="transcribe_with_post_process"
-              descriptionMode="inline"
-              grouped={true}
-            />
+            {/* Hidden rather than disabled while cleanup is off. A shortcut
+                row is never inert: SettingContainer's `disabled` only fades
+                the label, so the recorder would still bind a live global key
+                for a feature that will not run. Showing it under a toggle
+                that is off also reads as a broken control. */}
+            {transcriptionPostProcessEnabled && (
+              <ShortcutInput
+                shortcutId="transcribe_with_post_process"
+                descriptionMode="inline"
+                grouped={true}
+              />
+            )}
             <SaveRecordings descriptionMode="inline" grouped={true} />
             <SaveTranscripts descriptionMode="inline" grouped={true} />
             <AdvancedOnly>
@@ -247,20 +270,24 @@ export const ModesSettings: React.FC = () => {
         </TabPanel>
       )}
 
-      <Sheet
-        title={t("settings.modes.shared.title")}
-        description={t("settings.modes.shared.description")}
-      >
-        <AdvancedOnly>
-          {!isLinux && !anyPushToTalk && (
-            <ShortcutInput
-              shortcutId="cancel"
-              descriptionMode="tooltip"
-              grouped={true}
-            />
-          )}
-        </AdvancedOnly>
-      </Sheet>
+      {/* The heading is inside the guard, not outside it. Cancel is the only
+          row here and it has three independent reasons to be absent — not
+          advanced, on Linux, or push-to-talk on (release already cancels).
+          Rendering the Sheet unconditionally left a heading and a description
+          promising a setting with nothing beneath them, which is worse than
+          saying nothing. */}
+      {advanced && !isLinux && !anyPushToTalk && (
+        <Sheet
+          title={t("settings.modes.shared.title")}
+          description={t("settings.modes.shared.description")}
+        >
+          <ShortcutInput
+            shortcutId="cancel"
+            descriptionMode="tooltip"
+            grouped={true}
+          />
+        </Sheet>
+      )}
     </div>
   );
 };
