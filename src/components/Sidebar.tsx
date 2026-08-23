@@ -2,6 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
 import { ShorthandMark, ShorthandWordmark } from "@/shorthand/brand";
+import { AdvancedSwitch } from "@/shorthand/ui/AdvancedSwitch";
 import { useSettings } from "../hooks/useSettings";
 import { getVisibleSectionIds } from "@/shorthand/visibility";
 import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
@@ -99,40 +100,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }),
   );
 
-  // The trailing edge is the ruled margin of a steno pad, in the accent rather
-  // than in neutral grey: the one place the fork spends colour.
+  // The rail is deliberately the quietest surface in the app. It carries no
+  // highlighter mark: the sweep degrades into a chip below roughly a 5:1 aspect
+  // ratio, and nav labels ("App", "Modes") are far under that — see
+  // shorthand/brand/marks.css. Selection is an accent icon and a full-weight
+  // label against dimmed neighbours, which also protects the rule the whole
+  // direction rests on: colour means live, not merely selected.
   return (
-    <div className="flex flex-col w-40 h-full border-e-2 border-logo-primary items-center px-2">
+    <div className="flex flex-col w-40 h-full border-e border-mid-gray/20 items-center px-2">
       <ShorthandWordmark height={24} className="m-4" />
-      <div className="flex flex-col w-full items-center gap-1 pt-2 border-t border-mid-gray/20">
+      <nav
+        aria-label={t("sidebar.general")}
+        className="flex flex-col w-full items-center gap-1 pt-2 border-t border-mid-gray/20"
+      >
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;
 
           return (
-            <div
+            <button
               key={section.id}
-              // Active rows are marked by a stroke in the margin — the same
-              // device as the sidebar's own rule — instead of a filled pill.
-              // The inactive rows carry a transparent border of the same width
-              // so nothing shifts when the selection moves.
-              className={`flex gap-2 items-center p-2 w-full rounded-lg cursor-pointer transition-colors border-s-2 ${
+              type="button"
+              // Upstream renders these as bare clickable divs with no role,
+              // tabIndex or keyboard handler, so the whole navigation is
+              // unreachable without a mouse. A button gets Enter/Space and
+              // focus for free; aria-current exposes the selection to a screen
+              // reader, so it does not depend on the colour at all.
+              aria-current={isActive ? "page" : undefined}
+              className={`flex gap-2 items-center p-2 w-full rounded-lg cursor-pointer transition-colors text-start bg-transparent border-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary ${
                 isActive
-                  ? "border-background-ui bg-logo-primary/25"
-                  : "border-transparent hover:bg-mid-gray/15 hover:opacity-100 opacity-80"
+                  ? ""
+                  : "hover:bg-mid-gray/15 opacity-70 hover:opacity-100"
               }`}
               onClick={() => onSectionChange(section.id)}
             >
-              <Icon width={24} height={24} className="shrink-0" />
+              <Icon
+                width={24}
+                height={24}
+                className={`shrink-0 ${isActive ? "text-logo-primary" : ""}`}
+              />
               <p
-                className="text-sm font-medium truncate"
+                className={`text-sm truncate ${isActive ? "font-semibold" : "font-medium"}`}
                 title={t(section.labelKey)}
               >
                 {t(section.labelKey)}
               </p>
-            </div>
+            </button>
           );
         })}
+      </nav>
+      {/* Fork-only: the advanced-settings switch lives here rather than buried
+          in About, so it is reachable and reversible from every section. */}
+      <div className="mt-auto w-full border-t border-mid-gray/20 py-2">
+        <AdvancedSwitch />
       </div>
     </div>
   );
