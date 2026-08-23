@@ -1048,7 +1048,36 @@ export type CustomSounds = { start: boolean; stop: boolean }
  * and shared settings" in the design doc for which fields live here versus
  * staying shared on `AppSettings`.
  */
-export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; system_audio_enabled: boolean; follow_stream_enabled: boolean; post_process_provider_id: string; post_process_model: string | null }
+export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+/**
+ * Whether dictation also captures system audio. Meetings and dictation
+ * want opposite answers often enough that one shared switch was wrong:
+ * a meeting usually wants the other participants, and dictation almost
+ * never wants whatever is playing.
+ * 
+ * The *device* stays shared on `AppSettings` — which loopback endpoint
+ * exists is a fact about the machine, not a preference about the mode.
+ */
+system_audio_enabled: boolean; 
+/**
+ * Whether this mode's transcript is published to `--follow-stream`
+ * followers. Meetings default this on, because streaming a meeting to a
+ * note-taker is the fork's whole reason to exist; dictation defaults it
+ * off, because text going into the focused window has already arrived
+ * where it was wanted.
+ */
+follow_stream_enabled: boolean; 
+/**
+ * Which post-processing provider this mode uses. Long meeting transcripts
+ * and two-second dictations do not want the same model.
+ */
+post_process_provider_id: string; 
+/**
+ * The model, when this mode wants one other than the provider's shared
+ * choice. `None` falls back to `AppSettings::post_process_models`, so a
+ * user who never sets it per mode sees no change in behaviour.
+ */
+post_process_model: string | null }
 export type EngineType = 
 /**
  * Any GGML/GGUF model loaded through transcribe-cpp (Whisper, Parakeet,
