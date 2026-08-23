@@ -95,8 +95,14 @@ export const ModesSettings: React.FC = () => {
   // below is a plain boolean field with no such guard, so it needs this or it
   // offers a toggle for something that cannot happen.
   const isWindows = type() === "windows";
+  // Dictation's push-to-talk only counts when dictation is actually on.
+  // Without the `dictationEnabled &&`, a disabled mode's default suppresses
+  // the row for everyone: dictation ships with push_to_talk true, so on a
+  // fresh install Cancel was hidden by a mode the user had never enabled —
+  // and it stayed hidden even after meetings' own default flipped to off.
   const anyPushToTalk =
-    (getSetting("push_to_talk") ?? false) || (dictation?.push_to_talk ?? false);
+    (getSetting("push_to_talk") ?? false) ||
+    (dictationEnabled && (dictation?.push_to_talk ?? false));
 
   // Gates the dedicated AI-cleanup hotkey in the Meetings tab, the same way
   // `postProcessEnabled` above gates the prompt picker in the Dictation one.

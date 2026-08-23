@@ -24,10 +24,15 @@ import { ADVANCED_ANCHOR_ATTR } from "./AdvancedOnly";
  *
  * Not a flourish — a correctness fix, and one only measuring caught. At the
  * app's real window size (680x570, from `lib.rs`) the content pane is 532px
- * tall, the default Modes section is 539px, and the first row the switch
- * reveals starts at y=539. Seven pixels below the fold. Clicking the switch
- * changed nothing visible on screen except a 12px dot in the sidebar footer, so
- * the only feedback that it had worked was to guess and scroll.
+ * tall and the first row the switch reveals starts below the fold, so clicking
+ * it changed nothing visible on screen except a 12px dot in the sidebar
+ * footer. The only feedback that it had worked was to guess and scroll.
+ *
+ * Measured twice, because the margin moves with the row inventory: first at a
+ * 539px default with the revealed row 7px under the fold, then — after AI
+ * cleanup and follow-stream moved out of the default view — at 524px with it
+ * 23px under. That it is under the fold at all is the part that does not
+ * change.
  *
  * A control whose entire job is to reveal something has to show that it
  * revealed something.
