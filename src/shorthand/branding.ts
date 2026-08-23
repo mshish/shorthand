@@ -128,6 +128,19 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
   "settings.dictation.privacy.saveTranscripts.label": "Save transcripts",
   "settings.general.pushToTalk.label": "Push to talk",
   "settings.general.shortcut.title": "Handy shortcuts",
+
+  // Shortcut row labels. These end in `.name`, not `.label`/`.title`, which is
+  // why the first sweep missed them — and they are the first row of each tab,
+  // so the two survivors were the most prominent labels on the screen. They
+  // also settle the naming: every one is a "shortcut", and post-processing is
+  // AI cleanup here as everywhere else.
+  "settings.general.shortcut.bindings.transcribe.name": "Capture shortcut",
+  "settings.general.shortcut.bindings.cancel.name": "Cancel shortcut",
+  "settings.general.shortcut.bindings.transcribe_with_post_process.name":
+    "AI cleanup shortcut",
+  "settings.general.shortcut.bindings.dictate.name": "Dictation shortcut",
+  "settings.general.shortcut.bindings.dictate_with_post_process.name":
+    "Dictation AI cleanup shortcut",
   "settings.models.title": "Transcription models",
   "settings.postProcessing.api.apiKey.title": "API key",
   "settings.postProcessing.prompts.selectedPrompt.title": "Selected prompt",

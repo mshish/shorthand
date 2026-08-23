@@ -124,7 +124,11 @@ export const TabPanel: React.FC<TabPanelProps> = ({ id, children }) => (
     id={`tabpanel-${id}`}
     aria-labelledby={`tab-${id}`}
     tabIndex={0}
-    className="space-y-8 pt-6 focus-visible:outline-none"
+    // pt-2, not pt-6. At the shipping window size the gap between the tab bar
+    // and the first row was 53px of a 532px pane — 10% of the visible screen
+    // doing nothing, directly beneath the one control a user has to notice to
+    // understand what they are looking at.
+    className="space-y-8 pt-2 focus-visible:outline-none"
   >
     {children}
   </div>

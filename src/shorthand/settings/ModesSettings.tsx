@@ -212,14 +212,14 @@ export const ModesSettings: React.FC = () => {
               grouped={true}
               disabled={!dictationEnabled}
             />
-            {/* Disabled whenever post-processing itself is off, not only when
-                dictation is — picking a prompt for a toggle that will not run
-                is a dead control. */}
-            <DictationPostProcessPrompt
-              descriptionMode="inline"
-              grouped={true}
-              disabled={!postProcessEnabled}
-            />
+            {/* Hidden, not disabled — the same rule as the AI-cleanup
+                shortcut above and on the other tab. A greyed-out prompt picker
+                under an off toggle is a dead control, and it was the last row
+                where the two tabs still disagreed: Transcription showed no
+                prompt row at all while Dictation showed a disabled one. */}
+            {postProcessEnabled && (
+              <DictationPostProcessPrompt grouped={true} />
+            )}
             <DictationToggleField
               field="save_recordings"
               label={t("settings.dictation.privacy.saveRecordings.label")}

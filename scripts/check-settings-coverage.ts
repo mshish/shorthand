@@ -272,7 +272,9 @@ for (const file of required) {
  * caught by looking at a screenshot, which is not a guarantee.
  *
  * Only literal keys are checked. A computed key (`t(\`x.${y}\`)`) is invisible
- * here, and that is a reason to prefer literals in this tree.
+ * here, and that is a reason to prefer literals in this tree — shortcut row
+ * labels are built from a binding id and so are not seen by this at all, which
+ * is how two Title Case labels survived a sweep of every other one.
  */
 const literalKeys = new Set<string>();
 for (const file of REQUIRED_DIRS.flatMap(walkDir)) {
