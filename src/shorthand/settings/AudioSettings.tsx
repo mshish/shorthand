@@ -6,7 +6,6 @@ import { MuteWhileRecording } from "@/components/settings/MuteWhileRecording";
 import { VoiceActivityDetection } from "@/components/settings/VoiceActivityDetection";
 import { AlwaysOnMicrophone } from "@/components/settings/AlwaysOnMicrophone";
 import { ClamshellMicrophoneSelector } from "@/components/settings/ClamshellMicrophoneSelector";
-import { SystemAudioCapture } from "@/components/settings/advanced/SystemAudioCapture";
 import { SystemAudioDeviceSelector } from "@/components/settings/advanced/SystemAudioDeviceSelector";
 import { Sheet } from "@/shorthand/ui/Sheet";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
@@ -35,12 +34,16 @@ export const AudioSettings: React.FC = () => {
     <div className="max-w-3xl w-full mx-auto space-y-8">
       <Sheet title={t("settings.audio.groups.input")}>
         <MicrophoneSelector descriptionMode="inline" grouped={true} />
-        {/* Both system-audio rows self-hide outside Windows, so the default
-            row count is platform-dependent. Only the capture toggle also
-            checks model capability; the device selector checks stored
-            enablement and mute state but never the model. That asymmetry is
-            upstream's and is deliberately left alone here. */}
-        <SystemAudioCapture descriptionMode="inline" grouped={true} />
+        {/* The *device* is still shared — there is one system-audio source,
+            whichever mode is recording — so the selector stays here. Whether
+            system audio is captured at all is per-mode now, and that toggle
+            moved to Modes: `SystemAudioCapture` in the Meetings tab and a
+            `dictation.system_audio_enabled` row in the Dictation one.
+
+            This row self-hides outside Windows, and checks stored enablement
+            and mute state but never the model — where the capture toggle also
+            checks model capability. That asymmetry is upstream's and is
+            deliberately left alone here. */}
         <SystemAudioDeviceSelector descriptionMode="inline" grouped={true} />
         <AdvancedOnly>
           <ChannelSelector descriptionMode="tooltip" grouped={true} />

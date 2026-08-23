@@ -42,10 +42,13 @@ export const FORK_ONLY_STRINGS: Record<string, string> = {
 
   "settings.modes.heading": "How each mode behaves",
   "settings.modes.description":
-    "Transcription streams a meeting to whatever is following along. Dictation types what you say into whatever window you are in.",
+    "Meetings streams what it hears to whatever is following along. Dictation types what you say into whatever window you are in.",
   "settings.modes.tabs.label": "Capture mode",
-  "settings.modes.tabs.transcription": "Transcription",
-  "settings.modes.tabs.dictation": "Dictation",
+  // The mode formerly called "Transcription". Renamed because "transcription"
+  // is what both modes do; "Meetings" names the thing this mode is for. The
+  // rename is user-facing only — the `transcribe` binding ids and the Rust
+  // fields keep their names.
+  "settings.modes.tabs.meetings": "Meetings",
   "settings.modes.shared.title": "Shared by both modes",
   "settings.modes.shared.description":
     "One setting, used by whichever mode is recording.",

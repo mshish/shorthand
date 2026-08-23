@@ -12,6 +12,8 @@ import { AppendTrailingSpace } from "@/components/settings/AppendTrailingSpace";
 import { PostProcessingToggle } from "@/components/settings/PostProcessingToggle";
 import { SaveRecordings } from "@/components/settings/SaveRecordings";
 import { SaveTranscripts } from "@/components/settings/SaveTranscripts";
+import { FollowStreamOutput } from "@/components/settings/advanced/FollowStreamOutput";
+import { SystemAudioCapture } from "@/components/settings/advanced/SystemAudioCapture";
 import { useSettings } from "@/hooks/useSettings";
 import { DictationAutoSubmit } from "../dictation/DictationAutoSubmit";
 import { DictationClipboardHandling } from "../dictation/DictationClipboardHandling";
@@ -31,6 +33,12 @@ import type { DictationSettings as DictationSettingsType } from "@/bindings";
 /**
  * Fork-only "Modes" section: one tab per capture mode over the rows that
  * genuinely differ between them, and a single shared group beneath.
+ *
+ * The two modes are Meetings and Dictation. "Meetings" is a user-facing name
+ * only: the binding ids (`transcribe`, `transcribe_with_post_process`) and
+ * every Rust field keep the transcription wording, because both modes
+ * transcribe — renaming those would be renaming the machinery rather than the
+ * mode, and would cost a conflict against upstream for nothing.
  *
  * What governs membership of this pane, from
  * docs/superpowers/specs/2026-08-23-shorthand-brand-ux-redesign.md Part 2:
@@ -61,12 +69,12 @@ import type { DictationSettings as DictationSettingsType } from "@/bindings";
  * on a screen describing a mode the user may have since switched off.
  */
 
-type ModeTab = "transcription" | "dictation";
+type ModeTab = "meetings" | "dictation";
 
 export const ModesSettings: React.FC = () => {
   const { t } = useTranslation();
   const { getSetting } = useSettings();
-  const [activeTab, setActiveTab] = useState<ModeTab>("transcription");
+  const [activeTab, setActiveTab] = useState<ModeTab>("meetings");
 
   const dictation = getSetting("dictation") as
     | DictationSettingsType
@@ -82,13 +90,18 @@ export const ModesSettings: React.FC = () => {
   // mode has it — the strictly safer reading, since a visible-but-redundant
   // shortcut beats a hidden one that still fires.
   const isLinux = type() === "linux";
+  // System-audio capture is a Windows-only feature upstream. The shared
+  // `SystemAudioCapture` row self-hides on other platforms; the dictation row
+  // below is a plain boolean field with no such guard, so it needs this or it
+  // offers a toggle for something that cannot happen.
+  const isWindows = type() === "windows";
   const anyPushToTalk =
     (getSetting("push_to_talk") ?? false) || (dictation?.push_to_talk ?? false);
 
-  // Gates the dedicated AI-cleanup hotkey in the Transcription tab, the same
-  // way `postProcessEnabled` above gates the prompt picker in the Dictation
-  // one. Both are per-mode fields, so neither can stand in for the other.
-  const transcriptionPostProcessEnabled =
+  // Gates the dedicated AI-cleanup hotkey in the Meetings tab, the same way
+  // `postProcessEnabled` above gates the prompt picker in the Dictation one.
+  // Both are per-mode fields, so neither can stand in for the other.
+  const meetingsPostProcessEnabled =
     getSetting("post_process_enabled") ?? false;
 
   // Read directly rather than via <AdvancedOnly>, because the shared group's
@@ -96,7 +109,7 @@ export const ModesSettings: React.FC = () => {
   const { advanced } = useAdvanced();
 
   const tabs = [
-    { id: "transcription" as const, label: t("sidebar.transcription") },
+    { id: "meetings" as const, label: t("settings.modes.tabs.meetings") },
     { id: "dictation" as const, label: t("sidebar.dictation") },
   ];
 
@@ -109,8 +122,8 @@ export const ModesSettings: React.FC = () => {
         label={t("settings.modes.tabs.label")}
       />
 
-      {activeTab === "transcription" && (
-        <TabPanel id="transcription">
+      {activeTab === "meetings" && (
+        <TabPanel id="meetings">
           <Sheet>
             <ShortcutInput
               shortcutId="transcribe"
@@ -124,22 +137,38 @@ export const ModesSettings: React.FC = () => {
                 rule right up to the point where one description outweighs
                 every control around it. */}
             <OverlayStyleRow descriptionMode="tooltip" grouped={true} />
-            <PostProcessingToggle descriptionMode="inline" grouped={true} />
-            {/* Hidden rather than disabled while cleanup is off. A shortcut
-                row is never inert: SettingContainer's `disabled` only fades
-                the label, so the recorder would still bind a live global key
-                for a feature that will not run. Showing it under a toggle
-                that is off also reads as a broken control. */}
-            {transcriptionPostProcessEnabled && (
-              <ShortcutInput
-                shortcutId="transcribe_with_post_process"
-                descriptionMode="inline"
-                grouped={true}
-              />
-            )}
+            {/* Meeting mode's copy of system-audio capture. The toggle is
+                per-mode now — the Dictation tab has its own row bound to
+                `dictation.system_audio_enabled` — but the *device* being
+                captured is still shared and still lives in Audio, because
+                there is only one of it. This row self-hides outside Windows. */}
+            <SystemAudioCapture descriptionMode="inline" grouped={true} />
             <SaveRecordings descriptionMode="inline" grouped={true} />
             <SaveTranscripts descriptionMode="inline" grouped={true} />
             <AdvancedOnly>
+              {/* The AI-cleanup rows are Advanced in this tab and stay in the
+                  default view on the Dictation tab. The asymmetry is
+                  deliberate and was asked for: cleanup is a routine part of
+                  dictating and an occasional one in a meeting, so each tab
+                  shows it at the weight that mode gives it. Do not "fix" this
+                  by making the two tabs match. */}
+              <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
+              {/* Hidden rather than disabled while cleanup is off. A shortcut
+                  row is never inert: SettingContainer's `disabled` only fades
+                  the label, so the recorder would still bind a live global key
+                  for a feature that will not run. Showing it under a toggle
+                  that is off also reads as a broken control. */}
+              {meetingsPostProcessEnabled && (
+                <ShortcutInput
+                  shortcutId="transcribe_with_post_process"
+                  descriptionMode="tooltip"
+                  grouped={true}
+                />
+              )}
+              {/* Meeting mode's copy of the follow-stream field; Dictation has
+                  its own, also Advanced. It is a hook for local tooling, not
+                  something anyone sets while learning the app. */}
+              <FollowStreamOutput descriptionMode="tooltip" grouped={true} />
               <PasteMethodSetting descriptionMode="tooltip" grouped={true} />
               <TypingToolSetting descriptionMode="tooltip" grouped={true} />
               <ClipboardHandlingSetting
@@ -178,7 +207,7 @@ export const ModesSettings: React.FC = () => {
               disabled={!dictationEnabled}
             />
             {/* Gated on cleanup being ON, not merely on dictation being on —
-                the same rule as the Transcription tab. A hotkey that always
+                the same rule as the Meetings tab. A hotkey that always
                 applies AI cleanup is a dead control while cleanup is off, and
                 a shortcut row is never inert: it would still bind a live global
                 key. The two tabs have to agree about this or the same row looks
@@ -195,15 +224,34 @@ export const ModesSettings: React.FC = () => {
                 self-hide and show-a-Grant-button, so gating it on dictation
                 means not rendering it rather than rendering it inert. */}
             {dictationEnabled && <AccessibilityPermissions />}
-            {/* Tooltip, matching the Transcription tab. Its description runs
-                to six lines; left inline here it became the loudest thing on
-                this tab, which is the defect that was just fixed on the other
-                one. Same setting, same weight. */}
+            {/* Tooltip, matching the Meetings tab. Its description runs to six
+                lines; left inline here it became the loudest thing on this
+                tab, which is the defect that was just fixed on the other one.
+                Same setting, same weight. */}
             <DictationOverlayStyleRow
               descriptionMode="tooltip"
               grouped={true}
               disabled={!dictationEnabled}
             />
+            {/* Dictation's copy of system-audio capture. It borrows the
+                shared row's strings, because it is the same setting for the
+                other mode — and its Windows-only guard, because
+                DictationToggleField is a plain boolean row with no predicates
+                of its own. Without the guard this offers macOS and Linux users
+                a switch for a feature that does not exist there, in the one
+                tab where the Meetings row correctly hides itself. */}
+            {isWindows && (
+              <DictationToggleField
+                field="system_audio_enabled"
+                label={t("settings.advanced.systemAudio.label")}
+                description={t("settings.advanced.systemAudio.description")}
+                descriptionMode="inline"
+                grouped={true}
+                disabled={!dictationEnabled}
+              />
+            )}
+            {/* In the default view here and Advanced on the Meetings tab — see
+                the note above that tab's <AdvancedOnly>. */}
             <DictationToggleField
               field="post_process_enabled"
               label={t("settings.debug.postProcessingToggle.label")}
@@ -214,9 +262,7 @@ export const ModesSettings: React.FC = () => {
             />
             {/* Hidden, not disabled — the same rule as the AI-cleanup
                 shortcut above and on the other tab. A greyed-out prompt picker
-                under an off toggle is a dead control, and it was the last row
-                where the two tabs still disagreed: Transcription showed no
-                prompt row at all while Dictation showed a disabled one. */}
+                under an off toggle is a dead control. */}
             {postProcessEnabled && (
               <DictationPostProcessPrompt grouped={true} />
             )}
@@ -240,16 +286,27 @@ export const ModesSettings: React.FC = () => {
               grouped={true}
               disabled={!dictationEnabled}
             />
-            {/* Default here and advanced on the Transcription tab: a field is
-                shown by default in the tab where it is load-bearing, and
-                dictation is the mode whose entire job is putting text into
-                another window. */}
+            {/* Default here and advanced on the Meetings tab: a field is shown
+                by default in the tab where it is load-bearing, and dictation
+                is the mode whose entire job is putting text into another
+                window. */}
             <DictationPasteMethod
               descriptionMode="inline"
               grouped={true}
               disabled={!dictationEnabled}
             />
             <AdvancedOnly>
+              {/* Dictation's copy of the follow-stream field. Advanced in both
+                  tabs, unlike AI cleanup — a tooling hook is a tooling hook in
+                  either mode. */}
+              <DictationToggleField
+                field="follow_stream_enabled"
+                label={t("settings.advanced.followStream.label")}
+                description={t("settings.advanced.followStream.description")}
+                descriptionMode="tooltip"
+                grouped={true}
+                disabled={!dictationEnabled}
+              />
               <DictationTypingTool
                 descriptionMode="tooltip"
                 grouped={true}

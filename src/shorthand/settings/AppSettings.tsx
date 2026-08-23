@@ -13,7 +13,6 @@ import { StartHidden } from "@/components/settings/StartHidden";
 import { ThemeSelector } from "@/components/settings/ThemeSelector";
 import { UpdateChecksToggle } from "@/components/settings/UpdateChecksToggle";
 import { VolumeSlider } from "@/components/settings/VolumeSlider";
-import { FollowStreamOutput } from "@/components/settings/advanced/FollowStreamOutput";
 import { KeyboardImplementationSelector } from "@/components/settings/debug/KeyboardImplementationSelector";
 import { useSettings } from "@/hooks/useSettings";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
@@ -95,7 +94,10 @@ export const AppSettings: React.FC = () => {
         </Sheet>
 
         <Sheet title={t("settings.advanced.groups.experimental")}>
-          <FollowStreamOutput descriptionMode="tooltip" grouped={true} />
+          {/* `FollowStreamOutput` used to be the first row here. It moved to
+              Modes: following the live transcript is a per-mode field now, so
+              by the rule above it no longer belongs in this file, which is
+              only for settings that appear exactly once. */}
           <ExperimentalToggle descriptionMode="tooltip" grouped={true} />
           <LazyStreamClose descriptionMode="tooltip" grouped={true} />
           <KeyboardImplementationSelector
