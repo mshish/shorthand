@@ -28,9 +28,29 @@
  *
  *   Two colours, because the page has two: the blue-black ink the words are
  *   written in, and the highlighter someone swept over the part that mattered.
- *   Blue and yellow sit opposite each other on the wheel, so the sweep pops
- *   against the ink rather than competing with it — which is exactly why
- *   highlighters are yellow and ink is blue in the first place.
+ *
+ *   The highlighter is a warm rose, not the obvious yellow. Three hues were
+ *   measured against the palette's two anchors — the paper at hue 45deg and the
+ *   ink at 218deg:
+ *
+ *     chartreuse #e8f35c   64deg   the first attempt. Yellow-*green*, so it
+ *                                  sits off-hue from a paper that is warm
+ *                                  yellow, and clashes with it rather than
+ *                                  belonging to it.
+ *     apricot    #ffc48a   30deg   inside the paper's own hue family, so it
+ *                                  harmonises — but the mark and the page then
+ *                                  differ in chroma alone, and at 1.46:1 in
+ *                                  luminance that leaves a weak mark.
+ *     rose       #ffb0c4  345deg   warm, so it does not fight the warm paper,
+ *                                  and 127deg off the ink — a split
+ *                                  complement. Separated from the page by hue
+ *                                  *and* chroma, which is what makes a sweep
+ *                                  read as a mark on the page rather than a
+ *                                  tint of it.
+ *
+ *   Rose also answers the brief better: it is the one that is a surprise
+ *   against a quiet page, and a yellow highlighter is the least surprising
+ *   object in stationery.
  *
  *   This replaces an earlier "copying pencil" direction (violet on pad stock,
  *   IBM Plex, halved radii). Every one of those choices said clerical and
@@ -121,9 +141,14 @@
 
   /* The highlighter. Fork-only, and used only by fork components, always as a
      background behind text whose colour the fork also sets — never as a
-     foreground and never with white on it. Complementary to the ink, which is
-     why the sweep reads as a mark rather than as another accent. */
-  --brand-highlighter: #e8f35c;
+     foreground and never with white on it. A split complement of the ink (see
+     the hue comparison in the header), which is why the sweep reads as a mark
+     rather than as another accent.
+
+     10.61:1 against the light ink it carries. The dark variant is deepened
+     because a mark this light on night paper glares; it holds 8.90:1 against
+     the dark ground it uses as ink. */
+  --brand-highlighter: #ffb0c4;
   --brand-highlighter-ink: var(--light-color-text);
 
   /* Light is the base case, declared here at `:root` specificity so every
@@ -165,19 +190,19 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --color-mid-gray: var(--dark-color-mid-gray);
-    --brand-highlighter: #d9e84a;
+    --brand-highlighter: #f59ab2;
     --brand-highlighter-ink: var(--dark-color-background);
   }
 }
 
 :root[data-theme="light"] {
   --color-mid-gray: var(--light-color-mid-gray);
-  --brand-highlighter: #e8f35c;
+  --brand-highlighter: #ffb0c4;
   --brand-highlighter-ink: var(--light-color-text);
 }
 
 :root[data-theme="dark"] {
   --color-mid-gray: var(--dark-color-mid-gray);
-  --brand-highlighter: #d9e84a;
+  --brand-highlighter: #f59ab2;
   --brand-highlighter-ink: var(--dark-color-background);
 }

@@ -94,11 +94,34 @@
 .sh-sweep::before {
   content: "";
   position: absolute;
-  /* Overshoots the box slightly on purpose: a hand marking a line does not stop
-     exactly at the word. Kept to ~0.15em because at 0.25–0.35em it ate the
-     adjacent word spaces and the mark visually merged with the words either
-     side of it. */
-  inset: 0.08em -0.16em 0.02em -0.12em;
+  /* Overshoots the box on purpose: a hand marking a line does not stop exactly
+     at the word, and a mark that stops exactly at the word reads as a
+     background fill instead.
+
+     This was originally 0.08em/-0.16em/0.02em/-0.12em — inset at the top and
+     bottom, so the mark was *narrower than its own text*, and the label looked
+     squeezed inside it. The 0.15em ceiling that produced those numbers came
+     from running prose, where 0.25–0.35em ate the adjacent word spaces and the
+     mark merged with the words either side of it. There are no adjacent words
+     here: the sweep is used on tab labels only (see the aspect-ratio table
+     above), and the tab list sets gap-7 = 28px, of which this consumes about
+     11px. So the ceiling does not apply and the mark can breathe.
+
+     The overshoot is deliberately lopsided — about 3x more horizontal than
+     vertical — and the first fix for the squeezed look was not. Growing both
+     axes equally traded one defect for another: the aspect-ratio table above
+     says the mark degenerates into a chip below roughly 5:1, and a symmetric
+     -0.3em took "Dictation" from 3.9:1 to 3.5:1, so the mark got roomier and
+     less like a stroke at the same time. Height is the denominator; spend the
+     overshoot on the numerator.
+
+     It is also the more faithful reading of the complaint. What looks tight
+     about an unpadded mark is that it stops exactly at the first and last
+     letter, which is the thing a hand with a highlighter never does.
+
+     The bottom stops at -0.04em rather than going further, to stay clear of the
+     pen line below — see the note on ::after. */
+  inset: -0.18em -0.55em -0.04em -0.5em;
   z-index: 0;
 
   background: linear-gradient(
@@ -124,22 +147,32 @@
 /*
  * The pen line under the highlighter.
  *
- * It is here for a reason that is not styling. `#e8f35c` against `#faf8f2` is
- * 1.14:1. A saturated yellow on white is perfectly visible to an eye — hue and
- * chroma carry it — but WCAG 2.x measures luminance alone and cannot see that,
- * so the sweep on its own can never satisfy the 3:1 required of a non-text
- * indicator. The hairline is in the accent (8.34:1 light, 7.54:1 dark) and
- * supplies the boundary the sweep cannot.
+ * It is here for a reason that is not styling. `#ffb0c4` against `#faf8f2` is
+ * 1.61:1 — as the chartreuse it replaced was 1.14:1. A saturated warm hue on
+ * near-white is perfectly visible to an eye, because hue and chroma carry it,
+ * but WCAG 2.x measures luminance alone and cannot see either, so no sweep of
+ * any colour light enough to hold dark text can satisfy the 3:1 required of a
+ * non-text indicator. The hairline is in the accent (8.34:1 light, 7.54:1 dark)
+ * and supplies the boundary the sweep cannot.
  *
  * That constraint improved the design rather than taxing it: a highlighter
  * stroke with a pen line under it is what a marked-up page actually looks like.
+ *
+ * The line sits *below* the sweep rather than under its bottom edge. They used
+ * to overlap, which cost nothing while the mark was yellow but matters now:
+ * `#6aa9f5` on `#f59ab2` is 1.19:1, so on the dark theme an overlapping line
+ * would disappear into the mark and take the 3:1 boundary with it. Separating
+ * them vertically keeps the line measured against the page, where it holds
+ * 7.54:1 — and two strokes with daylight between them is also closer to what a
+ * marked-up page looks like than one stroke with a darker edge.
  */
 .sh-sweep::after {
   content: "";
   position: absolute;
-  left: -0.1em;
-  right: -0.14em;
-  bottom: 0;
+  left: -0.48em;
+  right: -0.53em;
+  /* Clears the sweep's own -0.04em bottom by ~1px at 14px. */
+  bottom: -0.26em;
   height: 2px;
   z-index: 0;
   border-radius: 2px;

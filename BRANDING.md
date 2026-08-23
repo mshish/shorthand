@@ -14,10 +14,8 @@ the mark is a surprise against an otherwise quiet page; useful because colour is
 never decorative — it always means "this one".
 
 The page has exactly two colours, because a marked-up page has two: the
-blue-black ink the words are written in, and the yellow highlighter someone
-swept over the part that mattered. They sit opposite each other on the wheel,
-which is why highlighters are yellow and ink is blue in life — the sweep pops
-against the ink instead of competing with it.
+blue-black ink the words are written in, and the highlighter someone swept over
+the part that mattered.
 
 | Role                    | Light     | Dark      | Named for               |
 | ----------------------- | --------- | --------- | ----------------------- |
@@ -25,7 +23,7 @@ against the ink instead of competing with it.
 | `--color-text`          | `#12151f` | `#eceef4` | ink                     |
 | `--color-logo-primary`  | `#12459e` | `#6aa9f5` | ink at writing strength |
 | `--color-background-ui` | `#1e5bd6` | (same)    | ink at full strength    |
-| `--brand-highlighter`   | `#e8f35c` | `#d9e84a` | highlighter (fork-only) |
+| `--brand-highlighter`   | `#ffb0c4` | `#f59ab2` | highlighter (fork-only) |
 | `--color-mid-gray`      | `#66697a` | `#969aab` | pencil                  |
 
 This is the **third** accent. Teal shipped first and was rejected as too common.
@@ -34,12 +32,43 @@ said clerical and archival, which is what the pivot was moving away from.
 
 Blue had itself been ruled out earlier as the default accent of most software
 written this decade. That objection was to blue _alone_, and it is right — a lone
-blue accent is generic. Blue ink under a yellow highlighter is not a palette
-choice at all; it is a description of a page. The pairing is what stops it
-reading as another SaaS blue.
+blue accent is generic. Blue ink under a highlighter is not a palette choice at
+all; it is a description of a page. The pairing is what stops it reading as
+another SaaS blue.
 
 Still ruled out: green (reads success), amber and orange (spoken for by
-`--color-warning`), pink (upstream's), violet (the direction replaced).
+`--color-warning`), violet (the direction replaced).
+
+### Why the highlighter is rose and not yellow
+
+The first sweep was chartreuse `#e8f35c`, chosen as "the complement of blue,
+which is why highlighters are yellow". It was wrong twice over, and both errors
+are worth keeping written down.
+
+It is not actually the complement. `#e8f35c` sits at hue 64°, which is
+yellow-_green_; the complement of the 218° ink is nearer 38°. And the paper is
+not neutral — `#faf8f2` is a warm off-white at hue 45°. So the mark clashed with
+the page it was drawn on rather than belonging to it.
+
+Three candidates were measured against the palette's two anchors, the paper at
+45° and the ink at 218°:
+
+| Candidate            | Hue  | Verdict                                                                                                                         |
+| -------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
+| chartreuse `#e8f35c` | 64°  | off-hue from both anchors; acid against warm paper                                                                              |
+| apricot `#ffc48a`    | 30°  | inside the paper's own hue family, so it harmonises — but then differs from the page in chroma alone, at 1.46:1                 |
+| **rose `#ffb0c4`**   | 345° | warm, so it does not fight the warm paper, and 127° off the ink — a split complement. Differs from the page in hue _and_ chroma |
+
+A mark has to be a mark. Apricot is the more "correct" harmony and the weaker
+object: separated from the paper by lightness only, it reads as a tint of the
+page rather than something laid on top of it. Rose is separated on both axes,
+and it is the one that is a surprise against a quiet page — which is half the
+brief. A yellow highlighter is the least surprising object in stationery.
+
+Pink was previously listed as ruled out for being upstream Handy's accent.
+Upstream's is a magenta-violet used as a general-purpose UI accent across the
+whole app; this is a warm rose used as a background behind text, in one motif,
+in one place. They are not the same colour and they do not do the same job.
 
 ## Two tokens, because there are two jobs
 
@@ -117,32 +146,76 @@ code they explain.
 
 1. **No `mix-blend-mode: multiply`.** A highlighter is translucent, so multiply
    looks correct — and on a dark ground it is correct and fatal, because a
-   highlighter over black paper deposits nothing. `#d9e84a` multiplied by
-   `#12141a` resolves to about `#0f1208`, which put the dark label ink at
-   ~1.05:1 against its own mark. Every dark-theme mark became a black smudge.
+   highlighter over black paper deposits nothing. The then-yellow `#d9e84a`
+   multiplied by `#12141a` resolved to about `#0f1208`, which put the dark label
+   ink at ~1.05:1 against its own mark. Every dark-theme mark became a black
+   smudge.
 2. **It marks text, never a container.** On a 40px row the rotation is
    imperceptible, the gradient invisible, the radii merely "rounded" — the exact
-   flat active-state fill the direction exists to avoid, with yellow substituted
-   for blue.
+   flat active-state fill the direction exists to avoid, in a different hue.
 3. **The text must be long enough.** What governs is the rendered aspect ratio:
    running text at 10.4:1 works, a tab label at 5.2:1 works, `AI cleanup` at
    3.0:1 is weak, `Modes` at 1.9:1 is a chip, `App` at 1.2:1 is a square. Below
    about 5:1 the corner radii eat the perimeter, no straight section survives,
    and the pen line detaches along the whole bottom edge — a badge with an
    underline, not a stroke.
+4. **The overshoot is lopsided, about 3:1 horizontal to vertical.** The mark
+   originally sat _inside_ its own text box and looked squeezed; the obvious fix
+   — grow it on both axes — made it roomier and less like a stroke at the same
+   time, because height is the denominator of rule 3. Spend the overshoot on
+   width. It is also the truer reading of what looks wrong: an unpadded mark
+   stops exactly at the first and last letter, which is the one thing a hand
+   with a highlighter never does.
 
 So the sweep marks **running text and the active tab**. The sidebar marks its
 selection with an accent icon and a full-weight label against dimmed neighbours,
 which is quieter — right for a rail that is permanently on screen — and protects
 the rule: colour means _live_, not merely _selected_.
 
-The pen line under the sweep is not styling. `#e8f35c` against `#faf8f2` is
-1.14:1; a saturated yellow on white is plainly visible to an eye, but WCAG 2.x
-measures luminance alone and cannot see hue, so the sweep can never satisfy the
-3:1 required of a non-text indicator. The hairline is in the accent (8.34:1
-light, 7.54:1 dark) and supplies the boundary. The constraint improved the
-design: a highlighter stroke with a pen line under it is what a marked-up page
-actually looks like.
+The pen line under the sweep is not styling. `#ffb0c4` against `#faf8f2` is
+1.61:1 — as the chartreuse before it was 1.14:1. A saturated warm hue on
+near-white is plainly visible to an eye, but WCAG 2.x measures luminance alone
+and can see neither hue nor chroma, so no sweep light enough to carry dark text
+can ever satisfy the 3:1 required of a non-text indicator. The hairline is in
+the accent (8.34:1 light, 7.54:1 dark) and supplies the boundary. The constraint
+improved the design: a highlighter stroke with a pen line under it is what a
+marked-up page actually looks like.
+
+The line sits _below_ the sweep with about a pixel of daylight, not tucked under
+its bottom edge. That cost nothing while the mark was yellow and matters now:
+`#6aa9f5` on `#f59ab2` is 1.19:1, so an overlapping line would vanish into the
+mark on the dark theme and take the 3:1 boundary with it. Separated, the line is
+measured against the page, where it holds.
+
+## Dependent settings, and why they are a rule and not a box
+
+`src/shorthand/ui/Dependents.tsx` draws the rows a toggle unlocks: a 3px accent
+rule down the left with the rows indented beside it. A rule drawn in the margin
+next to a passage is how someone marking up a page says "this part goes with
+that part", which is why the fork's answer to grouping is a rule rather than a
+container.
+
+The two alternatives were both tried and both fail for reasons specific to this
+palette:
+
+- **A tinted fill cannot be blue.** `--color-logo-primary` is dark ink in the
+  light theme, so `bg-logo-primary` at any alpha low enough not to read as a
+  surface produces grey: 7% over `#faf8f2` resolves to `#eaebec`, a warm grey
+  indistinguishable from the fill on a Dropdown or a shortcut chip. The block
+  read as another control instead of a marked passage. Reaching an actually blue
+  tint takes ~15%, and at 15% it is a card — the thing the redesign spent forty
+  removed borders getting away from.
+- **A deep indent breaks the rows it indents.** `SettingContainer`'s horizontal
+  layout gives the label `max-w-2/3` and the control no `shrink-0`, so a long
+  description beside a wide control has no reserve. At full width the cleanup
+  hotkey's `Ctrl + Shift + Space` chip already wraps to two lines; 30px of indent
+  pushed it over the description text. The shipped indent costs 13px and takes
+  nothing off the right.
+
+Dependents are **hidden, never disabled**. That is not tidiness:
+`SettingContainer`'s `disabled` prop fades the title and stops there, so a
+"disabled" `ShortcutInput` still registers a live global hotkey for a feature
+that will not run.
 
 ## Type and geometry
 

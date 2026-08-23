@@ -77,7 +77,12 @@ export function Tabs<T extends string>({
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className="flex items-center gap-6 border-b border-mid-gray/20 px-1"
+      // gap-8 and px-3, not gap-6 and px-1. The sweep overshoots its label by
+      // ~0.5em a side (about 15px total at 14px) so the mark does not stop
+      // exactly at the word; the tab list has to leave room for that or
+      // neighbouring marks crowd each other and the first one clips the pane
+      // edge.
+      className="flex items-center gap-8 border-b border-mid-gray/20 px-3"
     >
       {tabs.map((tab) => {
         const selected = tab.id === active;
@@ -93,7 +98,12 @@ export function Tabs<T extends string>({
             aria-controls={`tabpanel-${tab.id}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            className={`cursor-pointer bg-transparent border-0 pb-2 pt-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary ${
+            // pt-2 pb-3, not pt-1 pb-2. The sweep extends 0.18em above the
+            // label and its pen line sits 0.26em below, so at pt-1 the mark
+            // was clipped by the button's own top edge and the pen line
+            // collided with the tab list's bottom border. The padding is what
+            // gives the mark somewhere to be.
+            className={`cursor-pointer bg-transparent border-0 pb-3 pt-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary ${
               selected
                 ? "font-semibold"
                 : "font-medium text-mid-gray hover:text-text"
