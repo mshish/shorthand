@@ -169,9 +169,7 @@ await settings.waitForFunction(() => {
   const title = [...document.querySelectorAll("h3")].find(
     (node) => node.textContent === "Enable dictation",
   );
-  return (
-    title?.closest("div.px-4")?.querySelector("input")?.checked === false
-  );
+  return title?.closest("div.px-4")?.querySelector("input")?.checked === false;
 });
 
 await settings.getByRole("tab", { name: "Meetings" }).click();
