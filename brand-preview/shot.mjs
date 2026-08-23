@@ -9,18 +9,20 @@
  * Run this with node, not bun — Playwright's browser launch hangs under bun on
  * Windows. If chromium is missing: bun x playwright install chromium
  *
- * Six shots, from two pages:
+ * Seven shots, from two pages:
  *
  *   light.png / dark.png            the component gallery (gallery.html)
  *   settings-light.png              the real settings window, Modes, Advanced off
  *   settings-dark.png               the same, dark
  *   settings-advanced.png           the same, Advanced on
  *   settings-dictation.png          the same, Dictation tab
+ *   settings-cancel.png             the same, Meetings tab, Advanced on, with
+ *                                   dictation switched off
  *
  * The settings states are reached by clicking the page — the advanced switch,
- * the tab — rather than by seeding state. A screenshot of state that was
- * injected proves the renderer works; a screenshot of state that was clicked
- * into proves the control does.
+ * the tab, the toggle — rather than by seeding state. A screenshot of state
+ * that was injected proves the renderer works; a screenshot of state that was
+ * clicked into proves the control does.
  */
 
 import { fileURLToPath } from "node:url";
@@ -102,15 +104,18 @@ const settings = await openPage(SETTINGS_VIEWPORT, "index.html");
 // The app opens on Modes, the first registered section — asserted rather than
 // assumed, since the shots below are all of that section.
 await settings.waitForSelector('nav button[aria-current="page"] >> text=Modes');
-await settings.getByRole("tab", { name: "Transcription" }).waitFor();
+await settings.getByRole("tab", { name: "Meetings" }).waitFor();
 
 const advancedSwitch = settings.getByRole("switch");
-const expectAdvanced = async (expected) => {
-  const actual = await advancedSwitch.getAttribute("aria-checked");
-  if (actual !== String(expected)) {
-    throw new Error(`advanced switch is ${actual}, expected ${expected}`);
-  }
-};
+// Waits for the state rather than reading it once. A single read straight
+// after the click is a race with React's next paint — it passed for a while
+// and then failed intermittently once the reveal started doing more work on
+// click. The wait still fails loudly (and quickly) if the control genuinely
+// does not toggle, which is the assertion that was wanted.
+const expectAdvanced = (expected) =>
+  settings.waitForSelector(`[role="switch"][aria-checked="${expected}"]`, {
+    timeout: 5000,
+  });
 
 await expectAdvanced(false);
 for (const theme of ["light", "dark"]) {
@@ -129,6 +134,54 @@ await advancedSwitch.click();
 await expectAdvanced(false);
 await settings.getByRole("tab", { name: "Dictation" }).click();
 await shoot(settings, "settings-dictation");
+
+// --- Cancel, which only exists with dictation switched off -----------------
+//
+// Cancel is hidden while *either* mode has push-to-talk on (`anyPushToTalk`
+// in `ModesSettings.tsx`), and dictation ships with push_to_talk true. The
+// mock deliberately keeps `dictation.enabled` true so the Dictation shot
+// above photographs live rows instead of a column of disabled ones — which
+// means that in every shot before this one, Cancel is suppressed by a mode a
+// default install has switched off. Without this shot the harness cannot
+// photograph the row at all.
+//
+// It runs last because clicking that toggle mutates the mock's SETTINGS, and
+// every shot above wants dictation on.
+//
+// The previous shot left us on the Dictation tab, which is where the toggle
+// is.
+const enableDictation = settings
+  // The row's title is a sibling <h3> rather than a <label> wrapping the
+  // input, so the checkbox has no accessible name and `getByRole("checkbox",
+  // { name })` cannot reach it. Anchor on the visible title and walk to the
+  // checkbox in the same row.
+  .locator('h3:text-is("Enable dictation")')
+  .locator('xpath=ancestor::div[.//input[@type="checkbox"]][1]')
+  .locator('input[type="checkbox"]');
+// `force` because `ToggleSwitch` renders its input `sr-only` — a 1px clipped
+// box, which Playwright reads as not visible. The click still lands on the
+// real control, which is what makes this a shot of state that was clicked
+// into rather than seeded.
+await enableDictation.click({ force: true });
+// Waits for the state rather than reading it once, for the same reason
+// `expectAdvanced` does.
+await settings.waitForFunction(() => {
+  const title = [...document.querySelectorAll("h3")].find(
+    (node) => node.textContent === "Enable dictation",
+  );
+  return (
+    title?.closest("div.px-4")?.querySelector("input")?.checked === false
+  );
+});
+
+await settings.getByRole("tab", { name: "Meetings" }).click();
+await advancedSwitch.click();
+await expectAdvanced(true);
+// The row this shot exists for, asserted before it is photographed. Without
+// this a regression in the gate would quietly produce a picture of its own
+// absence, which is the failure this whole shot was added to catch.
+await settings.getByText("Shared by both modes").waitFor({ timeout: 5000 });
+await shoot(settings, "settings-cancel");
 
 await settings.close();
 await browser.close();

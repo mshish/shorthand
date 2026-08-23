@@ -121,7 +121,7 @@ const SETTINGS: AppSettings = {
       "ctrl+shift+space",
     ),
   },
-  push_to_talk: true,
+  push_to_talk: false,
   audio_feedback: false,
   audio_feedback_volume: 1.0,
   sound_theme: "marimba",
@@ -129,7 +129,7 @@ const SETTINGS: AppSettings = {
   autostart_enabled: false,
   update_checks_enabled: true,
   show_whats_new_on_update: true,
-  whats_new_last_seen_version: "0.7.0",
+  whats_new_last_seen_version: "0.9.5",
   selected_model: "parakeet-tdt-0.6b-v3",
   onboarding_completed: true,
   always_on_microphone: false,
@@ -138,7 +138,7 @@ const SETTINGS: AppSettings = {
   clamshell_microphone: null,
   selected_output_device: null,
   system_audio_enabled: false,
-  follow_stream_enabled: false,
+  follow_stream_enabled: true,
   system_audio_device: null,
   translate_to_english: false,
   selected_language: "auto",
@@ -158,11 +158,23 @@ const SETTINGS: AppSettings = {
   auto_submit_key: "enter",
   post_process_enabled: false,
   post_process_provider_id: "openai",
+  // The Windows arm of `default_post_process_providers()`, in its order. Apple
+  // Intelligence is the one entry deliberately absent: it is pushed only under
+  // `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`, and OS_TYPE
+  // above is Windows.
   post_process_providers: [
     {
       id: "openai",
       label: "OpenAI",
       base_url: "https://api.openai.com/v1",
+      allow_base_url_edit: false,
+      models_endpoint: "/models",
+      supports_structured_output: true,
+    },
+    {
+      id: "zai",
+      label: "Z.AI",
+      base_url: "https://api.z.ai/api/paas/v4",
       allow_base_url_edit: false,
       models_endpoint: "/models",
       supports_structured_output: true,
@@ -183,9 +195,63 @@ const SETTINGS: AppSettings = {
       models_endpoint: "/models",
       supports_structured_output: false,
     },
+    {
+      id: "groq",
+      label: "Groq",
+      base_url: "https://api.groq.com/openai/v1",
+      allow_base_url_edit: false,
+      models_endpoint: "/models",
+      supports_structured_output: false,
+    },
+    {
+      id: "cerebras",
+      label: "Cerebras",
+      base_url: "https://api.cerebras.ai/v1",
+      allow_base_url_edit: false,
+      models_endpoint: "/models",
+      supports_structured_output: true,
+    },
+    {
+      id: "bedrock_mantle",
+      label: "AWS Bedrock (Mantle)",
+      base_url: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      allow_base_url_edit: false,
+      models_endpoint: "/models",
+      supports_structured_output: true,
+    },
+    // Custom always comes last, and is the only one whose base URL is editable.
+    {
+      id: "custom",
+      label: "Custom",
+      base_url: "http://localhost:11434/v1",
+      allow_base_url_edit: true,
+      models_endpoint: "/models",
+      supports_structured_output: false,
+    },
   ],
-  post_process_api_keys: { openai: "", openrouter: "", anthropic: "" },
-  post_process_models: { openai: "", openrouter: "", anthropic: "" },
+  // Both maps are keyed off the provider list above, the same way
+  // `default_post_process_api_keys()` and `default_post_process_models()` are
+  // built by iterating it. Every value is empty on a fresh install.
+  post_process_api_keys: {
+    openai: "",
+    zai: "",
+    openrouter: "",
+    anthropic: "",
+    groq: "",
+    cerebras: "",
+    bedrock_mantle: "",
+    custom: "",
+  },
+  post_process_models: {
+    openai: "",
+    zai: "",
+    openrouter: "",
+    anthropic: "",
+    groq: "",
+    cerebras: "",
+    bedrock_mantle: "",
+    custom: "",
+  },
   post_process_prompts: [
     {
       id: "default_improve_transcriptions",
@@ -214,7 +280,7 @@ const SETTINGS: AppSettings = {
   transcribe_gpu_device: -1,
   extra_recording_buffer_ms: 0,
   vad_enabled: true,
-  overlay_style: "live",
+  overlay_style: "minimal",
   show_all_settings: false,
   dictation: {
     enabled: true,
@@ -230,6 +296,10 @@ const SETTINGS: AppSettings = {
     save_transcripts: false,
     post_process_enabled: false,
     post_process_selected_prompt_id: null,
+    system_audio_enabled: false,
+    follow_stream_enabled: false,
+    post_process_provider_id: "openai",
+    post_process_model: null,
   },
 };
 
@@ -434,7 +504,7 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   "plugin:updater|check": () => null,
   "plugin:os|locale": () => "en-US",
   "plugin:os|hostname": () => "preview",
-  "plugin:app|version": () => "0.7.0-preview",
+  "plugin:app|version": () => "0.9.5-preview",
   "plugin:app|name": () => "Shorthand",
   "plugin:macos-permissions|check_accessibility_permission": () => true,
   "plugin:macos-permissions|check_microphone_permission": () => true,
