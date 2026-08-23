@@ -32,16 +32,13 @@ export const AICleanupSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-8">
-      {/* TODO(copy): no existing key says what this note needs to say — that
-          the connection and the prompt library below are shared by both
-          modes, while switching cleanup on and picking which prompt to run
-          are per-mode choices made in the Modes tabs. The closest existing
-          string is the dictation hint, which points at this section from the
-          other direction and so reads backwards here. Replacement copy is a
-          fork-only string and belongs in `FORK_ONLY_STRINGS` in
-          `src/shorthand/branding.ts`, not in a locale file. */}
+      {/* Says the one thing that is not obvious from the rows below: what is
+          shared and what is not. The connection and the prompt library are
+          global; whether cleanup runs at all, and which prompt it uses, are
+          per-mode and set under Modes. A fork-only string, so it lives in
+          FORK_ONLY_STRINGS rather than in a locale file. */}
       <p className="px-1 text-xs text-mid-gray">
-        {t("settings.dictation.postProcessing.hint")}
+        {t("settings.aiCleanup.sharedNote")}
       </p>
 
       <Sheet title={t("settings.postProcessing.api.title")}>
