@@ -1,318 +1,322 @@
 # Shorthand branding
 
-How the fork looks different from upstream Handy, where each decision lives, and
-how to regenerate the artwork.
+How the fork looks different from upstream Handy, why each decision exists,
+where it lives, and how to regenerate the artwork.
 
 ## The direction
 
-Handy is pink on warm grey, with a waving hand for a logo. Shorthand is **a
-marked-up transcript**.
+Handy is pink on warm grey, with a waving hand for a logo. Shorthand turns a
+fleeting voice into a written thing: **the bird carries the thought, and the
+fountain pen commits it**.
 
-A transcript is plain until someone marks it. Almost the whole UI is paper and
-ink; colour appears only on the thing that is currently live. Playful because
-the mark is a surprise against an otherwise quiet page; useful because colour is
-never decorative — it always means "this one".
+The approved clay artwork makes local software feel handmade and quietly
+helpful. Its small silhouette reduces the same story to a bird-and-pen contour
+when the material detail disappears. The UI keeps the useful discipline of the
+earlier “marked-up transcript” direction — warm paper, calm ink, one live mark —
+but now takes its colour and display character from the artwork rather than from
+an independent stationery metaphor.
 
-The page has exactly two colours, because a marked-up page has two: the
-blue-black ink the words are written in, and the highlighter someone swept over
-the part that mattered.
+| Role                      | Light     | Dark      | Why                                             |
+| ------------------------- | --------- | --------- | ----------------------------------------------- |
+| `--color-background`      | `#FAF5EA` | `#111820` | warm paper, restrained for long reading         |
+| `--color-text`            | `#14202B` | `#F6F1E8` | blue-black / cream ink, never clinical extremes |
+| `--color-logo-primary`    | `#0B5F8A` | `#63B7D6` | the bird’s characterful ocean blue              |
+| `--color-logo-stroke`     | `#084A6C` | `#92D4E7` | the accent’s paired edge or stroke              |
+| `--color-background-ui`   | `#2E6F9E` | (same)    | primary-action fill carrying white text         |
+| `--color-mid-gray`        | `#5C6770` | `#AAB4BE` | secondary text                                  |
+| `--brand-highlighter`     | `#F3673C` | (same)    | the one live-now background                     |
+| `--brand-highlighter-ink` | `#14202B` | `#111820` | dark ink carried by the coral                   |
 
-| Role                    | Light     | Dark      | Named for               |
-| ----------------------- | --------- | --------- | ----------------------- |
-| `--color-background`    | `#faf8f2` | `#12141a` | paper                   |
-| `--color-text`          | `#12151f` | `#eceef4` | ink                     |
-| `--color-logo-primary`  | `#12459e` | `#6aa9f5` | ink at writing strength |
-| `--color-background-ui` | `#1e5bd6` | (same)    | ink at full strength    |
-| `--brand-highlighter`   | `#ffb0c4` | `#f59ab2` | highlighter (fork-only) |
-| `--color-mid-gray`      | `#66697a` | `#969aab` | pencil                  |
+The page background is deliberately more neutral than the raster’s peach
+lighting: the raster describes clay under light; the token has to carry an
+interface for hours. The text pair measures 15.19:1 and 15.88:1 against its own
+grounds, keeping long reading calm without pure black or white.
 
-This is the **third** accent. Teal shipped first and was rejected as too common.
-Copying-pencil violet replaced it, and was rejected with the whole direction: it
-said clerical and archival, which is what the pivot was moving away from.
+Coral is the living, tactile counterpoint already present in the bird’s wing
+and the approved underline. It marks the one thing happening _now_; it is
+explicitly neither a warning nor a success signal.
 
-Blue had itself been ruled out earlier as the default accent of most software
-written this decade. That objection was to blue _alone_, and it is right — a lone
-blue accent is generic. Blue ink under a highlighter is not a palette choice at
-all; it is a description of a page. The pairing is what stops it reading as
-another SaaS blue.
+### Four accent directions, not one inevitable answer
 
-Still ruled out: green (reads success), amber and orange (spoken for by
-`--color-warning`), violet (the direction replaced).
+Keep the sequence. Each direction was reasonable in its own context, and losing
+that context is how rejected work gets proposed again.
 
-### Why the highlighter is rose and not yellow
+| Direction                   | Why it was chosen                                     | What happened                                                               |
+| --------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
+| teal                        | inherited, friendly, familiar                         | rejected as too common — the default “friendly tech” accent                 |
+| copying-pencil violet       | archival, indelible, a real stationery reference      | rejected because it read clerical and bureaucratic                          |
+| blue ink + rose highlighter | made “a marked-up transcript” literal and non-generic | shipped successfully; superseded by approved artwork, not killed by a fault |
+| ocean blue + coral          | derived from the bird, wing and underline             | approved pack; the current system                                           |
 
-The first sweep was chartreuse `#e8f35c`, chosen as "the complement of blue,
-which is why highlighters are yellow". It was wrong twice over, and both errors
-are worth keeping written down.
+Blue alone remains generic. What rescues the current blue is that it is not an
+arbitrary software accent: its hue is shifted toward the bird’s ocean blue and
+paired with the coral already living in the wing and underline.
 
-It is not actually the complement. `#e8f35c` sits at hue 64°, which is
-yellow-_green_; the complement of the 218° ink is nearer 38°. And the paper is
-not neutral — `#faf8f2` is a warm off-white at hue 45°. So the mark clashed with
-the page it was drawn on rather than belonging to it.
+The sweep itself also passed through chartreuse and apricot before rose, and
+that history still matters. Chartreuse `#E8F35C` was sold as “the complement of
+blue” but was yellow-green, fought the warm paper, and made the most predictable
+possible stationery object. Apricot `#FFC48A` belonged to the paper’s hue
+family so completely that it read as a tint _of_ the page rather than a mark
+_on_ it. Rose solved both and shipped. Coral replaced it only because the
+approved artwork supplied a stronger source.
 
-Three candidates were measured against the palette's two anchors, the paper at
-45° and the ink at 218°:
-
-| Candidate            | Hue  | Verdict                                                                                                                         |
-| -------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
-| chartreuse `#e8f35c` | 64°  | off-hue from both anchors; acid against warm paper                                                                              |
-| apricot `#ffc48a`    | 30°  | inside the paper's own hue family, so it harmonises — but then differs from the page in chroma alone, at 1.46:1                 |
-| **rose `#ffb0c4`**   | 345° | warm, so it does not fight the warm paper, and 127° off the ink — a split complement. Differs from the page in hue _and_ chroma |
-
-A mark has to be a mark. Apricot is the more "correct" harmony and the weaker
-object: separated from the paper by lightness only, it reads as a tint of the
-page rather than something laid on top of it. Rose is separated on both axes,
-and it is the one that is a surprise against a quiet page — which is half the
-brief. A yellow highlighter is the least surprising object in stationery.
-
-Pink was previously listed as ruled out for being upstream Handy's accent.
-Upstream's is a magenta-violet used as a general-purpose UI accent across the
-whole app; this is a warm rose used as a background behind text, in one motif,
-in one place. They are not the same colour and they do not do the same job.
+Still ruled out by role: green reads success; amber and orange belong to
+`--color-warning`; violet belongs to the rejected clerical direction.
 
 ## Two tokens, because there are two jobs
 
 This is the part most likely to be broken by a well-meaning change.
 
-`--color-logo-primary` is used **96 times across 34 files**, in four
-incompatible roles: a light tint behind dark text (`/20`–`/30`), a solid fill
-under white text, a foreground colour (`text-logo-primary`), and a focus ring.
+`--color-logo-primary` is an existing, widely used accent token. It serves
+foreground text, icon fill, focus rings, selected controls, solid fills and pale
+tints. Its foreground and ring jobs force it to flip by theme: the current pair
+measures 6.40:1 on light paper and 7.89:1 on the dark ground. Keep
+`--color-logo-stroke` paired with the accent from the same theme; it is the
+accent’s partner edge, not body ink.
 
-- **It must be theme-flipping.** The foreground and focus-ring roles need
-  ≥4.5:1 and ≥3:1 against the background, so it has to be dark on paper and
-  light on night. `src/styles/theme.css` already resolves it from a
-  `--light-` / `--dark-` pair.
-- **The old rule that it "must stay a light tint in both themes" was wrong.** At
-  20–30% over paper every hue blends to a pale wash, so the tint role constrains
-  nothing. Only the _solid_ usages bind.
+`--brand-highlighter` is fork-only because the sweep cannot mean _live_ if it
+shares a token with every spinner, progress bar, badge and selected control.
+Coral is invariant; its ink flips. It is a background only — never body text,
+and never a fill carrying white text. Dark ink on it measures 5.36:1 in light
+and 5.80:1 in dark.
 
-`--brand-highlighter` is new and fork-only, and exists so the sweep does not have
-to be `--color-logo-primary`. "Colour appears only on the live thing" is
-unachievable by substituting a token that 34 files already use for spinners,
-progress bars and badges. Giving the mark its own token and quieting the general
-accent is what makes the idea deliverable.
-
-What that yields is an **accent hierarchy**, not a strict semantic rule:
+That yields an accent hierarchy, not a universal semantic system:
 
 - the **highlighter** means _live_, and marks nothing else;
-- the **ink accent** means _set_ — a checked toggle, a primary button, a
-  selected item. Conventional, and left conventional.
+- the **ink accent** means _set_ — checked, selected, primary. Conventional,
+  and deliberately left conventional.
 
-## Contrast, and the window that picked the blue
+## Contrast and theme-specific values
 
-`--color-background-ui` has to carry white text _and_ separate from both grounds
-as a non-text fill. Those pull opposite ways and leave a narrow luminance
-window: at least 0.119 to clear 3:1 against the dark ground, at most 0.183 to
-keep white at 4.5:1.
+`--color-background-ui` must carry white text and remain a visible non-text fill
+against both grounds. The invariant `#2E6F9E` measures 5.41:1 under white text,
+4.97:1 against light paper, and 3.30:1 against the dark ground. It is also the
+tray’s one-colour fallback: 5.41:1 on white and 3.88:1 on black.
 
-A deep navy cannot reach it at all. Sapphire `#0f52ba` has luminance 0.097, so
-it can never hit 3:1 against _any_ dark background, however dark you make it.
-Registrar `#12459e`, quink `#1749c0` and cobalt `#2050c8` all fail the same way
-at 2.1–2.7:1. `#1e5bd6` sits inside the window. So "vibrant, not too bright" was
-not a preference bent around the maths — it is the only band that works.
+`--color-mid-gray` cannot be a single value. Secondary text has to become darker
+on light paper and lighter on the dark ground; one grey cannot move in both
+directions while retaining the required 4.5:1 contrast. The pack therefore
+supplies a pair, measuring 5.32:1 and 8.49:1. Upstream declares the active token
+once, so `src/shorthand/brand/theme.css` mirrors upstream’s theme-selection
+blocks to resolve it correctly.
 
-`--color-mid-gray` cannot be a single value. Clearing 4.5:1 against `#faf8f2`
-needs luminance ≤0.17; clearing it against `#12141a` needs ≥0.203. There is no
-overlap — an exhaustive search of all 256 greys finds none, the best worst-case
-being `#777777` at 4.17:1. Upstream declares it once, so `brand/theme.css` adds
-theme-selection blocks mirroring upstream's own.
+## The mark and lockup
 
-Three upstream sites put white on `bg-logo-primary` and `Badge`'s `primary`
-variant sets a background with no foreground. Both fail today and fail worse
-against a dark accent; both are fixed with one-word edits.
+The mark is the approved one-colour outline of a bird perched on a fountain pen.
+The detailed clay artwork tells the story at large sizes; the silhouette keeps
+the bird-and-pen contour when detail disappears. It has four paths, and two use
+`fill-rule="evenodd"` to punch counters through the bird’s body and pen barrel.
+It fills with `currentColor`, so one component can inherit ink in the UI and be
+rasterised into each tray treatment without owning a themed colour.
 
-## The mark
+The previous mark was a lowercase “s” written with a pointed pen. SVG cannot
+vary `stroke-width` along a path, so its visible stroke had to be an outline: a
+spine offset on both sides by a width profile, producing roughly 200
+machine-derived coordinates. That was why `scripts/gen-brand-mark.ts` existed.
+The reason disappeared with the old mark, so the generator disappeared too.
 
-A lowercase "s" written with a pointed pen — thinning to nothing at the entry,
-the waist and the exit. In the wordmark it stands in for the initial S rather
-than sitting beside the word: a logo bug next to "Shorthand" would put two S's in
-the lockup and say nothing, while substituting the written stroke for the
-typeset letter says the product's whole idea in one move.
+The new mark is approved artwork, not editable geometry. `mark.paths.ts` and
+`mark.svg` are transcribed from `brand-assets/mark-silhouette.svg`. If the
+artwork changes, re-transcribe it; do not hand-tune either copy into a fork of
+the source of truth.
 
-SVG cannot vary `stroke-width` along a path, so the visible shape has to be an
-outline — the spine offset to both sides by a width profile. That is ~200
-coordinates that would need re-deriving by hand every time the curve moved, so it
-is generated instead.
+The old `[mark]horthand` lockup substituted the written “s” for the initial S.
+Its argument was coherent — a separate bug beside “Shorthand” would print two
+S’s — but the approved artwork settled the question differently. The shipped
+lockup stacks the bird and pen above the complete word **Shorthand**, with a
+coral sweep beneath, matching the composition of the raster.
 
-The mark survived the pivot unchanged. It fills with `currentColor`, so only its
-colour moved.
+The word remains live type rather than outlines, so it stays crisp at any size,
+follows the theme’s ink, and never needs re-exporting. `brand-assets/FONT.md`’s
+`[mark]horthand` table now governs only the type decisions that survived:
+weight 650, `opsz 72`, `SOFT 75`, `WONK 1`, and `-0.015em` tracking. Its old
+mark-height, kerning and baseline-nudge measurements do not apply to the stacked
+lockup.
 
 ## The sweep, and the rules learned by looking
 
-The highlighter sweep is the one motif. Three rules govern it, and all three were
-found by building it and screenshotting both themes — none would have survived
-review alone. They are documented in `src/shorthand/brand/marks.css` beside the
-code they explain.
+The coral sweep is the motif carried forward from “a marked-up transcript”. Its
+four rules were found by building it and screenshotting both themes; none is a
+decorative preference.
 
-1. **No `mix-blend-mode: multiply`.** A highlighter is translucent, so multiply
-   looks correct — and on a dark ground it is correct and fatal, because a
-   highlighter over black paper deposits nothing. The then-yellow `#d9e84a`
-   multiplied by `#12141a` resolved to about `#0f1208`, which put the dark label
-   ink at ~1.05:1 against its own mark. Every dark-theme mark became a black
-   smudge.
-2. **It marks text, never a container.** On a 40px row the rotation is
-   imperceptible, the gradient invisible, the radii merely "rounded" — the exact
-   flat active-state fill the direction exists to avoid, in a different hue.
-3. **The text must be long enough.** What governs is the rendered aspect ratio:
-   running text at 10.4:1 works, a tab label at 5.2:1 works, `AI cleanup` at
-   3.0:1 is weak, `Modes` at 1.9:1 is a chip, `App` at 1.2:1 is a square. Below
-   about 5:1 the corner radii eat the perimeter, no straight section survives,
-   and the pen line detaches along the whole bottom edge — a badge with an
-   underline, not a stroke.
-4. **The overshoot is lopsided, about 3:1 horizontal to vertical.** The mark
-   originally sat _inside_ its own text box and looked squeezed; the obvious fix
-   — grow it on both axes — made it roomier and less like a stroke at the same
-   time, because height is the denominator of rule 3. Spend the overshoot on
-   width. It is also the truer reading of what looks wrong: an unpadded mark
-   stops exactly at the first and last letter, which is the one thing a hand
-   with a highlighter never does.
+1. **No `mix-blend-mode: multiply`.** A physical highlighter is translucent,
+   but multiply over a dark ground deposits almost nothing. In the then-yellow
+   experiment, `#D9E84A` multiplied by `#12141A` became about `#0F1208` and put
+   the label at roughly 1.05:1 against its own mark. The dark-theme sweep became
+   a black smudge.
+2. **Mark text, never a container.** On a 40px row, rotation disappears,
+   gradient unevenness disappears, and asymmetric radii become merely rounded.
+   The result is the same flat rectangular active fill the motif exists to
+   avoid, only coral.
+3. **The text must be long enough.** Rendered aspect ratio governs the result:
+   running text at 10.4:1 works; a tab at 5.2:1 works; `AI cleanup` at 3.0:1 is
+   weak; `Modes` at 1.9:1 is a chip; `App` at 1.2:1 is a square. Below roughly
+   5:1 the radii consume the perimeter, no straight section survives, and the
+   pen line detaches into a second object.
+4. **Overshoot is lopsided, about 3:1 horizontal to vertical.** Growing both
+   axes makes the mark roomier but reduces its aspect ratio. Height is the
+   denominator; spend the overshoot on width. A hand also overshoots the first
+   and last letter, not the line height.
 
-So the sweep marks **running text and the active tab**. The sidebar marks its
-selection with an accent icon and a full-weight label against dimmed neighbours,
-which is quieter — right for a rail that is permanently on screen — and protects
-the rule: colour means _live_, not merely _selected_.
+Running text and active tabs are eligible; the current implementation uses the
+sweep on the active tab. The sidebar instead uses an accent icon and full-weight
+label against dimmed neighbours. That is quieter for a permanent rail and
+protects the distinction between _live_ and merely _selected_.
 
-The pen line under the sweep is not styling. `#ffb0c4` against `#faf8f2` is
-1.61:1 — as the chartreuse before it was 1.14:1. A saturated warm hue on
-near-white is plainly visible to an eye, but WCAG 2.x measures luminance alone
-and can see neither hue nor chroma, so no sweep light enough to carry dark text
-can ever satisfy the 3:1 required of a non-text indicator. The hairline is in
-the accent (8.34:1 light, 7.54:1 dark) and supplies the boundary. The constraint
-improved the design: a highlighter stroke with a pen line under it is what a
-marked-up page actually looks like.
+The pen hairline below the sweep is not styling. Coral against light paper is
+2.83:1, short of the 3:1 non-text floor, so the hairline remains load-bearing in
+light mode. Coral against the dark ground is 5.80:1 and clears the floor on its
+own. The line stays in both themes because one motif that changes construction
+with the theme is worse than one that is belt-and-braces on one side.
 
-The line sits _below_ the sweep with about a pixel of daylight, not tucked under
-its bottom edge. That cost nothing while the mark was yellow and matters now:
-`#6aa9f5` on `#f59ab2` is 1.19:1, so an overlapping line would vanish into the
-mark on the dark theme and take the 3:1 boundary with it. Separated, the line is
-measured against the page, where it holds.
+The line sits below the sweep with about a pixel of daylight. Dark-theme accent
+on coral is only 1.36:1, so tucking the line under the sweep’s edge would make it
+disappear into the mark. Separated, it is measured against the page, where the
+accent holds 7.89:1. It also looks more like a highlighter stroke with a pen line
+under it than one stroke with a darker edge.
 
-## Dependent settings, and why they are a rule and not a box
+## Dependent settings: a rule, not a box
 
-`src/shorthand/ui/Dependents.tsx` draws the rows a toggle unlocks: a 3px accent
-rule down the left with the rows indented beside it. A rule drawn in the margin
-next to a passage is how someone marking up a page says "this part goes with
-that part", which is why the fork's answer to grouping is a rule rather than a
-container.
+`src/shorthand/ui/Dependents.tsx` draws rows unlocked by a toggle as a 3px
+accent rule in the margin with a small indent. A margin rule is how a marked-up
+page says “this part belongs with that part”; another container is not.
 
-The two alternatives were both tried and both fail for reasons specific to this
-palette:
+Both alternatives were tried:
 
-- **A tinted fill cannot be blue.** `--color-logo-primary` is dark ink in the
-  light theme, so `bg-logo-primary` at any alpha low enough not to read as a
-  surface produces grey: 7% over `#faf8f2` resolves to `#eaebec`, a warm grey
-  indistinguishable from the fill on a Dropdown or a shortcut chip. The block
-  read as another control instead of a marked passage. Reaching an actually blue
-  tint takes ~15%, and at 15% it is a card — the thing the redesign spent forty
-  removed borders getting away from.
-- **A deep indent breaks the rows it indents.** `SettingContainer`'s horizontal
-  layout gives the label `max-w-2/3` and the control no `shrink-0`, so a long
-  description beside a wide control has no reserve. At full width the cleanup
-  hotkey's `Ctrl + Shift + Space` chip already wraps to two lines; 30px of indent
-  pushed it over the description text. The shipped indent costs 13px and takes
-  nothing off the right.
+- A low-alpha accent fill becomes another neutral control surface before it
+  becomes recognisably blue. Raising the alpha enough to show blue turns the
+  group into a card — the object the redesign removed.
+- A deep indent takes width from `SettingContainer`’s already constrained
+  label/control layout. The cleanup hotkey was the failure case: 30px pushed
+  its shortcut chip over the description. The shipped indent costs 13px and
+  takes nothing from the right edge.
 
-Dependents are **hidden, never disabled**. That is not tidiness:
-`SettingContainer`'s `disabled` prop fades the title and stops there, so a
-"disabled" `ShortcutInput` still registers a live global hotkey for a feature
-that will not run.
+Dependents are **hidden, never disabled**. `SettingContainer`’s `disabled` prop
+fades the title and stops there; a “disabled” `ShortcutInput` can still register
+a live global hotkey for a feature that will not run.
 
 ## Type and geometry
 
-**Atkinson Hyperlegible Next** for the UI, **Atkinson Hyperlegible Mono** for
-paths, shortcuts and logs, self-hosted through `@fontsource`. Drawn by the
-Braille Institute so characters cannot be confused with one another — its whole
-thesis is legibility of the written record, which is what this app produces. It
-carries warmth and quirk without being a novelty face, which matters because a UI
-this achromatic cannot carry personality in colour.
+**Atkinson Hyperlegible Next remains the UI text face.** The Braille Institute
+drew it so characters resist confusion, which suits an application whose output
+is a written record. The earlier rejection of Fraunces was specific and still
+correct: a serif at 13px setting-row labels is a legibility bet a transcription
+app should not take.
 
-Self-hosting is not optional: the app works offline, and a webfont fetched at
-runtime would leave the UI in a fallback face exactly when it can't reach the
-network.
+The approved artwork did not overturn that objection; it scoped Fraunces to the
+job it is good at. **Fraunces Variable is display-only** — wordmark, headings,
+and the onboarding/About lockup — using `--brand-font-display`, weight 650 and
+the pack’s optical-size, softness and wonk settings. It never replaces
+`--font-sans` or `--default-font-family`.
 
-Ruled out: Inter and Geist (the decade's default), Nunito and Quicksand (rounded
-and friendly is generic playful), Fraunces (a serif at 13px row labels is a
-legibility bet a transcription app should not take).
+**Source Code Pro Variable** replaces Atkinson Hyperlegible Mono for transcripts
+and time-aligned text through `--brand-font-mono`. All three faces are
+self-hosted through Fontsource. Self-hosting is load-bearing: the app works
+offline, so a runtime webfont would fail exactly when the application cannot
+reach the network.
 
-**Geometry splits rather than scaling.** The previous direction halved the radius
-scale for crisp ledger corners. "Containers are paper, marks are hand-made" wants
-the opposite: containers sit near upstream's values, and the fork's own marks use
-full rounding, applied in `marks.css`.
+Still ruled out for UI text: Inter and Geist (the decade’s default), Nunito and
+Quicksand (generic rounded friendliness), and Fraunces at setting-row size.
+
+**Geometry splits rather than scaling.** Containers stay near upstream’s radius
+values; fork-owned marks use full rounding in `marks.css`. Containers are paper,
+marks are hand-made.
 
 **Containers lose their borders.** `src/shorthand/ui/Sheet.tsx` replaces
-upstream's `SettingsGroup` in fork sections: same children, no card. The settings
-window carries roughly forty of those borders and none separates anything that a
-heading and a hairline do not separate better. It is a new file rather than an
-edit so upstream's own screens keep their component and a restyle upstream still
-merges cleanly.
+upstream’s `SettingsGroup` in fork sections: same children, no card. The settings
+window had roughly forty borders and none separated anything a heading and
+hairline did not separate better. A new fork file preserves upstream’s component
+and keeps future merges cheap.
 
 ## Where it lives
 
-Everything fork-specific is under `src/shorthand/brand/`:
+The approved source pack is in `brand-assets/`:
 
-| File                    | What it is                                                        |
-| ----------------------- | ----------------------------------------------------------------- |
-| `theme.css`             | Palette, type, radius. Token values, plus theme-selection blocks. |
-| `marks.css`             | The sweep, its animation, the reduced-motion rule. All selectors. |
-| `ShorthandMark.tsx`     | The mark, filled with `currentColor`.                             |
-| `ShorthandWordmark.tsx` | The lockup, set in the app's own type.                            |
-| `mark.generated.ts`     | Generated path data. Do not edit.                                 |
-| `mark.svg`              | The same path as a standalone file, for the icon generator.       |
+| File                  | Authority                                                      |
+| --------------------- | -------------------------------------------------------------- |
+| `direction.md`        | the bird/pen story and why each colour exists                  |
+| `colours.md`          | production token values, usage rules and measured WCAG ratios  |
+| `FONT.md`             | Fraunces, Source Code Pro and the surviving live-type settings |
+| `mark-silhouette.svg` | source of truth for the one-colour mark                        |
+
+The fork-owned implementation is in `src/shorthand/brand/`:
+
+| File                    | What it is                                                            |
+| ----------------------- | --------------------------------------------------------------------- |
+| `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection      |
+| `marks.css`             | The sweep, its animation and reduced-motion rule; all brand selectors |
+| `ShorthandMark.tsx`     | Four-path mark component, filled with `currentColor`                  |
+| `ShorthandWordmark.tsx` | Stacked live-type lockup                                              |
+| `mark.paths.ts`         | Path data transcribed from the approved silhouette                    |
+| `mark.svg`              | Standalone approved silhouette read by the icon generator             |
 
 `theme.css` re-declares tokens upstream and Tailwind already define. It
-introduces no utility or component selector — the sweep lives in `marks.css`
-precisely to keep that true. That is what keeps a merge from upstream cheap: they
-can add settings screens, rework the sidebar or restyle a button, and the fork's
-identity follows without a conflict.
+introduces no utility or component selector; the sweep stays in `marks.css` to
+keep that promise. Upstream can add screens or restyle components and the fork’s
+values follow without conflict.
 
 ### Where it touches upstream files
 
-- `src/App.css` and `src/overlay/RecordingOverlay.css` — two `@import`s each,
-  immediately after `styles/theme.css` so the fork's values win. `marks.css` goes
-  into both: the sweep marks recording state, and recording is drawn in the
-  overlay.
-- `src/overlay/RecordingOverlay.css` — `--s-font` reads `--brand-font-sans`,
-  keeping its old stack as the fallback.
-- `src/components/Sidebar.tsx` — the wordmark and the selected-row treatment.
-- `src/components/onboarding/*.tsx` — the wordmark.
-- `package.json` / `bun.lock` — the `@fontsource` dependencies.
+- `src/App.css` and `src/overlay/RecordingOverlay.css` import the fork’s theme
+  immediately after upstream’s so the fork values win; both also import the
+  marks layer.
+- `src/overlay/RecordingOverlay.css` reads `--brand-font-sans` for its local
+  font variable.
+- `src/components/Sidebar.tsx` and `src/components/onboarding/*.tsx` render the
+  wordmark.
+- `package.json` and `bun.lock` carry the Fontsource dependencies.
 
-Upstream's `src/components/icons/HandyHand.tsx` and `HandyTextLogo.tsx` are left
-in place unused. Deleting a file upstream still maintains turns every future edit
-to it into a delete/modify conflict, which is the expensive kind.
+Upstream’s `HandyHand.tsx` and `HandyTextLogo.tsx` remain unused but present.
+Deleting a file upstream still maintains turns every future upstream edit into
+a delete/modify conflict. The same rule leaves `src-tauri/icons/logo.png` in
+place: it is upstream’s waving hand, is referenced by nothing, and is absent
+from `tauri.conf.json`’s bundle icon list.
 
 ## Seeing it
 
-`brand-preview/` is a committed harness that renders the real `ui/` primitives
-against the brand layer without needing Tauri, and screenshots both themes. Every
-visual decision above was made by looking at its output.
+`brand-preview/` is a committed harness that renders real UI primitives against
+the brand layer without Tauri and screenshots both themes. The palette and
+stacked lockup were checked there.
 
 ```bash
 bun x vite dev --port 5199     # port 1420 is often taken; strictPort is on
 node brand-preview/shot.mjs    # node, not bun — Playwright hangs under bun here
 ```
 
-Two traps: flip `data-theme` and wait ~500ms before shooting, or you catch
-`transition-colors` mid-tween and see contrast bugs that do not exist; and do not
-gitignore the directory, because Tailwind v4 skips gitignored files when scanning
-for class names.
+Two traps: flip `data-theme` and wait about 500ms before shooting, or
+`transition-colors` is caught mid-tween; and do not gitignore the preview,
+because Tailwind v4 skips gitignored files when scanning for class names.
 
 ## Regenerating the artwork
 
+The mark itself is not generated. Change the source pack, then re-transcribe
+`mark.svg` and `mark.paths.ts` from `brand-assets/mark-silhouette.svg`.
+
 ```bash
-bun scripts/gen-brand-mark.ts        # only after editing the spine or width profile
 node scripts/gen-brand-icons.mjs     # node, not bun
 cd src-tauri && bun x tauri icon     # slices app-icon.png to every platform
 ```
 
-Tray states are the mark plus a badge saying what the app is doing, always in the
-same corner, so the eye learns one slot and only has to read what is in it. The
-mark itself never changes — it is the only thing identifying which app the tray
-item belongs to.
+The icon generator reads every path and its fill rule from `mark.svg`. It
+rasterises the 1024px app-icon master and tray PNGs through Playwright’s Chromium
+without adding a native image dependency.
 
-| State        | Badge                | Why                                        |
-| ------------ | -------------------- | ------------------------------------------ |
-| Idle         | none                 | the app, at rest                           |
-| Recording    | solid dot            | the record symbol, unchanged since tape    |
-| Transcribing | ring with a gap      | the shape every spinner uses for "working" |
-| Warning      | exclamation on a dot | upstream's own convention, kept            |
+Tray states keep one mark and add one badge in a learned bottom-right slot. The
+landscape mark in a square frame leaves a strip rather than an empty corner, so
+it takes 62 of 64 units of width, top-aligned, and the badge sits in the strip
+below. Width is protected because the silhouette reads along its length and
+16px in a menu bar is its primary home. Idle and badged states use identical
+mark placement; the previous generator claimed that rule while quietly scaling
+them differently.
+
+| State        | Badge                 | Why                                        |
+| ------------ | --------------------- | ------------------------------------------ |
+| Idle         | none                  | the app, at rest                           |
+| Recording    | solid dot             | the record symbol, unchanged since tape    |
+| Transcribing | ring with a gap       | the shape every spinner uses for “working” |
+| Warning      | exclamation on a disc | upstream’s convention, kept                |
+
+The macOS menu bar uses template mode, so tray art is alpha-only. Every tray SVG
+paints one requested colour; its black/white badge mask changes alpha rather than
+introducing a second visible tone. The coloured tray theme uses `#2E6F9E`, the
+pack’s uncontrolled-background fallback.

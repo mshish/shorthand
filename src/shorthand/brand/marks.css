@@ -6,14 +6,14 @@
  * a class it stops being only that. Everything here introduces selectors, so it
  * lives in its own file, imported alongside.
  *
- * The idea is "a marked-up transcript": the UI is paper and ink, and colour
- * appears only on the thing that is currently live. This file is the only place
- * in the fork that spends colour on purpose.
+ * The sweep survives from the "marked-up transcript" direction: the UI is
+ * paper and ink, and coral marks the thing that is currently live. This file is
+ * the only place that defines that motif.
  *
- * One meaning, one motif. `.sh-sweep` marks the active sidebar row, the active
- * tab, and the recording state — and nothing else. If it starts appearing on
- * things that are merely important rather than current, the idea is gone and
- * the file should be reverted, not extended.
+ * One meaning, one motif. `.sh-sweep` currently marks the active tab — and
+ * nothing else. If it starts appearing on things that are merely important
+ * rather than current, the idea is gone and the file should be reverted, not
+ * extended.
  */
 
 /*
@@ -32,12 +32,12 @@
  * What this deliberately does NOT do is `mix-blend-mode: multiply`, even though
  * a highlighter is physically translucent. Multiply is only a valid model on
  * light paper. On the dark theme it is physically correct and visually fatal —
- * a highlighter over black paper deposits nothing, and `#d9e84a` multiplied by
- * `#12141a` resolves to about `#0f1208`, which put the dark label ink at
- * roughly 1.05:1 against its own mark. Every mark in the dark theme rendered as
- * a black smudge with only the pen line surviving. This was found by
- * screenshotting the two themes, not by reasoning, which is the argument for
- * screenshotting them.
+ * a highlighter over black paper deposits nothing. In the then-yellow version,
+ * `#d9e84a` multiplied by `#12141a` resolved to about `#0f1208`, which put the
+ * dark label ink at roughly 1.05:1 against its own mark. Every mark in the dark
+ * theme rendered as a black smudge with only the pen line surviving. This was
+ * found by screenshotting the two themes, not by reasoning, which is the
+ * argument for screenshotting them.
  *
  * The translucency that actually reads is at the two ends, and the gradient's
  * alpha supplies that in both themes without a blend mode.
@@ -47,10 +47,10 @@
  * where that text is long enough. Both halves of that rule were learned by
  * screenshotting, not by reasoning.
  *
- * Applied to a whole 40px sidebar row it degenerated into a flat yellow
+ * Applied to a whole 40px sidebar row it degenerated into a flat coral
  * lozenge: the rotation imperceptible, the gradient unevenness invisible, the
  * asymmetric radii reading as plain "rounded". That is precisely the
- * rectangular active-state fill this file exists to avoid — yellow substituted
+ * rectangular active-state fill this file exists to avoid — coral substituted
  * for blue, corners rounded. So: wrap the label, not the row, and there is no
  * row-height variant.
  *
@@ -76,11 +76,10 @@
  * navigated-to would also weaken the rule the whole direction rests on: colour
  * means *live*, not *selected*.
  *
- * No `isolation: isolate` here. It creates a stacking context, and a
- * `mix-blend-mode` inside one blends against that context's own (empty)
- * backdrop rather than the page — which silently turns the multiply below into
- * a no-op. The z-index pair on the pseudo-element and the children is enough to
- * order them without it.
+ * No `isolation: isolate` here. It creates a stacking context, and any future
+ * `mix-blend-mode` inside one would blend against that context's own (empty)
+ * backdrop rather than the page. The z-index pair on the pseudo-element and the
+ * children is enough to order them without it.
  */
 .sh-sweep {
   position: relative;
@@ -129,8 +128,8 @@
     color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 0%,
     var(--brand-highlighter) 14%,
     var(--brand-highlighter) 72%,
-    /* Not lower than ~78%: at 62% the trailing end resolved to a muddy olive
-       over the dark ground, so the mark looked dirty rather than lighter. */
+    /* Not lower than ~78%: in the then-chartreuse version, 62% made the trailing
+       end muddy over the dark ground rather than merely lighter. */
       color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 100%
   );
 
@@ -147,23 +146,27 @@
 /*
  * The pen line under the highlighter.
  *
- * It is here for a reason that is not styling. `#ffb0c4` against `#faf8f2` is
- * 1.61:1 — as the chartreuse it replaced was 1.14:1. A saturated warm hue on
- * near-white is perfectly visible to an eye, because hue and chroma carry it,
- * but WCAG 2.x measures luminance alone and cannot see either, so no sweep of
- * any colour light enough to hold dark text can satisfy the 3:1 required of a
- * non-text indicator. The hairline is in the accent (8.34:1 light, 7.54:1 dark)
- * and supplies the boundary the sweep cannot.
+ * It is here for a reason that is not styling. Coral `#f3673c` against the
+ * light paper `#faf5ea` is 2.83:1 — still short of the 3:1 required of a
+ * non-text indicator. Against the dark ground `#111820` it is 5.80:1 and clears
+ * that floor on its own. The hairline therefore remains load-bearing in light
+ * mode and belt-and-braces in dark: changing one motif's construction with the
+ * theme would be worse than keeping the same pen line in both.
+ *
+ * A saturated warm hue on near-white is plainly visible to an eye because hue
+ * and chroma carry it, but WCAG 2.x measures luminance alone and cannot see
+ * either. The accent hairline supplies the boundary where the sweep cannot.
  *
  * That constraint improved the design rather than taxing it: a highlighter
  * stroke with a pen line under it is what a marked-up page actually looks like.
  *
  * The line sits *below* the sweep rather than under its bottom edge. They used
  * to overlap, which cost nothing while the mark was yellow but matters now:
- * `#6aa9f5` on `#f59ab2` is 1.19:1, so on the dark theme an overlapping line
- * would disappear into the mark and take the 3:1 boundary with it. Separating
+ * dark-theme accent `#63b7d6` on coral `#f3673c` is 1.36:1, so an overlapping
+ * line would disappear into the mark and take the 3:1 boundary with it.
+ * Separating
  * them vertically keeps the line measured against the page, where it holds
- * 7.54:1 — and two strokes with daylight between them is also closer to what a
+ * 7.89:1 — and two strokes with daylight between them is also closer to what a
  * marked-up page looks like than one stroke with a darker edge.
  */
 .sh-sweep::after {
@@ -188,9 +191,9 @@
 }
 
 /*
- * The one motion primitive: a sweep is *drawn*, left to right. Used on tab
- * change, section change and recording start. Nothing else in the settings
- * window animates beyond `transition-colors`.
+ * The one motion primitive: a sweep is *drawn*, left to right. Used when the
+ * active tab changes. Nothing else in the settings window animates beyond
+ * `transition-colors`.
  *
  * 180ms because that is about how long the eye needs to register a direction
  * without the UI feeling like it is waiting for the animation.
@@ -214,6 +217,6 @@
 /*
  * There is intentionally no row-height or container variant. See the note on
  * `.sh-sweep` above: at container scale the mark stops being a mark. The
- * sidebar's active row and the active tab both wrap their *label* in
- * `.sh-sweep` and leave the row itself unstyled.
+ * active tab wraps its *label* in `.sh-sweep` and leaves the row itself
+ * unstyled. The sidebar uses an accent icon and full-weight label instead.
  */

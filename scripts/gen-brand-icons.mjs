@@ -86,14 +86,10 @@ const MARK_BOUNDS = {
 function mark(box, scale, fill, dx = 0, dy = 0) {
   const visibleSize = box * scale;
   const s = visibleSize / Math.max(MARK_BOUNDS.width, MARK_BOUNDS.height);
-  const offX =
-    (box - MARK_BOUNDS.width * s) / 2 - MARK_BOUNDS.minX * s + dx;
-  const offY =
-    (box - MARK_BOUNDS.height * s) / 2 - MARK_BOUNDS.minY * s + dy;
+  const offX = (box - MARK_BOUNDS.width * s) / 2 - MARK_BOUNDS.minX * s + dx;
+  const offY = (box - MARK_BOUNDS.height * s) / 2 - MARK_BOUNDS.minY * s + dy;
   const paths = MARK_PATHS.map(({ d, fillRule }) => {
-    const fillRuleAttribute = fillRule
-      ? ` fill-rule="${fillRule}"`
-      : "";
+    const fillRuleAttribute = fillRule ? ` fill-rule="${fillRule}"` : "";
     return `<path d="${d}" fill="${fill}"${fillRuleAttribute}/>`;
   }).join("");
   return `<g transform="translate(${offX} ${offY}) scale(${s})">${paths}</g>`;
@@ -141,13 +137,7 @@ const TRAY_MARK_TOP_OFFSET = -(TRAY_BOX - TRAY_MARK_HEIGHT) / 2;
  * badge changes between states.
  */
 function trayMark(fill) {
-  return mark(
-    TRAY_BOX,
-    TRAY_MARK_SCALE,
-    fill,
-    0,
-    TRAY_MARK_TOP_OFFSET,
-  );
+  return mark(TRAY_BOX, TRAY_MARK_SCALE, fill, 0, TRAY_MARK_TOP_OFFSET);
 }
 
 /**
