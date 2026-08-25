@@ -8,6 +8,11 @@ survive, and which directions have already been tried and rejected.
 palette, type, the sweep, the rules learned by screenshotting. This file is the
 brief _behind_ it. Where the two disagree, BRANDING.md is what shipped.
 
+The ideation this brief was written for has since run and been approved: clay
+artwork of a bird perched on a fountain pen, with a coral wing and underline and
+the name set in a soft serif. The pack lives in `brand-assets/`. Do not brief
+this again.
+
 ---
 
 ## 1. What it is, in one paragraph
@@ -97,7 +102,7 @@ Read this before sketching. Several otherwise-good directions die here.
 | Windows tray               | 16px         | On a taskbar that may be light or dark.                                                                                              |
 | App icon                   | up to 1024px | Sliced by `tauri icon` into `.ico`, `.icns`, Windows Square tiles, iOS AppIcon, Android mipmaps.                                     |
 | Sidebar icon               | 24px         | Fills with `currentColor`, inheriting the row's ink.                                                                                 |
-| Wordmark initial           | ~22px cap    | See below.                                                                                                                           |
+| Wordmark lockup            | ~22px cap    | See below.                                                                                                                           |
 
 Hard rules that fall out of that:
 
@@ -109,15 +114,16 @@ Hard rules that fall out of that:
 3. **Three tray states exist** — `Idle`, `Recording`, `Transcribing`. A mark
    that can express "listening" and "working" as variations of itself is worth
    more than one that needs three unrelated glyphs.
-4. **The lockup has no room for a bug.** The current wordmark substitutes the
-   mark _for_ the initial S: `[mark]horthand`. Putting a separate logo next to
-   the word "Shorthand" would print two S's and say nothing. Any candidate
-   should either work as an initial or come with a better answer for the lockup.
-5. **A modulated pen stroke has to be an outline.** SVG cannot vary
-   `stroke-width` along a path, so the visible shape is the spine offset both
-   sides by a width profile — ~200 coordinates. That is why the current mark is
-   _generated_ (`scripts/gen-brand-mark.ts`) rather than hand-drawn. Not a
-   blocker, but budget for it: calligraphic directions need a generator.
+4. **The lockup is settled.** The old wordmark substituted the mark _for_ the
+   initial S — `[mark]horthand` — because a separate bug beside "Shorthand"
+   would have printed two S's and said nothing. The approved artwork answered
+   the question differently: the mark stacks above the complete word
+   `Shorthand`, with a coral sweep beneath. See BRANDING.md.
+5. **This no longer applies.** SVG cannot vary `stroke-width` along a path, so
+   the old pointed-pen "s" needed its spine offset both sides by a generated
+   width profile (`scripts/gen-brand-mark.ts`, ~200 coordinates). That mark and
+   its generator are both deleted. The current mark is approved artwork,
+   transcribed once into `src/shorthand/brand/mark.paths.ts`, not generated.
 
 ---
 
@@ -195,7 +201,10 @@ left in it.
 
 ---
 
-## 7. What exists today
+## 7. What existed when this brief was written
+
+Superseded. This describes the system the ideation was briefed against, not
+what ships now — see BRANDING.md for the current mark, wordmark and palette.
 
 **The mark.** A lowercase "s" written with a pointed pen: one continuous stroke
 that swells through each bowl and thins to a point at the entry, the waist and
@@ -224,12 +233,6 @@ quirk without being a novelty face.
 The one motif is a **highlighter sweep** — a rose stroke with a blue pen line
 under it, marking the live thing and nothing else.
 
-> ⚠️ **The icons on disk are stale.** `scripts/gen-brand-icons.mjs` still
-> hardcodes the rejected copying-pencil palette — `#2a1b3d` ink, `#7645ad`
-> violet, `#f0efea` paper. Every app icon and tray PNG in `src-tauri/icons/` was
-> rendered from it. Whatever comes out of this ideation, that script needs its
-> palette updated before regenerating.
-
 ---
 
 ## 8. Already tried and rejected
@@ -244,6 +247,7 @@ reason, and both are worth knowing.
 | **Blue alone**                                                | conventional, safe, accessible                                 | a lone blue accent is the default of most software written this decade                                                                             |
 | **Chartreuse highlighter** (`#e8f35c`)                        | "the complement of blue, which is why highlighters are yellow" | not actually the complement (64° vs a needed ~38°), clashed with warm paper, and a yellow highlighter is the least surprising object in stationery |
 | **Apricot highlighter** (`#ffc48a`)                           | inside the paper's own hue family, harmonious                  | differed from the page in chroma alone — read as a tint _of_ the page rather than a mark _on_ it                                                   |
+| **Blue ink + rose highlighter**                               | made "a marked-up transcript" literal and non-generic          | not killed — it shipped and worked. Superseded once the clay-bird ideation returned approved artwork with its own colour source                    |
 | **Arbitrary status icons**                                    | conventional                                                   | rejected: symbols should be derived from the subject, not picked from a set                                                                        |
 
 The standing principle behind most of those rejections: **derive the choice from
@@ -257,24 +261,22 @@ orange (spoken for by `--color-warning`), violet (the direction above).
 
 ## 9. Where there is room
 
-Genuinely open, in rough order of promise:
+Written before the ideation ran. Status below reflects what the approved
+artwork settled and what it left open.
 
-1. **Shorthand-as-notation.** The written-system well in §6 is barely tapped. A
-   continuous compressed stroke is both a faithful description of the product
-   and a strong 16px silhouette.
-2. **The state system.** Idle / Recording / Transcribing as three states of one
-   mark rather than three glyphs. A stroke that is _being drawn_ while recording
-   is right there, and the app already has a draw animation as its one motion
-   primitive.
-3. **The two modes.** Nothing in the identity currently distinguishes the burst
-   from the vigil. It may not need to — but if a mark could express both, that
-   is a real gain.
-4. **The lockup.** The initial-substitution is a good idea; whether the current
-   "s" is the best execution of it is open.
-5. **Speech → text as a single move.** The mark currently shows the written half
-   only. Whether the spoken half deserves representation at all is an open
-   question — and the strong prior is _no_, because that road leads straight
-   back to microphones and waveforms.
-
-The one thing to hold onto: **the subject is the mark on the page, not the sound
-in the air.**
+1. **Shorthand-as-notation.** Settled. `direction.md` describes "the connected
+   S" as part of the approved mark — the well this item pointed at is what the
+   artwork drew from.
+2. **The state system.** Still only partly settled. The regenerated tray icons
+   keep one mark placement for Idle and add a badge in the strip beneath it for
+   Recording and Transcribing, rather than three states of the mark itself —
+   the mark does not change shape between states, only the badge does. Open.
+3. **The two modes.** Still entirely open. Nothing in the identity distinguishes
+   the dictation burst from the meetings vigil.
+4. **The lockup.** Settled. The approved artwork stacks the mark above the
+   complete word `Shorthand`, with a coral sweep beneath, rather than
+   substituting for the initial S.
+5. **Speech → text as a single move.** Answered, and not as this brief
+   predicted — the strong prior here was that the spoken half would not be
+   represented. The approved artwork represents both: the bird carries the
+   thought, the fountain pen commits it.
