@@ -1,0 +1,26 @@
+// Transcribed from brand-assets/mark-silhouette.svg. If the approved artwork
+// changes, re-transcribe these paths from that source rather than hand-tuning
+// the component copy.
+
+interface MarkPath {
+  d: string;
+  fillRule?: "evenodd";
+}
+
+/** The four paths in the approved bird-and-pen silhouette. */
+export const MARK_PATHS: readonly MarkPath[] = [
+  {
+    d: "M26 50L15 46L26 41C29 28 40 20 54 20C66 20 76 26 82 35C90 32 100 26 109 20C108 31 104 39 98 46C105 42 112 36 118 30C116 43 109 53 99 60C106 58 112 55 117 55C113 65 104 71 94 74L112 78L102 84L86 76C73 81 55 82 42 75C32 70 26 61 26 50ZM32 50L24 46L32 43C35 34 43 28 54 28C65 28 73 34 77 43C80 51 78 59 72 65C65 71 53 72 44 68C36 64 32 58 32 50Z",
+    fillRule: "evenodd",
+  },
+  {
+    d: "M45.5 40A3.5 3.5 0 1 0 45.5 47A3.5 3.5 0 1 0 45.5 40Z",
+  },
+  {
+    d: "M8 87L29 78L38 82H105L120 86V94L105 98L38 95L29 100ZM17 87L29 82L35 86H104L113 88V92L104 94L35 91L29 96Z",
+    fillRule: "evenodd",
+  },
+  {
+    d: "M9 87L29 88V91L9 89ZM27 86A2.5 2.5 0 1 0 27 91A2.5 2.5 0 1 0 27 86ZM103 82L110 84V96L103 98Z",
+  },
+];
