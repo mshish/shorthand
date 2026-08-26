@@ -230,24 +230,23 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
 
-    if initial_settings.follow_stream_enabled {
+    if follow_stream::listener_required(&initial_settings) {
         let startup_app = app_handle.clone();
         tauri::async_runtime::spawn(async move {
             let server = startup_app.state::<follow_stream::FollowStreamServer>();
             let _lifecycle_guard = server.lock_lifecycle().await;
             // Re-read after acquiring the lifecycle lock so a settings command
             // that won the race can cancel this queued startup attempt.
-            if !settings::get_settings(&startup_app).follow_stream_enabled {
+            if !follow_stream::listener_required(&settings::get_settings(&startup_app)) {
                 return;
             }
 
             if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
                 log::error!("Failed to start configured follow-stream listener: {error}");
-                // The toggle must reflect reality because there is no separate query
-                // for whether the follow-stream listener is actually running.
-                let mut settings = settings::get_settings(&startup_app);
-                settings.follow_stream_enabled = false;
-                settings::write_settings(&startup_app, settings);
+                // No single toggle owns the listener any more — Meeting,
+                // Dictation, and Assisted Notes can all request it — so there
+                // is no truthful rollback beyond leaving every stored
+                // preference exactly as the user set it.
             }
         });
     }
@@ -731,6 +730,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_save_recordings_setting,
             shortcut::change_save_transcripts_setting,
             shortcut::change_dictation_settings,
+            shortcut::change_assisted_notes_settings,
             shortcut::change_transcribe_accelerator_setting,
             shortcut::change_ort_accelerator_setting,
             shortcut::change_transcribe_gpu_device,
@@ -887,6 +887,21 @@ pub fn run(cli_args: CliArgs) {
                 signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
             } else if args.iter().any(|a| a == "--cancel") {
                 crate::utils::cancel_current_operation(app);
+            } else if args.iter().any(|a| a == "--toggle-assisted-notes") {
+                // Unlike the two meeting flags, this one names a mode the user can
+                // have switched off. Firing it anyway would start a capture that
+                // `apply_mode` resolves straight back to meeting settings —
+                // including meeting's system-audio toggle — under a name that
+                // promises the opposite. The forwarding process has already
+                // exited by the time this runs, so its exit code cannot report
+                // this refusal. Raise the app as a courtesy; the follower-side
+                // bounded acknowledgement is the actual failure signal.
+                if settings::get_settings(app).assisted_notes.enabled {
+                    signal_handle::send_transcription_input(app, "assisted_notes", "CLI");
+                } else {
+                    log::warn!("--toggle-assisted-notes ignored: Assisted Notes is not enabled");
+                    show_main_window(app);
+                }
             } else {
                 show_main_window(app);
             }
@@ -1008,14 +1023,6 @@ pub fn run(cli_args: CliArgs) {
             // silently blocks keyed shortcuts, warns the user, and activates
             // the Carbon fallback. See secure_input.rs and issue #1578.
             secure_input::init(&app_handle);
-
-            // Populate the overlay-enabled cache from initial settings so the
-            // audio path (overlay::emit_levels, called ~24 Hz during recording)
-            // can do a single atomic load instead of reading the Tauri store.
-            // Kept in sync by shortcut::change_overlay_style_setting.
-            overlay::update_overlay_enabled_cache(
-                settings.overlay_style != settings::OverlayStyle::None,
-            );
 
             // Pre-warm GPU/accelerator enumeration on a background thread. The first
             // get_available_accelerators call enumerates ORT execution providers and

@@ -445,6 +445,15 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         {
             continue;
         }
+        if id == "assisted_notes" && !user_settings.assisted_notes.enabled {
+            continue;
+        }
+        if id == "assisted_notes_with_post_process"
+            && !(user_settings.assisted_notes.enabled
+                && user_settings.assisted_notes.post_process_enabled)
+        {
+            continue;
+        }
 
         let binding = user_settings
             .bindings

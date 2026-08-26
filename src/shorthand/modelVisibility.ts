@@ -16,10 +16,16 @@ import { useSettings } from "@/hooks/useSettings";
  * can't use" is the same simplified-vs-everything question about a
  * different list.
  *
- * `ModelsSettings.tsx` has its own pre-existing, independent `filterStreaming`
- * toggle; once this predicate applies, that toggle's only remaining effect is
- * narrowing the already-downloaded section, since the undownloaded section
- * this predicate governs is already streaming-only in default mode.
+ * `ModelsSettings.tsx` used to run its full model list through
+ * `useVisibleModels` before applying its own, independent `filterStreaming`
+ * chip — which meant this hatch-driven predicate could hide a non-streaming
+ * model from *Available to Download* that the chip's "off" state was
+ * supposed to reveal. The two mechanisms disagreed about who owns
+ * visibility. `ModelsSettings.tsx` no longer calls this hook: the chip now
+ * governs both of its sections on its own, via
+ * `src/shorthand/streamingModelFilter.ts`. This hook remains the hatch-driven
+ * guard for `Onboarding.tsx`, which has no chip and therefore no other way to
+ * recover a hidden on-disk, in-progress, or custom model.
  */
 
 /**
@@ -30,15 +36,22 @@ import { useSettings } from "@/hooks/useSettings";
  *
  * Otherwise, a model is hidden unless it streams, or is already on disk,
  * mid-download, or custom. That exemption is not about letting users keep
- * models they already have — it's forced by how `supports_streaming` is
- * populated: it's `Option<bool>` in `CapabilityProbe` but collapses via
- * `unwrap_or(false)`, so a local GGUF whose header omits the
- * `stt.capability.streaming` key (notably parakeet) reads as non-streaming
- * until it has been loaded once and reconciled by
+ * models they already have — it's forced by how `supports_streaming` can be
+ * populated. Catalog-listed models and their alternate quants get their caps
+ * from the catalog descriptor (`render_model_info` / `to_model_info_for_file`
+ * reading `self.caps.supports_streaming`, `managers/model.rs:249`), and local
+ * discovery deliberately skips the header probe for anything catalog-listed
+ * because the catalog is authoritative (`model.rs:1765-1768`) — so a
+ * catalog match's flag is never an unprobed guess. The genuinely uncertain
+ * case is a non-catalog GGUF found in the local HF cache: its `local_caps`
+ * reads `probe.supports_streaming.unwrap_or(false)` (`model.rs:360-364`), so
+ * an absent `stt.capability.streaming` header key reads as non-streaming
+ * until the model has been loaded once and reconciled by
  * `set_runtime_capabilities`. `false` therefore conflates "confirmed
- * non-streaming" with "unknown until loaded" — a model already on disk, or
- * in the middle of downloading, must never be hidden by a flag we may be
- * wrong about, or it becomes unloadable and so never gets corrected.
+ * non-streaming" with "unknown until loaded" for that one path — a model
+ * already on disk, or in the middle of downloading, must never be hidden by
+ * a flag we may be wrong about, or it becomes unloadable and so never gets
+ * corrected.
  */
 export function isModelVisible(
   model: ModelInfo,

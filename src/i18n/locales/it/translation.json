@@ -9,11 +9,6 @@
     "cancel": "Annulla",
     "secureInputWarning": "⚠ Scorciatoie bloccate da Secure Input"
   },
-  "transcript": {
-    "speakerMic": "You",
-    "speakerSystem": "System",
-    "retryUnavailable": "Retry is unavailable for transcripts containing system audio."
-  },
   "sidebar": {
     "general": "Generale",
     "models": "Modelli",
@@ -21,8 +16,7 @@
     "postProcessing": "Post-Elaborazione",
     "history": "Cronologia",
     "debug": "Debug",
-    "about": "Informazioni",
-    "dictation": "Dictation"
+    "about": "Informazioni"
   },
   "onboarding": {
     "subtitle": "Per cominciare, scegli un modello di riconoscimento vocale",
@@ -195,7 +189,7 @@
         "pressKeys": "Premi i tasti...",
         "bindings": {
           "transcribe": {
-            "name": "Capture Shortcut",
+            "name": "Scorciatoia Trascrizione",
             "description": "La scorciatoia da tastiera per registrare e trascrivere la tua voce."
           },
           "cancel": {
@@ -205,14 +199,6 @@
           "transcribe_with_post_process": {
             "name": "Tasto di post-elaborazione",
             "description": "Facoltativo: Un tasto di scelta rapida dedicato che applica sempre la post-elaborazione IA alla trascrizione."
-          },
-          "dictate": {
-            "name": "Dictation Shortcut",
-            "description": "The keyboard shortcut to start and stop dictation."
-          },
-          "dictate_with_post_process": {
-            "name": "Dictation AI Cleanup Hotkey",
-            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -263,21 +249,6 @@
       }
     },
     "advanced": {
-      "systemAudio": {
-        "label": "Capture System Audio",
-        "description": "Capture Windows system output as a separate speaker-labelled transcription alongside the microphone.",
-        "streamingRequired": "System audio capture requires a model that supports streaming.",
-        "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
-      },
-      "followStream": {
-        "label": "Follow Live Transcript Output",
-        "description": "Allow local tools to follow live transcript events by running `handy --follow-stream`."
-      },
-      "systemAudioDevice": {
-        "title": "System Audio Device",
-        "description": "Choose the output device to capture. Default follows the current Windows default output.",
-        "default": "Default"
-      },
       "groups": {
         "app": "App",
         "output": "Output",
@@ -465,35 +436,6 @@
         "createFirst": "Clicca 'Crea un nuovo prompt' qui sopra per creare il tuo primo prompt di post-elaborazione."
       }
     },
-    "dictation": {
-      "enable": {
-        "label": "Enable Dictation",
-        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
-        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
-      },
-      "groups": {
-        "shortcut": "Shortcut",
-        "aiCleanup": "AI Cleanup",
-        "privacy": "Privacy"
-      },
-      "postProcessing": {
-        "hint": "Configure providers, API keys and models in the Post-Processing section."
-      },
-      "privacy": {
-        "saveRecordings": {
-          "label": "Save Recordings",
-          "description": "Keep the audio recording for each dictation."
-        },
-        "saveTranscripts": {
-          "label": "Save Transcripts",
-          "description": "Keep the transcript text for each dictation."
-        }
-      },
-      "overlayPosition": {
-        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
-      },
-      "footer": "Microphone, model and language come from the Capture and Transcription sections."
-    },
     "history": {
       "title": "Cronologia",
       "openFolder": "Apri la cartella delle registrazioni",
@@ -507,11 +449,7 @@
       "retranscribe": "Ri-trascrivere",
       "retranscribeError": "Impossibile ri-trascrivere. Riprova.",
       "transcribing": "Trascrizione in corso...",
-      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione.",
-      "source": {
-        "meeting": "Meeting",
-        "dictation": "Dictation"
-      }
+      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione."
     },
     "debug": {
       "title": "Debug",

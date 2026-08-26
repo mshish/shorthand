@@ -248,11 +248,20 @@ succeed… removing it is not [optional]." The updater still points at
 (`:17-19`). No minisign keypair exists. An installer that ships a sidecar
 cannot exist until bundled builds work.
 
-**Phase 0b — fork-only catalogues.** Migrate `FORK_ONLY_STRINGS` to
-`src/shorthand/locales/en.json`, teach the Vite plugin to merge catalogues
-at the same point, add the fork-only parity check. Mechanical, independent
-of everything below, and cheapest done before the string count grows. See
-Decision 2a.
+**Phase 0b — fork-only catalogues. Implemented**, by
+`docs/superpowers/plans/2026-08-26-fork-only-translation-catalogues.md`.
+`FORK_ONLY_STRINGS` is now the union of two files —
+`src/shorthand/locales/en.json` (translatable fork content, merged into every
+locale) and `src/shorthand/english-copy.json` (English casing preferences,
+merged into `en` alone) — with `bun run check:fork-translations` gating key
+parity across `src/shorthand/locales/*.json`. Implementing it surfaced two
+regressions this phase fixes: a 44-key case-only split (English Title Case
+preferences that had been silently overriding 23 locales' real translations
+because the original merge was locale-independent), and a separate 32-key
+byte-identity regression (fork-only content for dictation mode and
+system-audio capture written directly into all 24 `src/i18n/locales/` files
+instead of through `FORK_ONLY_STRINGS`, closed by Task 2 of that plan and now
+held by `bun run check:locale-drift`). See Decision 2a.
 
 **Phase 1 — core sidecar.** Relocate `compile-core.sh` into the app's
 build, add `externalBin`, add `integrations/core_sidecar.rs`, resolve

@@ -9,11 +9,6 @@
     "cancel": "Отмена",
     "secureInputWarning": "⚠ Сочетания клавиш заблокированы Secure Input"
   },
-  "transcript": {
-    "speakerMic": "You",
-    "speakerSystem": "System",
-    "retryUnavailable": "Retry is unavailable for transcripts containing system audio."
-  },
   "sidebar": {
     "general": "Общие",
     "models": "Модели",
@@ -21,8 +16,7 @@
     "postProcessing": "Постобработка",
     "history": "История",
     "debug": "Отладка",
-    "about": "О программе",
-    "dictation": "Dictation"
+    "about": "О программе"
   },
   "onboarding": {
     "subtitle": "Для начала выберите модель транскрипции",
@@ -195,7 +189,7 @@
         "pressKeys": "Нажимайте клавиши...",
         "bindings": {
           "transcribe": {
-            "name": "Capture Shortcut",
+            "name": "Горячая клавиша транскрипции",
             "description": "Сочетание клавиш для записи и транскрибирования вашего голоса."
           },
           "cancel": {
@@ -205,14 +199,6 @@
           "transcribe_with_post_process": {
             "name": "Горячая клавиша постобработки",
             "description": "Специальное сочетание клавиш для ИИ-постобработки вашей транскрипции."
-          },
-          "dictate": {
-            "name": "Dictation Shortcut",
-            "description": "The keyboard shortcut to start and stop dictation."
-          },
-          "dictate_with_post_process": {
-            "name": "Dictation AI Cleanup Hotkey",
-            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -263,21 +249,6 @@
       }
     },
     "advanced": {
-      "systemAudio": {
-        "label": "Capture System Audio",
-        "description": "Capture Windows system output as a separate speaker-labelled transcription alongside the microphone.",
-        "streamingRequired": "System audio capture requires a model that supports streaming.",
-        "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
-      },
-      "followStream": {
-        "label": "Follow Live Transcript Output",
-        "description": "Allow local tools to follow live transcript events by running `handy --follow-stream`."
-      },
-      "systemAudioDevice": {
-        "title": "System Audio Device",
-        "description": "Choose the output device to capture. Default follows the current Windows default output.",
-        "default": "Default"
-      },
       "groups": {
         "app": "Приложение",
         "output": "Вывод",
@@ -465,35 +436,6 @@
         "createFirst": "Нажмите «Создать новый запрос» выше, чтобы создать первый запрос для постобработки."
       }
     },
-    "dictation": {
-      "enable": {
-        "label": "Enable Dictation",
-        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
-        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
-      },
-      "groups": {
-        "shortcut": "Shortcut",
-        "aiCleanup": "AI Cleanup",
-        "privacy": "Privacy"
-      },
-      "postProcessing": {
-        "hint": "Configure providers, API keys and models in the Post-Processing section."
-      },
-      "privacy": {
-        "saveRecordings": {
-          "label": "Save Recordings",
-          "description": "Keep the audio recording for each dictation."
-        },
-        "saveTranscripts": {
-          "label": "Save Transcripts",
-          "description": "Keep the transcript text for each dictation."
-        }
-      },
-      "overlayPosition": {
-        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
-      },
-      "footer": "Microphone, model and language come from the Capture and Transcription sections."
-    },
     "history": {
       "title": "История",
       "openFolder": "Открыть папку с записями",
@@ -507,11 +449,7 @@
       "retranscribe": "Перетранскрибировать",
       "retranscribeError": "Не удалось перетранскрибировать. Пожалуйста, попробуйте снова.",
       "transcribing": "Транскрибирование...",
-      "transcriptionFailed": "Транскрипция не удалась. Вы можете перетранскрибировать, используя значок повтора.",
-      "source": {
-        "meeting": "Meeting",
-        "dictation": "Dictation"
-      }
+      "transcriptionFailed": "Транскрипция не удалась. Вы можете перетранскрибировать, используя значок повтора."
     },
     "debug": {
       "title": "Отлаживать",

@@ -88,6 +88,7 @@ Handy supports command-line flags for controlling a running instance and customi
 handy --toggle-transcription    # Toggle recording on/off
 handy --toggle-post-process     # Toggle recording with post-processing on/off
 handy --cancel                  # Cancel the current operation
+handy --toggle-assisted-notes   # Toggle an Assisted Notes capture on/off (mode must be enabled in Settings)
 ```
 
 **Startup flags:**

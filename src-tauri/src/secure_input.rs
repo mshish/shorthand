@@ -535,6 +535,15 @@ mod imp {
                 {
                     continue;
                 }
+                if id == "assisted_notes" && !settings.assisted_notes.enabled {
+                    continue;
+                }
+                if id == "assisted_notes_with_post_process"
+                    && !(settings.assisted_notes.enabled
+                        && settings.assisted_notes.post_process_enabled)
+                {
+                    continue;
+                }
 
                 if register_fallback_binding(app, id, binding, &mut next) {
                     immune += 1;

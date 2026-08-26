@@ -75,6 +75,7 @@ fn source_for_mode(mode: Mode) -> &'static str {
     match mode {
         Mode::Meeting => "meeting",
         Mode::Dictation => "dictation",
+        Mode::AssistedNotes => "assisted_notes",
     }
 }
 
@@ -830,9 +831,10 @@ mod tests {
     }
 
     #[test]
-    fn source_for_mode_maps_meeting_and_dictation() {
+    fn source_for_mode_maps_every_mode() {
         assert_eq!(source_for_mode(Mode::Meeting), "meeting");
         assert_eq!(source_for_mode(Mode::Dictation), "dictation");
+        assert_eq!(source_for_mode(Mode::AssistedNotes), "assisted_notes");
     }
 
     #[test]

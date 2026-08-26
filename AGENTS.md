@@ -178,8 +178,28 @@ All user-facing strings must use i18next translations. ESLint enforces this (no 
 
 **Adding new text:**
 
-1. Add key to `src/i18n/locales/en/translation.json`
-2. Use in component: `const { t } = useTranslation(); t('key.path')`
+Which file depends on what kind of string it is.
+
+- **A string upstream also has** — leave upstream's alone. Its translations
+  already exist in 23 languages, and a fork override replaces them all with
+  English. Run `bun scripts/audit-fork-strings.ts` if unsure.
+- **An English capitalisation preference** — `src/shorthand/english-copy.json`.
+  Applies to English only; sentence case is an English convention.
+- **A genuinely fork-only string** — `src/shorthand/locales/en.json`. See
+  [`src/shorthand/locales/README.md`](src/shorthand/locales/README.md). Never
+  `src/i18n/locales/` directly — `bun run check:locale-drift` fails the build
+  if a fork-only key ends up there, which happened once, silently, for 32
+  keys across all 24 locales, before that gate existed.
+- **A string being contributed upstream** —
+  `src/i18n/locales/en/translation.json`, per
+  [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
+
+Then use it: `const { t } = useTranslation(); t('key.path')`
+
+Gates: `bun run check:translations` (upstream's catalogues),
+`bun run check:locale-drift` (fork content must not be among them),
+`bun run check:fork-translations` (the fork's own catalogues),
+`bun run check:branding` (the rename).
 
 **File structure:**
 
@@ -191,6 +211,13 @@ src/i18n/
     ├── en/translation.json  # English (source)
     ├── de/, es/, fr/, ja/, ru/, zh/, ...
     └── ...
+
+src/shorthand/
+├── locales/
+│   ├── README.md      # how to add a fork-only translation
+│   ├── en.json        # English (source), flat dotted keys
+│   └── de.json, ...   # one file per translated locale — optional, falls back to English
+└── english-copy.json  # English-only casing preferences, never merged elsewhere
 ```
 
 For translation contribution guidelines, see [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
@@ -221,6 +248,7 @@ Handy supports command-line parameters on all platforms for integration with scr
 | `--toggle-transcription` | Toggle recording on/off on a running instance               |
 | `--toggle-post-process`  | Toggle recording with post-processing on/off                |
 | `--cancel`               | Cancel the current operation on a running instance          |
+| `--toggle-assisted-notes` | Toggle an Assisted Notes capture on/off on a running instance (refused, with a warning and the settings window raised, while the mode is disabled) |
 | `--follow-stream [MODE]` | Follow live transcript events: `json`, `delta`, or `text` |
 | `--start-hidden`         | Launch without showing the main window (tray icon visible)  |
 | `--no-tray`              | Launch without system tray (closing window quits the app)   |

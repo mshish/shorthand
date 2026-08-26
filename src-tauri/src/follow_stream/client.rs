@@ -778,7 +778,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\"}",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\"]}",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}",

@@ -120,6 +120,18 @@ const SETTINGS: AppSettings = {
       "Converts your speech into text, applies AI post-processing, and pastes it into the focused window.",
       "ctrl+shift+space",
     ),
+    assisted_notes: binding(
+      "assisted_notes",
+      "Assisted Notes",
+      "Converts your speech into text and streams it to any process following the live transcript, without capturing system audio.",
+      "ctrl+alt+n",
+    ),
+    assisted_notes_with_post_process: binding(
+      "assisted_notes_with_post_process",
+      "Assisted Notes with Post-Processing",
+      "Converts your speech into text, streams it to any process following the live transcript, and applies AI post-processing, without capturing system audio.",
+      "ctrl+alt+shift+n",
+    ),
   },
   push_to_talk: false,
   audio_feedback: false,
@@ -301,6 +313,20 @@ const SETTINGS: AppSettings = {
     post_process_provider_id: "openai",
     post_process_model: null,
   },
+  assisted_notes: {
+    enabled: false,
+    push_to_talk: false,
+    clipboard_handling: "dont_modify",
+    append_trailing_space: false,
+    overlay_style: "minimal",
+    save_recordings: true,
+    save_transcripts: true,
+    post_process_enabled: false,
+    post_process_selected_prompt_id: null,
+    follow_stream_enabled: true,
+    post_process_provider_id: "openai",
+    post_process_model: null,
+  },
 };
 
 const AUDIO_DEVICES: AudioDevice[] = [
@@ -400,6 +426,10 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   },
   change_dictation_settings: ({ dictation }) => {
     SETTINGS.dictation = dictation;
+    return null;
+  },
+  change_assisted_notes_settings: ({ assistedNotes }) => {
+    SETTINGS.assisted_notes = assistedNotes;
     return null;
   },
   change_ptt_setting: ({ enabled }) => {

@@ -18,7 +18,11 @@ import {
   supportsLanguageCode,
 } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
-import { useVisibleModels } from "@/shorthand/modelVisibility";
+import { useSettings } from "@/hooks/useSettings";
+import {
+  isStreamingFilterExempt,
+  resolveStreamingFilter,
+} from "@/shorthand/streamingModelFilter";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
@@ -35,7 +39,15 @@ export const ModelsSettings: React.FC = () => {
   const { t } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterStreaming, setFilterStreaming] = useState(false);
+  // null = the user has not touched the chip in this mounted page; the
+  // default then follows the show-all-settings hatch. A boolean = an
+  // explicit click, which wins until the page unmounts. See
+  // src/shorthand/streamingModelFilter.ts for why this can't be a plain
+  // `useState(!showAllSettings)`: settings arrive asynchronously, and a
+  // useState initializer only reads its argument once.
+  const [filterStreamingOverride, setFilterStreamingOverride] = useState<
+    boolean | null
+  >(null);
   const [filterTranslation, setFilterTranslation] = useState(false);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
@@ -43,7 +55,7 @@ export const ModelsSettings: React.FC = () => {
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const languageSearchInputRef = useRef<HTMLInputElement>(null);
   const {
-    models: allModels,
+    models,
     currentModel,
     downloadingModels,
     downloadProgress,
@@ -58,7 +70,12 @@ export const ModelsSettings: React.FC = () => {
     deleteModel,
     rescanLocalModels,
   } = useModelStore();
-  const models = useVisibleModels(allModels);
+  const { getSetting } = useSettings();
+  const showAllSettings = getSetting("show_all_settings") ?? false;
+  const filterStreaming = resolveStreamingFilter(
+    filterStreamingOverride,
+    showAllSettings,
+  );
 
   // click outside handler for language dropdown
   useEffect(() => {
@@ -184,7 +201,12 @@ export const ModelsSettings: React.FC = () => {
       if (languageFilter !== "all") {
         if (!modelSupportsLanguage(model, languageFilter)) return false;
       }
-      if (filterStreaming && !model.supports_streaming) return false;
+      if (
+        filterStreaming &&
+        !model.supports_streaming &&
+        !isStreamingFilterExempt(model, currentModel)
+      )
+        return false;
       if (filterTranslation && !model.supports_translation) return false;
 
       if (q) {
@@ -193,7 +215,14 @@ export const ModelsSettings: React.FC = () => {
       }
       return true;
     });
-  }, [models, languageFilter, filterStreaming, filterTranslation, searchQuery]);
+  }, [
+    models,
+    languageFilter,
+    filterStreaming,
+    filterTranslation,
+    searchQuery,
+    currentModel,
+  ]);
 
   // Split filtered models into downloaded (including custom) and available sections
   const { downloadedModels, availableModels } = useMemo(() => {
@@ -286,7 +315,7 @@ export const ModelsSettings: React.FC = () => {
               <div className="h-4 w-px bg-mid-gray/30 mx-0.5" />
               <button
                 type="button"
-                onClick={() => setFilterStreaming((enabled) => !enabled)}
+                onClick={() => setFilterStreamingOverride(!filterStreaming)}
                 title={t("settings.models.filters.streaming")}
                 aria-label={t("settings.models.filters.streaming")}
                 aria-pressed={filterStreaming}

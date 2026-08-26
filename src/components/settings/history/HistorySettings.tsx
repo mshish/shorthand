@@ -372,7 +372,9 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           <span className="text-xs px-1.5 py-0.5 rounded-full bg-mid-gray/10 text-mid-gray uppercase tracking-wide">
             {entry.source === "dictation"
               ? t("settings.history.source.dictation")
-              : t("settings.history.source.meeting")}
+              : entry.source === "assisted_notes"
+                ? t("settings.history.source.assistedNotes")
+                : t("settings.history.source.meeting")}
           </span>
         </div>
         <div className="flex items-center">
