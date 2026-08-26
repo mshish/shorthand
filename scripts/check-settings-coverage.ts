@@ -47,8 +47,22 @@ const ENTRY_POINTS = [
   join(SRC, "components/Sidebar.tsx"),
 ];
 
-/** Directories whose components must all be reachable. */
-const REQUIRED_DIRS = [
+/**
+ * Directories that contain settings screens or controls, all of which must be
+ * reachable. `src/shorthand` also contains brand assets, settings-only UI
+ * primitives, and superseded section containers, so treating every TSX file in
+ * that tree as a settings component produces false positives when one of those
+ * non-setting components is unused.
+ */
+const SETTINGS_COMPONENT_DIRS = [
+  join(SRC, "components/settings"),
+  join(SRC, "shorthand/settings"),
+  join(SRC, "shorthand/dictation"),
+  join(SRC, "shorthand/assisted-notes"),
+];
+
+/** All source directories whose settings translation keys must resolve. */
+const SETTINGS_SOURCE_DIRS = [
   join(SRC, "components/settings"),
   join(SRC, "shorthand"),
 ];
@@ -85,15 +99,6 @@ const ALLOWED_UNREACHABLE: Record<string, string> = {
   // bound to the same shared field.
   "components/settings/ShowOverlay.tsx":
     "superseded by ui/OverlayRows, which splits style from the shared position",
-
-  // The fork's own previous section components, superseded by settings/*.
-  "shorthand/CaptureSettings.tsx": "replaced by settings/AudioSettings",
-  "shorthand/TranscriptionSettings.tsx": "replaced by settings/ModelSettings",
-  "shorthand/AppSettings.tsx": "replaced by settings/AppSettings",
-  "shorthand/DictationSettings.tsx":
-    "replaced by the Dictation tab in settings/ModesSettings",
-  "shorthand/ShowAllSettingsToggle.tsx":
-    "replaced by ui/AdvancedSwitch in the sidebar footer",
 
   // Renders both overlay rows together; the fork needs them in two sections, so
   // ui/OverlayRows supplies them separately. Kept because it is the surface the
@@ -244,7 +249,7 @@ function reachableFrom(entries: string[]): Set<string> {
 
 const reachable = reachableFrom(ENTRY_POINTS);
 
-const required = REQUIRED_DIRS.flatMap(walkDir).filter(isComponentFile);
+const required = SETTINGS_COMPONENT_DIRS.flatMap(walkDir).filter(isComponentFile);
 
 const missing: string[] = [];
 const staleAllowances: string[] = [];
@@ -277,7 +282,7 @@ for (const file of required) {
  * is how two Title Case labels survived a sweep of every other one.
  */
 const literalKeys = new Set<string>();
-for (const file of REQUIRED_DIRS.flatMap(walkDir)) {
+for (const file of SETTINGS_SOURCE_DIRS.flatMap(walkDir)) {
   if (!/\.tsx?$/.test(file)) continue;
   for (const match of readFileSync(file, "utf8").matchAll(
     /\bt\(\s*"([a-zA-Z0-9_.]+)"/g,

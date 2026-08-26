@@ -1228,6 +1228,259 @@ pub fn is_no_input_device_error(error_message: &str) -> bool {
             && normalized.contains("coreaudio"))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_consumer(
+    in_sample_rate: u32,
+    vad: Option<VadConfig>,
+    sample_rx: mpsc::Receiver<AudioChunk>,
+    cmd_rx: mpsc::Receiver<Cmd>,
+    level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
+    audio_cb: Option<AudioFrameCallback>,
+    stop_flag: Arc<AtomicBool>,
+    stream_running_at: Instant,
+) {
+    let mut frame_resampler = FrameResampler::new(
+        in_sample_rate as usize,
+        constants::WHISPER_SAMPLE_RATE as usize,
+        Duration::from_millis(30),
+    );
+
+    let mut processed_samples = Vec::<f32>::new();
+    let mut recording = false;
+    let mut vad_policy = VadPolicy::Offline;
+
+    // ---------- latency instrumentation ---------------------------------- //
+    // First-chunk arrival exposes the play()->samples-flowing gap; the
+    // first-captured log confirms capture begins with the chunk in flight
+    // when Cmd::Start lands.
+    let mut first_chunk_logged = false;
+    let mut awaiting_first_captured_chunk: Option<Instant> = None;
+    let mut capture_ready_tx: Option<mpsc::Sender<()>> = None;
+
+    // ---------- spectrum visualisation setup ---------------------------- //
+    const BUCKETS: usize = 16;
+    // Scale the FFT window to the device sample rate so the analysis window
+    // (~33 ms) and frequency resolution (~30 Hz/bin) stay roughly constant
+    // across devices. A fixed 512-sample window collapses the low vocal
+    // buckets onto a single bin at 48 kHz (e.g. built-in laptop mics), and
+    // would stutter at ~4-8 updates/sec on an 8-16 kHz Bluetooth headset.
+    // Targets: 48 kHz -> 2048, 16 kHz -> 512, 8 kHz -> 256.
+    let target_window = (f64::from(in_sample_rate) / 30.0).round() as usize;
+    let window_size = [256usize, 512, 1024, 2048]
+        .into_iter()
+        .min_by_key(|w| w.abs_diff(target_window))
+        .unwrap();
+    let mut visualizer = AudioVisualiser::new(
+        in_sample_rate,
+        window_size,
+        BUCKETS,
+        400.0,  // vocal_min_hz
+        4000.0, // vocal_max_hz
+    );
+
+    fn handle_frame(
+        samples: &[f32],
+        recording: bool,
+        vad_policy: VadPolicy,
+        vad: &Option<VadConfig>,
+        audio_cb: &Option<AudioFrameCallback>,
+        out_buf: &mut Vec<f32>,
+    ) {
+        if !recording {
+            return;
+        }
+
+        let mut emit = |buf: &[f32]| {
+            out_buf.extend_from_slice(buf);
+            if let Some(cb) = audio_cb {
+                cb(buf);
+            }
+        };
+
+        if vad_policy == VadPolicy::Disabled {
+            emit(samples);
+            return;
+        }
+
+        if let Some(cfg) = vad {
+            let mut det = cfg.detector.lock().unwrap();
+            match det.push_frame(samples).unwrap_or(VadFrame::Speech(samples)) {
+                VadFrame::Speech(buf) => emit(buf),
+                VadFrame::Noise => {}
+            }
+        } else {
+            emit(samples);
+        }
+    }
+
+    // Runs until the stream closes and `recv` returns `Err`.
+    while let Ok(chunk) = sample_rx.recv() {
+        // Handle pending commands BEFORE the in-flight chunk so a Start
+        // captures it. Commands used to be polled after processing, which
+        // silently dropped one buffer period of audio (~10ms built-in, up to
+        // ~100ms on Bluetooth) at every recording start.
+        let mut pending = Some(chunk);
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            match cmd {
+                Cmd::Start(policy, sent_at, ready_tx) => {
+                    log::debug!(
+                        "Cmd::Start processed {:?} after send; capture begins with the in-flight chunk",
+                        sent_at.elapsed()
+                    );
+                    awaiting_first_captured_chunk = Some(Instant::now());
+                    capture_ready_tx = Some(ready_tx);
+                    stop_flag.store(false, Ordering::Relaxed);
+                    vad_policy = policy;
+                    processed_samples.clear();
+                    recording = true;
+                    visualizer.reset();
+                    frame_resampler.reset();
+                    // Reconfigure the single VAD engine for this session's policy
+                    // and clear its smoothing + recurrent state before it sees
+                    // any frames.
+                    if vad_policy != VadPolicy::Disabled {
+                        if let Some(cfg) = &vad {
+                            let mut det = cfg.detector.lock().unwrap();
+                            det.set_hangover_frames(cfg.hangover_for(vad_policy));
+                            det.reset();
+                        }
+                    }
+                }
+                Cmd::Stop(reply_tx) => {
+                    recording = false;
+                    // If Stop was queued before the first chunk, dropping this
+                    // sender prevents a stale ready UI event or start chime.
+                    capture_ready_tx = None;
+                    awaiting_first_captured_chunk = None;
+                    stop_flag.store(true, Ordering::Relaxed);
+
+                    // The chunk in hand arrived before the stop; it belongs to
+                    // the recording, so feed it ahead of the drain below.
+                    if let Some(AudioChunk::Samples(raw)) = pending.take() {
+                        frame_resampler.push(&raw, &mut |frame: &[f32]| {
+                            handle_frame(
+                                frame,
+                                true,
+                                vad_policy,
+                                &vad,
+                                &audio_cb,
+                                &mut processed_samples,
+                            )
+                        });
+                    }
+
+                    // Drain all remaining audio until the producer confirms end-of-stream.
+                    // The cpal callback sees the stop flag, sends EndOfStream, and goes
+                    // silent — guaranteeing every captured sample is in the channel
+                    // ahead of the sentinel.
+                    loop {
+                        match sample_rx.recv_timeout(Duration::from_secs(2)) {
+                            Ok(AudioChunk::Samples(remaining)) => {
+                                frame_resampler.push(&remaining, &mut |frame: &[f32]| {
+                                    handle_frame(
+                                        frame,
+                                        true,
+                                        vad_policy,
+                                        &vad,
+                                        &audio_cb,
+                                        &mut processed_samples,
+                                    )
+                                });
+                            }
+                            Ok(AudioChunk::EndOfStream) => break,
+                            Err(_) => {
+                                log::warn!("Timed out waiting for EndOfStream from audio callback");
+                                break;
+                            }
+                        }
+                    }
+
+                    frame_resampler.finish(&mut |frame: &[f32]| {
+                        handle_frame(
+                            frame,
+                            true,
+                            vad_policy,
+                            &vad,
+                            &audio_cb,
+                            &mut processed_samples,
+                        )
+                    });
+
+                    let _ = reply_tx.send(std::mem::take(&mut processed_samples));
+
+                    // Resume the audio callback so the consumer loop can continue
+                    // receiving chunks (important for always-on microphone mode).
+                    stop_flag.store(false, Ordering::Relaxed);
+                }
+                Cmd::Shutdown => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+
+        let raw = match pending.take() {
+            Some(AudioChunk::Samples(s)) => s,
+            // EndOfStream, or the chunk was consumed by a Stop above.
+            _ => continue,
+        };
+
+        let chunk_ms = raw.len() as f64 * 1000.0 / in_sample_rate as f64;
+        if !first_chunk_logged {
+            first_chunk_logged = true;
+            log::debug!(
+                "first audio chunk arrived {:?} after stream start ({:.1}ms of audio)",
+                stream_running_at.elapsed(),
+                chunk_ms
+            );
+        }
+
+        // ---------- recording-time processing ---------------------------- //
+        // In always-on mode the capture stream stays open continuously for
+        // zero-latency start, so while idle (not recording) there is nothing to
+        // do with a chunk: handle_frame returns early when not recording, which
+        // means the resampled output would be discarded, and the level meter has
+        // no idle consumer. Skip both the level-meter FFT and the resampler while
+        // idle to avoid doing unnecessary work whose output is thrown away. Both
+        // are reset on Cmd::Start (visualizer.reset() / frame_resampler.reset()),
+        // so they resume cleanly the moment recording begins.
+        if recording {
+            if let Some(buckets) = visualizer.feed(&raw) {
+                if let Some(cb) = &level_cb {
+                    cb(buckets);
+                }
+            }
+
+            frame_resampler.push(&raw, &mut |frame: &[f32]| {
+                handle_frame(
+                    frame,
+                    recording,
+                    vad_policy,
+                    &vad,
+                    &audio_cb,
+                    &mut processed_samples,
+                )
+            });
+        }
+
+        if recording {
+            if let Some(started) = awaiting_first_captured_chunk.take() {
+                log::debug!(
+                    "first captured chunk ({:.1}ms of audio) processed {:?} after Cmd::Start",
+                    chunk_ms,
+                    started.elapsed()
+                );
+            }
+            if let Some(ready_tx) = capture_ready_tx.take() {
+                // Signal only after this chunk has passed through the visualizer
+                // and resampler. Silence still counts: readiness means the host
+                // is delivering samples, not that VAD has detected speech.
+                let _ = ready_tx.send(());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(windows)]
@@ -1641,258 +1894,5 @@ mod tests {
         assert!(second.iter().any(|sample| (*sample - 0.25).abs() < 1e-6));
         assert!(!second.iter().any(|sample| (*sample - 0.75).abs() < 1e-6));
         harness.shutdown();
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_consumer(
-    in_sample_rate: u32,
-    vad: Option<VadConfig>,
-    sample_rx: mpsc::Receiver<AudioChunk>,
-    cmd_rx: mpsc::Receiver<Cmd>,
-    level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
-    audio_cb: Option<AudioFrameCallback>,
-    stop_flag: Arc<AtomicBool>,
-    stream_running_at: Instant,
-) {
-    let mut frame_resampler = FrameResampler::new(
-        in_sample_rate as usize,
-        constants::WHISPER_SAMPLE_RATE as usize,
-        Duration::from_millis(30),
-    );
-
-    let mut processed_samples = Vec::<f32>::new();
-    let mut recording = false;
-    let mut vad_policy = VadPolicy::Offline;
-
-    // ---------- latency instrumentation ---------------------------------- //
-    // First-chunk arrival exposes the play()->samples-flowing gap; the
-    // first-captured log confirms capture begins with the chunk in flight
-    // when Cmd::Start lands.
-    let mut first_chunk_logged = false;
-    let mut awaiting_first_captured_chunk: Option<Instant> = None;
-    let mut capture_ready_tx: Option<mpsc::Sender<()>> = None;
-
-    // ---------- spectrum visualisation setup ---------------------------- //
-    const BUCKETS: usize = 16;
-    // Scale the FFT window to the device sample rate so the analysis window
-    // (~33 ms) and frequency resolution (~30 Hz/bin) stay roughly constant
-    // across devices. A fixed 512-sample window collapses the low vocal
-    // buckets onto a single bin at 48 kHz (e.g. built-in laptop mics), and
-    // would stutter at ~4-8 updates/sec on an 8-16 kHz Bluetooth headset.
-    // Targets: 48 kHz -> 2048, 16 kHz -> 512, 8 kHz -> 256.
-    let target_window = (f64::from(in_sample_rate) / 30.0).round() as usize;
-    let window_size = [256usize, 512, 1024, 2048]
-        .into_iter()
-        .min_by_key(|w| w.abs_diff(target_window))
-        .unwrap();
-    let mut visualizer = AudioVisualiser::new(
-        in_sample_rate,
-        window_size,
-        BUCKETS,
-        400.0,  // vocal_min_hz
-        4000.0, // vocal_max_hz
-    );
-
-    fn handle_frame(
-        samples: &[f32],
-        recording: bool,
-        vad_policy: VadPolicy,
-        vad: &Option<VadConfig>,
-        audio_cb: &Option<AudioFrameCallback>,
-        out_buf: &mut Vec<f32>,
-    ) {
-        if !recording {
-            return;
-        }
-
-        let mut emit = |buf: &[f32]| {
-            out_buf.extend_from_slice(buf);
-            if let Some(cb) = audio_cb {
-                cb(buf);
-            }
-        };
-
-        if vad_policy == VadPolicy::Disabled {
-            emit(samples);
-            return;
-        }
-
-        if let Some(cfg) = vad {
-            let mut det = cfg.detector.lock().unwrap();
-            match det.push_frame(samples).unwrap_or(VadFrame::Speech(samples)) {
-                VadFrame::Speech(buf) => emit(buf),
-                VadFrame::Noise => {}
-            }
-        } else {
-            emit(samples);
-        }
-    }
-
-    // Runs until the stream closes and `recv` returns `Err`.
-    while let Ok(chunk) = sample_rx.recv() {
-        // Handle pending commands BEFORE the in-flight chunk so a Start
-        // captures it. Commands used to be polled after processing, which
-        // silently dropped one buffer period of audio (~10ms built-in, up to
-        // ~100ms on Bluetooth) at every recording start.
-        let mut pending = Some(chunk);
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                Cmd::Start(policy, sent_at, ready_tx) => {
-                    log::debug!(
-                        "Cmd::Start processed {:?} after send; capture begins with the in-flight chunk",
-                        sent_at.elapsed()
-                    );
-                    awaiting_first_captured_chunk = Some(Instant::now());
-                    capture_ready_tx = Some(ready_tx);
-                    stop_flag.store(false, Ordering::Relaxed);
-                    vad_policy = policy;
-                    processed_samples.clear();
-                    recording = true;
-                    visualizer.reset();
-                    frame_resampler.reset();
-                    // Reconfigure the single VAD engine for this session's policy
-                    // and clear its smoothing + recurrent state before it sees
-                    // any frames.
-                    if vad_policy != VadPolicy::Disabled {
-                        if let Some(cfg) = &vad {
-                            let mut det = cfg.detector.lock().unwrap();
-                            det.set_hangover_frames(cfg.hangover_for(vad_policy));
-                            det.reset();
-                        }
-                    }
-                }
-                Cmd::Stop(reply_tx) => {
-                    recording = false;
-                    // If Stop was queued before the first chunk, dropping this
-                    // sender prevents a stale ready UI event or start chime.
-                    capture_ready_tx = None;
-                    awaiting_first_captured_chunk = None;
-                    stop_flag.store(true, Ordering::Relaxed);
-
-                    // The chunk in hand arrived before the stop; it belongs to
-                    // the recording, so feed it ahead of the drain below.
-                    if let Some(AudioChunk::Samples(raw)) = pending.take() {
-                        frame_resampler.push(&raw, &mut |frame: &[f32]| {
-                            handle_frame(
-                                frame,
-                                true,
-                                vad_policy,
-                                &vad,
-                                &audio_cb,
-                                &mut processed_samples,
-                            )
-                        });
-                    }
-
-                    // Drain all remaining audio until the producer confirms end-of-stream.
-                    // The cpal callback sees the stop flag, sends EndOfStream, and goes
-                    // silent — guaranteeing every captured sample is in the channel
-                    // ahead of the sentinel.
-                    loop {
-                        match sample_rx.recv_timeout(Duration::from_secs(2)) {
-                            Ok(AudioChunk::Samples(remaining)) => {
-                                frame_resampler.push(&remaining, &mut |frame: &[f32]| {
-                                    handle_frame(
-                                        frame,
-                                        true,
-                                        vad_policy,
-                                        &vad,
-                                        &audio_cb,
-                                        &mut processed_samples,
-                                    )
-                                });
-                            }
-                            Ok(AudioChunk::EndOfStream) => break,
-                            Err(_) => {
-                                log::warn!("Timed out waiting for EndOfStream from audio callback");
-                                break;
-                            }
-                        }
-                    }
-
-                    frame_resampler.finish(&mut |frame: &[f32]| {
-                        handle_frame(
-                            frame,
-                            true,
-                            vad_policy,
-                            &vad,
-                            &audio_cb,
-                            &mut processed_samples,
-                        )
-                    });
-
-                    let _ = reply_tx.send(std::mem::take(&mut processed_samples));
-
-                    // Resume the audio callback so the consumer loop can continue
-                    // receiving chunks (important for always-on microphone mode).
-                    stop_flag.store(false, Ordering::Relaxed);
-                }
-                Cmd::Shutdown => {
-                    stop_flag.store(true, Ordering::Relaxed);
-                    return;
-                }
-            }
-        }
-
-        let raw = match pending.take() {
-            Some(AudioChunk::Samples(s)) => s,
-            // EndOfStream, or the chunk was consumed by a Stop above.
-            _ => continue,
-        };
-
-        let chunk_ms = raw.len() as f64 * 1000.0 / in_sample_rate as f64;
-        if !first_chunk_logged {
-            first_chunk_logged = true;
-            log::debug!(
-                "first audio chunk arrived {:?} after stream start ({:.1}ms of audio)",
-                stream_running_at.elapsed(),
-                chunk_ms
-            );
-        }
-
-        // ---------- recording-time processing ---------------------------- //
-        // In always-on mode the capture stream stays open continuously for
-        // zero-latency start, so while idle (not recording) there is nothing to
-        // do with a chunk: handle_frame returns early when not recording, which
-        // means the resampled output would be discarded, and the level meter has
-        // no idle consumer. Skip both the level-meter FFT and the resampler while
-        // idle to avoid doing unnecessary work whose output is thrown away. Both
-        // are reset on Cmd::Start (visualizer.reset() / frame_resampler.reset()),
-        // so they resume cleanly the moment recording begins.
-        if recording {
-            if let Some(buckets) = visualizer.feed(&raw) {
-                if let Some(cb) = &level_cb {
-                    cb(buckets);
-                }
-            }
-
-            frame_resampler.push(&raw, &mut |frame: &[f32]| {
-                handle_frame(
-                    frame,
-                    recording,
-                    vad_policy,
-                    &vad,
-                    &audio_cb,
-                    &mut processed_samples,
-                )
-            });
-        }
-
-        if recording {
-            if let Some(started) = awaiting_first_captured_chunk.take() {
-                log::debug!(
-                    "first captured chunk ({:.1}ms of audio) processed {:?} after Cmd::Start",
-                    chunk_ms,
-                    started.elapsed()
-                );
-            }
-            if let Some(ready_tx) = capture_ready_tx.take() {
-                // Signal only after this chunk has passed through the visualizer
-                // and resampler. Silence still counts: readiness means the host
-                // is delivering samples, not that VAD has detected speech.
-                let _ = ready_tx.send(());
-            }
-        }
     }
 }
