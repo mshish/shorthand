@@ -32,14 +32,19 @@ export const AICleanupSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-8">
-      {/* Says the one thing that is not obvious from the rows below: what is
-          shared and what is not. The connection and the prompt library are
-          global; whether cleanup runs at all, and which prompt it uses, are
-          per-mode and set under Modes. A fork-only string, so it lives in
-          FORK_ONLY_STRINGS rather than in a locale file. */}
-      <p className="px-1 text-xs text-mid-gray">
-        {t("settings.aiCleanup.sharedNote")}
-      </p>
+      {/* Two notes, not one paragraph. The first says what is not obvious
+          from the rows below: what is shared and what is not. The
+          connection and the prompt library are global; whether cleanup runs
+          at all, and which prompt it uses, are per-mode and set under
+          Modes. The second is a recommendation, not a fact about scope —
+          running it into the first would read as a continuation of the
+          plumbing explanation, which is where a reader stops before
+          reaching the actual advice. Both are fork-only strings, so they
+          live in locales/en.json rather than an upstream catalogue. */}
+      <div className="px-1 space-y-1 text-xs text-mid-gray">
+        <p>{t("settings.aiCleanup.sharedNote")}</p>
+        <p>{t("settings.aiCleanup.dictationNote")}</p>
+      </div>
 
       <Sheet title={t("settings.postProcessing.api.title")}>
         {/* Bundles ProviderSelect, ApiKeyField (or the Apple Intelligence
