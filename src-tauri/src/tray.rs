@@ -134,12 +134,21 @@ pub fn change_tray_icon(app: &AppHandle, icon: TrayIconState) {
     let warning = crate::secure_input::tray_warning_active(app);
     let icon_path = get_icon_path(theme, icon, warning);
 
+    // Template mode lets macOS auto-tint an icon to match the menu bar and its
+    // own "pressed" state, but it does so by discarding the icon's colour and
+    // using only its alpha channel. Plain idle is line art with no second
+    // colour, so it stays template and blends in like any other menu bar
+    // glyph. Every other state tints an interior — the bird's body, plus the
+    // pen for the Secure Input warning; see gen-brand-icons.mjs — and needs
+    // templating off for that colour to survive.
+    let is_template = icon == TrayIconState::Idle && !warning;
+
     let icon_started = std::time::Instant::now();
     if let Err(err) = load_tray_icon(
         app.path()
             .resolve(icon_path, tauri::path::BaseDirectory::Resource),
     )
-    .and_then(|image| tray.set_icon_with_as_template(Some(image), true))
+    .and_then(|image| tray.set_icon_with_as_template(Some(image), is_template))
     {
         error!("Failed to update tray icon '{icon_path}': {err}");
     }
