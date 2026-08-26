@@ -63,8 +63,6 @@ pub fn is_laptop() -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     #[cfg(target_os = "macos")]
     fn test_clamshell_check() {
