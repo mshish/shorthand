@@ -18,7 +18,11 @@
     "test:playwright:ui": "playwright test --ui",
     "check:translations": "bun scripts/check-translations.ts",
     "check:branding": "bun scripts/check-branding.ts",
+    "check:locale-drift": "bun scripts/check-locale-drift.ts",
+    "check:fork-translations": "bun scripts/check-fork-translations.ts",
     "check:settings": "bun scripts/check-settings-coverage.ts",
+    "test:unit": "bun test src/shorthand",
+    "golden:branding": "bun scripts/write-branding-golden.ts",
     "postinstall": "bun scripts/check-nix-deps.ts"
   },
   "dependencies": {

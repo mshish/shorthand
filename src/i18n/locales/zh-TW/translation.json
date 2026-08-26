@@ -9,11 +9,6 @@
     "cancel": "取消",
     "secureInputWarning": "⚠ 快捷鍵被 Secure Input 阻擋"
   },
-  "transcript": {
-    "speakerMic": "You",
-    "speakerSystem": "System",
-    "retryUnavailable": "Retry is unavailable for transcripts containing system audio."
-  },
   "sidebar": {
     "general": "一般",
     "models": "模型",
@@ -21,8 +16,7 @@
     "postProcessing": "後處理",
     "history": "歷史紀錄",
     "debug": "偵錯",
-    "about": "關於",
-    "dictation": "Dictation"
+    "about": "關於"
   },
   "onboarding": {
     "subtitle": "首先，請選擇一種模型",
@@ -175,7 +169,7 @@
         "pressKeys": "請按鍵...",
         "bindings": {
           "transcribe": {
-            "name": "Capture Shortcut",
+            "name": "轉錄快捷鍵",
             "description": "用於錄製和轉錄語音的鍵盤快捷鍵"
           },
           "cancel": {
@@ -185,14 +179,6 @@
           "transcribe_with_post_process": {
             "name": "後處理快捷鍵",
             "description": "可選：專用快捷鍵，使用時一律對轉錄結果套用 AI 後處理"
-          },
-          "dictate": {
-            "name": "Dictation Shortcut",
-            "description": "The keyboard shortcut to start and stop dictation."
-          },
-          "dictate_with_post_process": {
-            "name": "Dictation AI Cleanup Hotkey",
-            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -263,21 +249,6 @@
       }
     },
     "advanced": {
-      "systemAudio": {
-        "label": "Capture System Audio",
-        "description": "Capture Windows system output as a separate speaker-labelled transcription alongside the microphone.",
-        "streamingRequired": "System audio capture requires a model that supports streaming.",
-        "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
-      },
-      "followStream": {
-        "label": "Follow Live Transcript Output",
-        "description": "Allow local tools to follow live transcript events by running `handy --follow-stream`."
-      },
-      "systemAudioDevice": {
-        "title": "System Audio Device",
-        "description": "Choose the output device to capture. Default follows the current Windows default output.",
-        "default": "Default"
-      },
       "groups": {
         "app": "應用程式",
         "output": "輸出",
@@ -465,35 +436,6 @@
         "createFirst": "點選上方的「建立新提示詞」來建立您的第一個後處理提示詞"
       }
     },
-    "dictation": {
-      "enable": {
-        "label": "Enable Dictation",
-        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
-        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
-      },
-      "groups": {
-        "shortcut": "Shortcut",
-        "aiCleanup": "AI Cleanup",
-        "privacy": "Privacy"
-      },
-      "postProcessing": {
-        "hint": "Configure providers, API keys and models in the Post-Processing section."
-      },
-      "privacy": {
-        "saveRecordings": {
-          "label": "Save Recordings",
-          "description": "Keep the audio recording for each dictation."
-        },
-        "saveTranscripts": {
-          "label": "Save Transcripts",
-          "description": "Keep the transcript text for each dictation."
-        }
-      },
-      "overlayPosition": {
-        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
-      },
-      "footer": "Microphone, model and language come from the Capture and Transcription sections."
-    },
     "history": {
       "title": "歷史紀錄",
       "openFolder": "開啟錄音資料夾",
@@ -507,11 +449,7 @@
       "retranscribe": "重新轉錄",
       "retranscribeError": "重新轉錄失敗，請重試。",
       "transcribing": "轉錄中...",
-      "transcriptionFailed": "轉錄失敗。您可以使用重試圖示重新轉錄。",
-      "source": {
-        "meeting": "Meeting",
-        "dictation": "Dictation"
-      }
+      "transcriptionFailed": "轉錄失敗。您可以使用重試圖示重新轉錄。"
     },
     "debug": {
       "title": "偵錯",

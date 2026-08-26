@@ -9,11 +9,6 @@
     "cancel": "Annuleren",
     "secureInputWarning": "⚠ Sneltoetsen geblokkeerd door Secure Input"
   },
-  "transcript": {
-    "speakerMic": "You",
-    "speakerSystem": "System",
-    "retryUnavailable": "Retry is unavailable for transcripts containing system audio."
-  },
   "sidebar": {
     "general": "Algemeen",
     "models": "Modellen",
@@ -21,8 +16,7 @@
     "postProcessing": "Naverwerking",
     "history": "Geschiedenis",
     "debug": "Probleemoplossing",
-    "about": "Over Handy",
-    "dictation": "Dictation"
+    "about": "Over Handy"
   },
   "onboarding": {
     "subtitle": "Kies een transcriptiemodel om aan de slag te gaan",
@@ -175,7 +169,7 @@
         "pressKeys": "Druk op toetsen...",
         "bindings": {
           "transcribe": {
-            "name": "Capture Shortcut",
+            "name": "Sneltoets voor dicteren",
             "description": "De sneltoets om je stem op te nemen en te transcriberen."
           },
           "cancel": {
@@ -185,14 +179,6 @@
           "transcribe_with_post_process": {
             "name": "Sneltoets voor naverwerking",
             "description": "Optioneel: Een specifieke sneltoets die altijd AI-naverwerking toepast op je transcriptie."
-          },
-          "dictate": {
-            "name": "Dictation Shortcut",
-            "description": "The keyboard shortcut to start and stop dictation."
-          },
-          "dictate_with_post_process": {
-            "name": "Dictation AI Cleanup Hotkey",
-            "description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation."
           }
         },
         "errors": {
@@ -263,21 +249,6 @@
       }
     },
     "advanced": {
-      "systemAudio": {
-        "label": "Capture System Audio",
-        "description": "Capture Windows system output as a separate speaker-labelled transcription alongside the microphone.",
-        "streamingRequired": "System audio capture requires a model that supports streaming.",
-        "muteConflict": "Turn off Capture System Audio before enabling Mute While Recording."
-      },
-      "followStream": {
-        "label": "Follow Live Transcript Output",
-        "description": "Allow local tools to follow live transcript events by running `handy --follow-stream`."
-      },
-      "systemAudioDevice": {
-        "title": "System Audio Device",
-        "description": "Choose the output device to capture. Default follows the current Windows default output.",
-        "default": "Default"
-      },
       "groups": {
         "app": "App",
         "output": "Uitvoer",
@@ -465,35 +436,6 @@
         "createFirst": "Klik hierboven op 'Nieuwe prompt maken' om je eerste naverwerkingsprompt aan te maken."
       }
     },
-    "dictation": {
-      "enable": {
-        "label": "Enable Dictation",
-        "description": "Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.",
-        "shortcutConflict": "Could not enable dictation: one of its shortcuts is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again."
-      },
-      "groups": {
-        "shortcut": "Shortcut",
-        "aiCleanup": "AI Cleanup",
-        "privacy": "Privacy"
-      },
-      "postProcessing": {
-        "hint": "Configure providers, API keys and models in the Post-Processing section."
-      },
-      "privacy": {
-        "saveRecordings": {
-          "label": "Save Recordings",
-          "description": "Keep the audio recording for each dictation."
-        },
-        "saveTranscripts": {
-          "label": "Save Transcripts",
-          "description": "Keep the transcript text for each dictation."
-        }
-      },
-      "overlayPosition": {
-        "sharedDescription": "Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting."
-      },
-      "footer": "Microphone, model and language come from the Capture and Transcription sections."
-    },
     "history": {
       "title": "Geschiedenis",
       "openFolder": "Opnamemap openen",
@@ -507,11 +449,7 @@
       "retranscribe": "Opnieuw transcriberen",
       "retranscribeError": "Opnieuw transcriberen mislukt. Probeer het opnieuw.",
       "transcribing": "Transcriberen...",
-      "transcriptionFailed": "Transcriptie mislukt. Je kunt het opnieuw proberen via het herlaad-pictogram.",
-      "source": {
-        "meeting": "Meeting",
-        "dictation": "Dictation"
-      }
+      "transcriptionFailed": "Transcriptie mislukt. Je kunt het opnieuw proberen via het herlaad-pictogram."
     },
     "debug": {
       "title": "Probleemoplossing",

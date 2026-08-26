@@ -324,6 +324,37 @@ a delete/modify conflict. The same rule leaves `src-tauri/icons/logo.png` in
 place: it is upstream’s waving hand, is referenced by nothing, and is absent
 from `tauri.conf.json`’s bundle icon list.
 
+## Fork-only strings
+
+The tables above are the fork's visual identity. Its text content — the
+Handy → Shorthand rename, and the strings upstream Handy simply doesn't
+have — lives in `src/shorthand/branding.ts` and is a separate mechanism,
+covered fully by `src/shorthand/locales/README.md`. The short version, so a
+reader of this file isn't left assuming visual and text branding are the
+same thing:
+
+`branding.ts` walks every locale's translation object at build time
+(`src/shorthand/vite-branding-plugin.ts`) and does two jobs in order —
+substitution first, fork strings merged on top. Substitution finds the word
+"Handy" as a whole word (handling German/Scandinavian genitive "Handys") and
+replaces it with "Shorthand"; a `de`-only warning flags any match, because
+"Handy" is also the everyday German word for a mobile phone. Fork strings
+then merge in on top of the substituted result, which is why a fork string
+may contain the literal word "Handy" and mean it — it never passes through
+the substitution.
+
+As of 2026-08-26 the strings are in `src/shorthand/locales/*.json` (translatable
+fork content) and `src/shorthand/english-copy.json` (English casing rules,
+merged into `en` only). `FORK_ONLY_STRINGS` remains exported as the union, for
+`check-branding.ts`'s locale-independent question "is this key deliberately
+ours?". Merge order is unchanged: substitution first, fork strings on top.
+
+The same 2026-08-26 plan also found, and fixed, 32 fork-only keys that had
+been written directly into `src/i18n/locales/` instead of through this
+mechanism — the exact thing this file's "never edit the locale files" rule
+exists to prevent. `bun run check:locale-drift` now fails the build if that
+happens again.
+
 ## Seeing it
 
 `brand-preview/` is a committed harness that renders real UI primitives against

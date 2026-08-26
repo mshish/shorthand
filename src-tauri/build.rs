@@ -278,8 +278,18 @@ fn split_versioned_so(name: &str) -> Option<(&str, usize)> {
 
 /// Generate backend-consumed tray and transcript translations from frontend locale files.
 ///
-/// Source of truth: src/i18n/locales/*/translation.json
-/// The English "tray" and "transcript" sections define their struct fields.
+/// Source of truth: the SAME effective strings the frontend renders, i.e.
+/// upstream's `src/i18n/locales/*/translation.json` merged with the fork's own
+/// catalogues under `src/shorthand/locales/*.json` — mirroring, in Rust, what
+/// `applyBranding` / `forkStringsFor` (`src/shorthand/branding.ts`) do for the
+/// frontend at build time. Diverging from that merge would let the tray and a
+/// merged transcript render different text than Settings does for the same
+/// key.
+///
+/// The English "tray" and "transcript" sections (after that merge) define
+/// their struct fields. `transcript` is fork-only content — upstream carries
+/// no such section — so every field in `TranscriptStrings` today comes from
+/// `src/shorthand/locales/en.json`; `tray` remains upstream's.
 fn generate_tray_translations() {
     use std::collections::BTreeMap;
     use std::fs;
@@ -287,8 +297,81 @@ fn generate_tray_translations() {
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let locales_dir = Path::new("../src/i18n/locales");
+    let fork_locales_dir = Path::new("../src/shorthand/locales");
+    let english_copy_path = Path::new("../src/shorthand/english-copy.json");
 
     println!("cargo:rerun-if-changed=../src/i18n/locales");
+    // The fork's own strings are a second source this generator consumes.
+    // Without these, an edit to a fork-only tray/transcript string (or a new
+    // locale file appearing under src/shorthand/locales/) would not trigger a
+    // rebuild, and the generated struct would silently go stale.
+    println!("cargo:rerun-if-changed={}", fork_locales_dir.display());
+    println!("cargo:rerun-if-changed={}", english_copy_path.display());
+
+    // The fork's own catalogues: flat, dotted-key JSON (e.g.
+    // "transcript.speakerMic"), one file per locale, `en.json` mandatory and
+    // the rest optional — see src/shorthand/locales/README.md. Read every
+    // *.json file present so a future de.json/fr.json is picked up with no
+    // change here.
+    let mut fork_catalogues: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+        BTreeMap::new();
+    for entry in fs::read_dir(fork_locales_dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let lang = path.file_stem().unwrap().to_str().unwrap().to_string();
+        println!("cargo:rerun-if-changed={}", path.display());
+        let content = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        fork_catalogues.insert(lang, parsed.as_object().cloned().unwrap_or_default());
+    }
+
+    // English-only casing preferences (src/shorthand/english-copy.json),
+    // reaching `en` alone — mirrors ENGLISH_COPY in branding.ts. None of
+    // today's entries fall under "tray." or "transcript.", but a future one
+    // should not require touching this generator.
+    let english_copy: serde_json::Map<String, serde_json::Value> = {
+        let content = fs::read_to_string(english_copy_path).unwrap();
+        serde_json::from_str(&content).unwrap()
+    };
+
+    // Mirrors `forkStringsFor` in branding.ts: English is the base, the
+    // requested locale's own catalogue (if any) is layered on top per key, so
+    // a locale with no fork catalogue yet — every non-English locale today —
+    // falls back to English rather than to a missing key.
+    let fork_strings_for = |locale: &str| -> serde_json::Map<String, serde_json::Value> {
+        let mut merged = fork_catalogues.get("en").cloned().unwrap_or_default();
+        if let Some(override_map) = fork_catalogues.get(locale) {
+            for (k, v) in override_map {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+        if locale == "en" {
+            for (k, v) in &english_copy {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+        merged
+    };
+
+    // Pull the keys under `prefix.` out of a flat dotted map, e.g.
+    // "transcript.speakerMic" -> "speakerMic" under prefix "transcript" —
+    // the flat-to-nested half of the shape mismatch between the two catalogue
+    // formats (setByPath in branding.ts does the general case; tray and
+    // transcript are never more than one level deep, so this suffices here).
+    let sub_map = |flat: &serde_json::Map<String, serde_json::Value>,
+                   prefix: &str|
+     -> serde_json::Map<String, serde_json::Value> {
+        let dotted_prefix = format!("{prefix}.");
+        let mut out = serde_json::Map::new();
+        for (k, v) in flat {
+            if let Some(rest) = k.strip_prefix(&dotted_prefix) {
+                out.insert(rest.to_string(), v.clone());
+            }
+        }
+        out
+    };
 
     // Collect all locale translations
     let mut translations: BTreeMap<String, serde_json::Value> = BTreeMap::new();
@@ -308,12 +391,37 @@ fn generate_tray_translations() {
         let content = fs::read_to_string(&json_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        if let Some(tray) = parsed.get("tray").cloned() {
-            translations.insert(lang.clone(), tray);
+        // Upstream's own strings, brand-substituted the same way the
+        // frontend substitutes them (applyBranding in branding.ts) before the
+        // fork's own strings are layered on top *unsubstituted* — a fork
+        // string may say "Handy" and mean it, because branding.ts never
+        // passes it through substitution either. Neither section carries
+        // "Handy" today, so this is a no-op in practice, but the tray menu is
+        // exactly the kind of upstream string that could gain one.
+        let mut tray = parsed
+            .get("tray")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        substitute_brand_in_map(&mut tray);
+
+        let mut transcript = parsed
+            .get("transcript")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        substitute_brand_in_map(&mut transcript);
+
+        let fork_strings = fork_strings_for(&lang);
+        for (k, v) in sub_map(&fork_strings, "tray") {
+            tray.insert(k, v);
         }
-        if let Some(transcript) = parsed.get("transcript").cloned() {
-            transcript_translations.insert(lang, transcript);
+        for (k, v) in sub_map(&fork_strings, "transcript") {
+            transcript.insert(k, v);
         }
+
+        translations.insert(lang.clone(), serde_json::Value::Object(tray));
+        transcript_translations.insert(lang, serde_json::Value::Object(transcript));
     }
 
     // English defines the schema
@@ -417,6 +525,66 @@ fn escape_string(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+/// Rebrand every string value in a flat JSON object in place.
+fn substitute_brand_in_map(map: &mut serde_json::Map<String, serde_json::Value>) {
+    for value in map.values_mut() {
+        if let serde_json::Value::String(s) = value {
+            *s = substitute_brand(s);
+        }
+    }
+}
+
+/// Rust port of the `WORD_BOUNDED` substitution in `src/shorthand/branding.ts`:
+/// replace "Handy" with "Shorthand" at a word boundary, carrying a trailing
+/// Scandinavian/German genitive `s` along (`Handys` -> `Shorthands`), so the
+/// tray and a merged transcript render the same text as the frontend does for
+/// the same key. A hyphen already counts as a boundary, so "Handy-Symbol"
+/// substitutes correctly without special-casing it.
+///
+/// Deliberately does not replicate the TypeScript version's warning
+/// collection (survives-after-substitution / German false-friend checks):
+/// `scripts/check-branding.ts` already gates those for every catalogue this
+/// generator reads from, so re-implementing it here would just be a second,
+/// divergence-prone copy of the same check.
+fn substitute_brand(input: &str) -> String {
+    const FROM: &str = "Handy";
+    const TO: &str = "Shorthand";
+
+    fn is_word_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i..].starts_with(FROM) {
+            let before_ok = i == 0 || !is_word_byte(bytes[i - 1]);
+            let after_idx = i + FROM.len();
+            let has_genitive_s = input[after_idx..].starts_with('s');
+            let boundary_idx = if has_genitive_s {
+                after_idx + 1
+            } else {
+                after_idx
+            };
+            let after_ok = boundary_idx >= input.len() || !is_word_byte(bytes[boundary_idx]);
+            if before_ok && after_ok {
+                out.push_str(TO);
+                if has_genitive_s {
+                    out.push('s');
+                }
+                i = boundary_idx;
+                continue;
+            }
+        }
+        // Advance by one char, not one byte, to stay on a UTF-8 boundary.
+        let ch = input[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
