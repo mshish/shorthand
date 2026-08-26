@@ -35,6 +35,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub cancel: bool,
 
+    /// Toggle an Assisted Notes capture on/off (sent to running instance)
+    #[arg(long)]
+    pub toggle_assisted_notes: bool,
+
     /// Enable debug mode with verbose logging
     #[arg(long)]
     pub debug: bool,
@@ -80,7 +84,7 @@ pub struct CliArgs {
         value_name = "MODE",
         num_args = 0..=1,
         default_missing_value = "json",
-        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel"]
+        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel", "toggle_assisted_notes"]
     )]
     pub follow_stream: Option<FollowStreamMode>,
 }
@@ -116,6 +120,11 @@ mod tests {
         );
 
         let error = CliArgs::try_parse_from(["handy", "--follow-stream", "--cancel"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error =
+            CliArgs::try_parse_from(["handy", "--follow-stream", "--toggle-assisted-notes"])
+                .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
 
         let error = CliArgs::try_parse_from(["handy", "--follow-stream", "bogus"]).unwrap_err();

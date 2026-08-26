@@ -129,12 +129,67 @@ export const DictationOverlayStyleRow: React.FC<{
 };
 
 /**
+ * Assisted notes' own `overlay_style`, without the position row. Mirrors
+ * `DictationOverlayStyleRow` for the same reason: the shared position
+ * already renders exactly once in App, so a second copy here bound to the
+ * same field would be two inputs writing one value.
+ */
+export const AssistedNotesOverlayStyleRow: React.FC<{
+  descriptionMode?: "inline" | "tooltip";
+  grouped?: boolean;
+  disabled?: boolean;
+}> = ({ descriptionMode = "inline", grouped = true, disabled = false }) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  const assistedNotes = getSetting("assisted_notes");
+
+  const selectedStyle = (assistedNotes?.overlay_style ||
+    "minimal") as OverlayStyle;
+
+  return (
+    <SettingContainer
+      title={t("settings.advanced.overlay.style.title")}
+      description={t("settings.advanced.overlay.style.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+      disabled={disabled}
+    >
+      <Dropdown
+        options={[
+          {
+            value: "none",
+            label: t("settings.advanced.overlay.style.options.none"),
+          },
+          {
+            value: "minimal",
+            label: t("settings.advanced.overlay.style.options.minimal"),
+          },
+          {
+            value: "live",
+            label: t("settings.advanced.overlay.style.options.live"),
+          },
+        ]}
+        selectedValue={selectedStyle}
+        onSelect={(value) =>
+          updateSetting("assisted_notes", {
+            ...assistedNotes,
+            overlay_style: value as OverlayStyle,
+          } as NonNullable<typeof assistedNotes>)
+        }
+        disabled={disabled || isUpdating("assisted_notes")}
+      />
+    </SettingContainer>
+  );
+};
+
+/**
  * The shared position. Self-hides when *no* mode would draw an overlay at all,
  * because a position for something that never appears is a dead control.
  *
  * Upstream gates this on the top-level style alone; here it has to consider
- * both, since dictation carries its own style and either mode showing an
- * overlay makes the shared position meaningful.
+ * all three, since dictation and assisted notes each carry their own style
+ * and any of the three modes showing an overlay makes the shared position
+ * meaningful.
  */
 export const OverlayPositionRow: React.FC<{
   descriptionMode?: "inline" | "tooltip";
@@ -145,9 +200,11 @@ export const OverlayPositionRow: React.FC<{
 
   const transcriptionStyle = getSetting("overlay_style") || "live";
   const dictationStyle = getSetting("dictation")?.overlay_style;
+  const assistedNotesStyle = getSetting("assisted_notes")?.overlay_style;
   const anyOverlayShown =
     transcriptionStyle !== "none" ||
-    (dictationStyle !== undefined && dictationStyle !== "none");
+    (dictationStyle !== undefined && dictationStyle !== "none") ||
+    (assistedNotesStyle !== undefined && assistedNotesStyle !== "none");
 
   if (!anyOverlayShown) return null;
 

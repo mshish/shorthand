@@ -266,6 +266,14 @@ pub fn resume_all_shortcuts(app: &AppHandle) {
         {
             continue;
         }
+        if id == "assisted_notes" && !settings.assisted_notes.enabled {
+            continue;
+        }
+        if id == "assisted_notes_with_post_process"
+            && !(settings.assisted_notes.enabled && settings.assisted_notes.post_process_enabled)
+        {
+            continue;
+        }
         if let Err(e) = register_shortcut(app, binding.clone()) {
             debug!("resume_all_shortcuts: could not register '{}': {}", id, e);
         }
@@ -464,6 +472,15 @@ fn register_all_shortcuts_for_implementation(
         if id == "dictate_with_post_process"
             && !(current_settings.dictation.enabled
                 && current_settings.dictation.post_process_enabled)
+        {
+            continue;
+        }
+        if id == "assisted_notes" && !current_settings.assisted_notes.enabled {
+            continue;
+        }
+        if id == "assisted_notes_with_post_process"
+            && !(current_settings.assisted_notes.enabled
+                && current_settings.assisted_notes.post_process_enabled)
         {
             continue;
         }
@@ -691,9 +708,11 @@ pub fn change_overlay_style_setting(app: AppHandle, style: String) -> Result<(),
     settings.overlay_style = parsed;
     settings::write_settings(&app, settings);
 
-    // Keep the cached overlay-enabled flag in sync so emit_levels stops (or
-    // resumes) emitting on the next audio callback.
-    crate::overlay::update_overlay_enabled_cache(parsed != OverlayStyle::None);
+    // The capture-events cache is owned by the active capture's resolved
+    // style (set in overlay::show_overlay_state / TranscribeAction::start),
+    // not by this Meeting-only setting. Editing it here while a different
+    // mode is capturing must not touch that mode's event flow, so this write
+    // deliberately does not update the cache.
 
     // Reposition in case the window needs to re-center for the new style.
     crate::utils::update_overlay_position(&app);
@@ -1380,11 +1399,15 @@ fn describe_registration_failure(
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_dictation_settings(
+pub async fn change_dictation_settings(
     app: AppHandle,
     dictation: crate::shorthand::dictation::DictationSettings,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
+    // Kept so a follow-stream listener failure below can put the shared
+    // listener back exactly where it was, rather than merely stopping it —
+    // Meeting or Assisted Notes may still need it running.
+    let previous_settings = settings.clone();
     let was_registered = settings.dictation.enabled;
     let was_post_process_registered = was_registered && settings.dictation.post_process_enabled;
 
@@ -1441,10 +1464,13 @@ pub fn change_dictation_settings(
         }
     }
 
-    if let Some(error) = failure {
-        // Roll back whichever half of this call already changed live
-        // registration state, so a partial failure can't leave a shortcut
-        // registered that the (unwritten) settings say is off, or vice versa.
+    // Rolls back whichever half of this call already changed live
+    // registration state, so a partial failure can't leave a shortcut
+    // registered that the (unwritten) settings say is off, or vice versa.
+    // Shared between the registration failure below and the follow-stream
+    // listener failure further down, which can only be reached once
+    // registration has already succeeded.
+    let roll_back_registrations = |dictate_changed: bool, dictate_pp_changed: bool| {
         if dictate_changed {
             if let Some(binding) = settings.bindings.get("dictate").cloned() {
                 let restore = if was_registered {
@@ -1468,6 +1494,147 @@ pub fn change_dictation_settings(
                     error!("Failed to roll back 'dictate_with_post_process' registration after change_dictation_settings failure: {}", e);
                 }
             }
+        }
+    };
+
+    if let Some(error) = failure {
+        roll_back_registrations(dictate_changed, dictate_pp_changed);
+        crate::secure_input::reconcile_fallback(&app);
+        return Err(error);
+    }
+
+    // Reconcile the shared follow-stream listener against the candidate
+    // settings before persistence, mirroring the registration transaction
+    // above: a failure here must not reach disk as `dictation.enabled = true`
+    // either, and the shortcuts already registered above must come back down
+    // with it. See `follow_stream::lifecycle`.
+    let server = app.state::<crate::follow_stream::FollowStreamServer>();
+    let listener_result = match crate::follow_stream::hub(&app) {
+        Some(hub) => crate::follow_stream::reconcile(&app, &server, hub, &settings).await,
+        None => Err("Follow-stream hub is unavailable".to_string()),
+    };
+    if let Err(error) = listener_result {
+        roll_back_registrations(dictate_changed, dictate_pp_changed);
+        // Restore the listener to match what is still on disk. Best-effort:
+        // if this also fails, the error below is what the caller sees, and
+        // the next `reconcile` call (or app restart) corrects the drift.
+        if let Some(hub) = crate::follow_stream::hub(&app) {
+            let _ = crate::follow_stream::reconcile(&app, &server, hub, &previous_settings).await;
+        }
+        crate::secure_input::reconcile_fallback(&app);
+        return Err(error);
+    }
+
+    settings::write_settings(&app, settings);
+    crate::secure_input::reconcile_fallback(&app);
+    Ok(())
+}
+
+/// Mirrors `change_dictation_settings` field for field, for the second
+/// note-producing mode: registration before persistence, roll back on
+/// partial failure, and a follow-stream listener reconciliation against the
+/// candidate settings before that persistence — see the comments on
+/// `change_dictation_settings` for why each step is ordered the way it is.
+#[tauri::command]
+#[specta::specta]
+pub async fn change_assisted_notes_settings(
+    app: AppHandle,
+    assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let previous_settings = settings.clone();
+    let was_registered = settings.assisted_notes.enabled;
+    let was_post_process_registered =
+        was_registered && settings.assisted_notes.post_process_enabled;
+
+    settings.assisted_notes = assisted_notes;
+    let now_registered = settings.assisted_notes.enabled;
+    let now_post_process_registered =
+        now_registered && settings.assisted_notes.post_process_enabled;
+
+    let mut assisted_notes_changed = false;
+    let mut assisted_notes_pp_changed = false;
+    let mut failure: Option<String> = None;
+
+    if now_registered != was_registered {
+        if let Some(binding) = settings.bindings.get("assisted_notes").cloned() {
+            let result = if now_registered {
+                register_shortcut(&app, binding.clone())
+            } else {
+                unregister_shortcut(&app, binding.clone())
+            };
+            match result {
+                Ok(()) => assisted_notes_changed = true,
+                Err(e) => failure = Some(describe_registration_failure(&settings, &binding, &e)),
+            }
+        }
+    }
+
+    if failure.is_none() && now_post_process_registered != was_post_process_registered {
+        if let Some(binding) = settings
+            .bindings
+            .get("assisted_notes_with_post_process")
+            .cloned()
+        {
+            let result = if now_post_process_registered {
+                register_shortcut(&app, binding.clone())
+            } else {
+                unregister_shortcut(&app, binding.clone())
+            };
+            match result {
+                Ok(()) => assisted_notes_pp_changed = true,
+                Err(e) => failure = Some(describe_registration_failure(&settings, &binding, &e)),
+            }
+        }
+    }
+
+    let roll_back_registrations =
+        |assisted_notes_changed: bool, assisted_notes_pp_changed: bool| {
+            if assisted_notes_changed {
+                if let Some(binding) = settings.bindings.get("assisted_notes").cloned() {
+                    let restore = if was_registered {
+                        register_shortcut(&app, binding)
+                    } else {
+                        unregister_shortcut(&app, binding)
+                    };
+                    if let Err(e) = restore {
+                        error!("Failed to roll back 'assisted_notes' registration after change_assisted_notes_settings failure: {}", e);
+                    }
+                }
+            }
+            if assisted_notes_pp_changed {
+                if let Some(binding) = settings
+                    .bindings
+                    .get("assisted_notes_with_post_process")
+                    .cloned()
+                {
+                    let restore = if was_post_process_registered {
+                        register_shortcut(&app, binding)
+                    } else {
+                        unregister_shortcut(&app, binding)
+                    };
+                    if let Err(e) = restore {
+                        error!("Failed to roll back 'assisted_notes_with_post_process' registration after change_assisted_notes_settings failure: {}", e);
+                    }
+                }
+            }
+        };
+
+    if let Some(error) = failure {
+        roll_back_registrations(assisted_notes_changed, assisted_notes_pp_changed);
+        crate::secure_input::reconcile_fallback(&app);
+        return Err(error);
+    }
+
+    let server = app.state::<crate::follow_stream::FollowStreamServer>();
+    let listener_result = match crate::follow_stream::hub(&app) {
+        Some(hub) => crate::follow_stream::reconcile(&app, &server, hub, &settings).await,
+        None => Err("Follow-stream hub is unavailable".to_string()),
+    };
+    if let Err(error) = listener_result {
+        roll_back_registrations(assisted_notes_changed, assisted_notes_pp_changed);
+        if let Some(hub) = crate::follow_stream::hub(&app) {
+            let _ = crate::follow_stream::reconcile(&app, &server, hub, &previous_settings).await;
         }
         crate::secure_input::reconcile_fallback(&app);
         return Err(error);

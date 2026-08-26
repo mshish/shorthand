@@ -7,6 +7,7 @@ import type {
   TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
   DictationSettings,
+  AssistedNotesSettings,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -211,6 +212,14 @@ const settingUpdaters: {
   dictation: async (value) => {
     const result = await commands.changeDictationSettings(
       value as DictationSettings,
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
+  assisted_notes: async (value) => {
+    const result = await commands.changeAssistedNotesSettings(
+      value as AssistedNotesSettings,
     );
     if (result.status === "error") {
       throw new Error(result.error);

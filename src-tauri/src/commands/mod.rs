@@ -47,30 +47,21 @@ pub async fn change_follow_stream_enabled_setting(
     app: AppHandle,
     enabled: bool,
 ) -> Result<(), String> {
-    let server = app.state::<crate::follow_stream::FollowStreamServer>();
-    let _lifecycle_guard = server.lock_lifecycle().await;
+    // `enabled` is Meeting's own publication preference, not a listener
+    // on/off switch: an enabled Dictation or Assisted Notes mode can still
+    // need the shared listener after this turns Meeting's publication off,
+    // and `reconcile` is what keeps it running for them. See
+    // `follow_stream::lifecycle`.
     let mut settings = get_settings(&app);
-
-    if enabled {
-        let start_result = match crate::follow_stream::hub(&app) {
-            Some(hub) => server
-                .start(&app, hub)
-                .await
-                .map_err(|error| format!("Failed to start follow-stream listener: {error}")),
-            None => Err("Follow-stream hub is unavailable".to_string()),
-        };
-        if let Err(error) = start_result {
-            settings.follow_stream_enabled = false;
-            write_settings(&app, settings);
-            return Err(error);
-        }
-    } else {
-        server.stop();
-    }
-
-    // Persist only after the listener transition succeeds so the stored toggle
-    // always describes the server state that was actually applied.
     settings.follow_stream_enabled = enabled;
+
+    let server = app.state::<crate::follow_stream::FollowStreamServer>();
+    let hub = crate::follow_stream::hub(&app)
+        .ok_or_else(|| "Follow-stream hub is unavailable".to_string())?;
+    crate::follow_stream::reconcile(&app, &server, hub, &settings).await?;
+
+    // Persist only after the listener transition succeeds so the stored
+    // toggle always describes the server state that was actually applied.
     write_settings(&app, settings);
     Ok(())
 }

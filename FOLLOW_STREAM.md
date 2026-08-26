@@ -1,6 +1,11 @@
 # Follow-stream output
 
-The fork-only `handy --follow-stream` feature lets another process follow live transcription output from an already-running Handy instance. It is off by default; enable **Follow Live Transcript Output** in Advanced settings before connecting.
+The fork-only `handy --follow-stream` feature lets another process follow live transcription output from an already-running Handy instance.
+
+Two separate things decide whether a follower sees anything, and they must not be confused:
+
+- **Per-mode publication** — whether a given capture's transcript reaches the hub at all. This is each mode's own `follow_stream_enabled` (Meeting's top-level **Follow Live Transcript Output**, Dictation's and Assisted Notes' own Advanced toggles). Meeting and Assisted Notes ship this on; Dictation ships it off, because dictated text has already been delivered where it was wanted.
+- **Listener lifetime** — whether the local socket exists at all. The listener is process-wide, not per-mode, and stays up whenever *any* mode that can currently publish wants it: Meeting's toggle, or an *enabled* Dictation/Assisted Notes mode with its own publication toggle on. Turning Meeting's toggle off does not tear the socket down while another enabled mode still needs it, and a mode's publication preference does nothing while that mode itself is switched off.
 
 | Mode | Output |
 | --- | --- |
@@ -13,7 +18,7 @@ The fork-only `handy --follow-stream` feature lets another process follow live t
 The stream is UTF-8, with exactly one JSON object per newline. Every object has a `t` discriminator; consumers should ignore fields they do not recognize so later protocol additions remain compatible. The current protocol is version 1:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.5","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.5","capabilities":["toggle-assisted-notes"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":1,"streaming":true,"emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":1,"speaker":"me","committed":"hello ","tentative":"wor","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"final","session":1,"speaker":"me","text":"Hello world.","emitted_at":"2026-08-15T14:03:22.050-07:00","session_elapsed_ms":1850}
@@ -22,14 +27,14 @@ The stream is UTF-8, with exactly one JSON object per newline. Every object has 
 {"t":"error","session":1,"message":"transcription failed","emitted_at":"...","session_elapsed_ms":900}
 ```
 
-`hello` is always the first event on a connection and reports the protocol and Handy versions. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
+`hello` is always the first event on a connection and reports the protocol and Handy versions. `capabilities` names the control flags this binary's parser accepts (currently just `toggle-assisted-notes`), not which settings are enabled — a follower still gets the app's own settings pane as the single description of behaviour, but this lets it tell an installed binary that predates a control flag from one that merely has the corresponding mode turned off, without guessing from a version number. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
 
 In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript.
 
 A dual-speaker session can therefore look like this:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.5","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.5","capabilities":["toggle-assisted-notes"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":42,"streaming":true,"emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":42,"speaker":"me","committed":"Can you hear me?","tentative":"","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"partial","session":42,"speaker":"them","committed":"Yes, clearly.","tentative":"","emitted_at":"2026-08-15T14:03:22.900-07:00","session_elapsed_ms":2700}
@@ -101,4 +106,4 @@ Both `delta` and `text` are built only from `partial.committed`, so both require
 
 ## Local transport and security
 
-The follower is read-only and connects to a deterministic per-user local socket. On Windows, Handy creates a named pipe with a protected SDDL DACL granting access only to the current user's SID. On Unix, the listener uses mode `0600` and verifies each peer's effective user ID against Handy's own euid; this credential check also protects Linux abstract sockets where filesystem permissions do not apply. The listener and socket exist only while the setting is enabled, and disabling it disconnects current followers.
+The follower is read-only and connects to a deterministic per-user local socket. On Windows, Handy creates a named pipe with a protected SDDL DACL granting access only to the current user's SID. On Unix, the listener uses mode `0600` and verifies each peer's effective user ID against Handy's own euid; this credential check also protects Linux abstract sockets where filesystem permissions do not apply. The listener and socket exist only while at least one mode can publish to it — see the note on per-mode publication vs. listener lifetime at the top of this document — and disappear once none can, disconnecting current followers.

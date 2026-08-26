@@ -593,11 +593,15 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        // A dictation capture must never reach the follow-stream hub. Skipping
-        // `begin` alone is sufficient: every terminal hub call and `partial`
-        // check for an active session first and silently no-op without one
-        // (pinned in follow_stream::hub::tests).
-        if crate::shorthand::mode::active(app) == crate::shorthand::mode::Mode::Meeting {
+        // Which captures reach the follow-stream hub is the *resolved*
+        // `follow_stream_enabled` value, not the mode: that is the switch the
+        // Modes pane shows per mode, and gating on anything else makes the UI
+        // describe a capture it is not governing. Meeting ships true,
+        // dictation false, assisted notes true. Skipping `begin` alone is
+        // sufficient: every terminal hub call and `partial` check for an
+        // active session first and silently no-op without one (pinned in
+        // follow_stream::hub::tests).
+        if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
             if let Some(hub) = crate::follow_stream::hub(app) {
                 hub.begin(model_supports_streaming);
             }
@@ -624,7 +628,9 @@ impl ShortcutAction for TranscribeAction {
         match crate::shorthand::dictation::resolve_settings(app).overlay_style {
             OverlayStyle::Live if model_supports_streaming => utils::show_streaming_overlay(app),
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
-            OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
+            // show_overlay_state no-ops on None and never runs, so this arm
+            // must update the capture-events cache itself.
+            OverlayStyle::None => utils::set_capture_overlay_events_enabled(false),
         }
         // Everything above runs before capture can begin, so each span here is
         // added keypress->capture latency.
@@ -1185,6 +1191,16 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map.insert(
         "dictate_with_post_process".to_string(),
+        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "assisted_notes".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "assisted_notes_with_post_process".to_string(),
         Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
     );
     map.insert(

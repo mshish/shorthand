@@ -459,6 +459,21 @@ async changeDictationSettings(dictation: DictationSettings) : Promise<Result<nul
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Mirrors `change_dictation_settings` field for field, for the second
+ * note-producing mode: registration before persistence, roll back on
+ * partial failure, and a follow-stream listener reconciliation against the
+ * candidate settings before that persistence — see the comments on
+ * `change_dictation_settings` for why each step is ordered the way it is.
+ */
+async changeAssistedNotesSettings(assistedNotes: AssistedNotesSettings) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_assisted_notes_settings", { assistedNotes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeTranscribeAcceleratorSetting(accelerator: TranscribeAcceleratorSetting) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_transcribe_accelerator_setting", { accelerator }) };
@@ -1035,7 +1050,35 @@ overlay_style?: OverlayStyle; show_all_settings?: boolean;
  * the capture in flight is `shorthand::mode::Mode::Dictation`. See
  * `shorthand::dictation::apply_mode`.
  */
-dictation?: DictationSettings }
+dictation?: DictationSettings; 
+/**
+ * Assisted-notes settings, applied over the equivalent fields above when
+ * the capture in flight is `shorthand::mode::Mode::AssistedNotes`. See
+ * `shorthand::dictation::apply_mode`.
+ */
+assisted_notes?: AssistedNotesSettings }
+/**
+ * Assisted notes' own copy of settings meeting mode also has, so enabling or
+ * configuring assisted notes never touches a meeting-mode value. Mirrors the
+ * shape of `dictation::DictationSettings`.
+ */
+export type AssistedNotesSettings = { enabled: boolean; push_to_talk: boolean; clipboard_handling: ClipboardHandling; append_trailing_space: boolean; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+/**
+ * Whether this mode's transcript is published to `--follow-stream`
+ * followers. The defining similarity to a meeting: a follower process
+ * filling a note is the entire reason this mode exists.
+ */
+follow_stream_enabled: boolean; 
+/**
+ * Which post-processing provider this mode uses.
+ */
+post_process_provider_id: string; 
+/**
+ * The model, when this mode wants one other than the provider's shared
+ * choice. `None` falls back to `AppSettings::post_process_models`, so a
+ * user who never sets it per mode sees no change in behaviour.
+ */
+post_process_model: string | null }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }

@@ -78,7 +78,12 @@ pub struct TranscriptionCoordinator {
 pub fn is_transcribe_binding(id: &str) -> bool {
     matches!(
         id,
-        "transcribe" | "transcribe_with_post_process" | "dictate" | "dictate_with_post_process"
+        "transcribe"
+            | "transcribe_with_post_process"
+            | "dictate"
+            | "dictate_with_post_process"
+            | "assisted_notes"
+            | "assisted_notes_with_post_process"
     )
 }
 
@@ -294,6 +299,8 @@ mod tests {
         assert!(is_transcribe_binding("transcribe_with_post_process"));
         assert!(is_transcribe_binding("dictate"));
         assert!(is_transcribe_binding("dictate_with_post_process"));
+        assert!(is_transcribe_binding("assisted_notes"));
+        assert!(is_transcribe_binding("assisted_notes_with_post_process"));
         assert!(!is_transcribe_binding("cancel"));
         assert!(!is_transcribe_binding("test"));
     }

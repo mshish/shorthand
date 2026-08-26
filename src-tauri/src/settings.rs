@@ -493,6 +493,11 @@ pub struct AppSettings {
     /// `shorthand::dictation::apply_mode`.
     #[serde(default)]
     pub dictation: crate::shorthand::dictation::DictationSettings,
+    /// Assisted-notes settings, applied over the equivalent fields above when
+    /// the capture in flight is `shorthand::mode::Mode::AssistedNotes`. See
+    /// `shorthand::dictation::apply_mode`.
+    #[serde(default)]
+    pub assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
 }
 
 fn default_model() -> String {
@@ -930,6 +935,48 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
 
+    // Assisted notes is "meeting, but solo": `space` is exhausted (every
+    // ctrl/alt/shift permutation of it already belongs to the four bindings
+    // above or the OS), so it takes the first free mnemonic letter instead.
+    #[cfg(target_os = "windows")]
+    let default_assisted_notes_shortcut = "ctrl+alt+n";
+    #[cfg(target_os = "macos")]
+    let default_assisted_notes_shortcut = "ctrl+option+n";
+    #[cfg(target_os = "linux")]
+    let default_assisted_notes_shortcut = "ctrl+alt+n";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_assisted_notes_shortcut = "alt+n";
+
+    bindings.insert(
+        "assisted_notes".to_string(),
+        ShortcutBinding {
+            id: "assisted_notes".to_string(),
+            name: "Assisted Notes".to_string(),
+            description: "Converts your speech into text and streams it to any process following the live transcript, without capturing system audio.".to_string(),
+            default_binding: default_assisted_notes_shortcut.to_string(),
+            current_binding: default_assisted_notes_shortcut.to_string(),
+        },
+    );
+    #[cfg(target_os = "windows")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+alt+shift+n";
+    #[cfg(target_os = "macos")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+shift+option+n";
+    #[cfg(target_os = "linux")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+alt+shift+n";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_assisted_notes_post_process_shortcut = "alt+shift+n";
+
+    bindings.insert(
+        "assisted_notes_with_post_process".to_string(),
+        ShortcutBinding {
+            id: "assisted_notes_with_post_process".to_string(),
+            name: "Assisted Notes with Post-Processing".to_string(),
+            description: "Converts your speech into text and streams it to any process following the live transcript, without capturing system audio, and applies AI post-processing.".to_string(),
+            default_binding: default_assisted_notes_post_process_shortcut.to_string(),
+            current_binding: default_assisted_notes_post_process_shortcut.to_string(),
+        },
+    );
+
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
@@ -1001,6 +1048,7 @@ pub fn get_default_settings() -> AppSettings {
         overlay_style: default_overlay_style(),
         show_all_settings: false,
         dictation: crate::shorthand::dictation::DictationSettings::default(),
+        assisted_notes: Default::default(),
     }
 }
 
@@ -1264,6 +1312,9 @@ mod tests {
         assert!(settings.bindings.is_empty());
         assert!(!settings.save_recordings);
         assert!(!settings.save_transcripts);
+        assert!(settings.assisted_notes.follow_stream_enabled);
+        assert!(settings.assisted_notes.save_recordings);
+        assert!(settings.assisted_notes.save_transcripts);
     }
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to
@@ -1535,7 +1586,7 @@ mod tests {
         assert!(!settings.save_transcripts);
     }
 
-    /// The five default bindings must not collide with each other on this
+    /// The seven default bindings must not collide with each other on this
     /// platform. `cfg` means this only covers the host platform; the other
     /// two are a review-time reading of the `cfg` branches in
     /// `get_default_settings`, not a test.
@@ -1547,6 +1598,8 @@ mod tests {
             "transcribe_with_post_process",
             "dictate",
             "dictate_with_post_process",
+            "assisted_notes",
+            "assisted_notes_with_post_process",
             "cancel",
         ];
         let mut shortcuts: Vec<&str> = ids
@@ -1599,6 +1652,7 @@ mod tests {
         let settings = get_default_settings();
         assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
         assert_eq!(settings.dictation.overlay_style, OverlayStyle::Minimal);
+        assert_eq!(settings.assisted_notes.overlay_style, OverlayStyle::Minimal);
     }
 
     /// The four settings that became per-mode, asserted as a pair so a future
@@ -1624,6 +1678,18 @@ mod tests {
             settings.post_process_provider_id
         );
         assert_eq!(settings.dictation.post_process_model, None);
+
+        // A follower filling the note is the entire reason assisted notes
+        // exists, so it defaults on like meeting, unlike dictation.
+        assert!(settings.assisted_notes.follow_stream_enabled);
+        // A note-taking session runs as long as the thinking does; like
+        // meeting, and unlike dictation, nobody holds a key for that.
+        assert!(!settings.assisted_notes.push_to_talk);
+        assert_eq!(
+            settings.assisted_notes.post_process_provider_id,
+            settings.post_process_provider_id
+        );
+        assert_eq!(settings.assisted_notes.post_process_model, None);
     }
 
     #[test]
