@@ -22,13 +22,12 @@ interface TabsProps<T extends string> {
  * keyboard handler, and copying that here would have added a second
  * unreachable-by-keyboard navigation control rather than one.
  *
- * The active tab carries the sweep (`sh-sweep`, see brand/marks.css), which
- * wraps the *label* rather than the button: the mark degrades into a chip below
- * roughly a 5:1 aspect ratio, and a padded button box is well under that. Tab
- * labels are long enough to hold a stroke; that is why the sweep is used here
- * and not in the sidebar.
+ * The active tab carries a plain coral underline (`sh-tab-indicator`, see
+ * brand/marks.css). Coral keeps the same meaning as before — the tab you're
+ * looking at is the live one — without the hand-drawn highlighter marquee that
+ * previously drew it; that motif read as visual noise on a plain tab bar.
  *
- * The sweep is never the only signal. `aria-selected` carries the state
+ * The indicator is never the only signal. `aria-selected` carries the state
  * programmatically and the label goes semibold, so selection survives
  * greyscale, a screen reader, and `prefers-reduced-motion`.
  */
@@ -77,12 +76,7 @@ export function Tabs<T extends string>({
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
-      // gap-8 and px-3, not gap-6 and px-1. The sweep overshoots its label by
-      // ~0.5em a side (about 15px total at 14px) so the mark does not stop
-      // exactly at the word; the tab list has to leave room for that or
-      // neighbouring marks crowd each other and the first one clips the pane
-      // edge.
-      className="flex items-center gap-8 border-b border-mid-gray/20 px-3"
+      className="flex items-center gap-6 border-b border-mid-gray/20 px-1"
     >
       {tabs.map((tab) => {
         const selected = tab.id === active;
@@ -98,23 +92,15 @@ export function Tabs<T extends string>({
             aria-controls={`tabpanel-${tab.id}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            // pt-2 pb-3, not pt-1 pb-2. The sweep extends 0.18em above the
-            // label and its pen line sits 0.26em below, so at pt-1 the mark
-            // was clipped by the button's own top edge and the pen line
-            // collided with the tab list's bottom border. The padding is what
-            // gives the mark somewhere to be.
-            className={`cursor-pointer bg-transparent border-0 pb-3 pt-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary ${
+            className={`relative cursor-pointer bg-transparent border-0 pb-3 pt-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-logo-primary ${
               selected
                 ? "font-semibold"
                 : "font-medium text-mid-gray hover:text-text"
             }`}
           >
-            {selected ? (
-              <span className="sh-sweep">
-                <span>{tab.label}</span>
-              </span>
-            ) : (
-              tab.label
+            {tab.label}
+            {selected && (
+              <span className="sh-tab-indicator" aria-hidden="true" />
             )}
           </button>
         );

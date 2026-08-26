@@ -1,33 +1,49 @@
 import React from "react";
-import ShorthandMark from "./ShorthandMark";
+import markColour from "../../../brand-assets/mark-full-colour-transparent.png";
+import wordmarkLight from "./wordmark-light.png";
+import wordmarkDark from "./wordmark-dark.png";
 
 /**
  * Fork-only. The Shorthand wordmark, replacing upstream's `HandyTextLogo`.
  *
- * The approved artwork stacks the bird-and-pen mark above the complete product
- * name. The word remains live Fraunces rather than outlines, so it stays crisp
- * at any size, follows the theme's ink colour, and never needs re-exporting when
- * the type scale moves.
+ * The approved artwork stacks the bird-and-pen mark above the product name and
+ * its coral swash, and this renders exactly that: both halves are the real clay
+ * artwork, not a reconstruction.
+ *
+ * The word used to be live Fraunces type. That was a workaround for the
+ * artwork's fixed navy being invisible on the dark ground, and it cost the
+ * clay: texture, bevel and swash all became flat type. The artwork is now used
+ * directly, with `gen-brand-wordmark.mjs` deriving a cream-inked dark variant
+ * that keeps the clay intact — see that script for how, and BRANDING.md for why
+ * tracing and re-setting in a typeface were both rejected.
+ *
+ * Both variants are rendered and CSS picks one, because the theme can come from
+ * either the OS preference or an explicit `data-theme` override; only CSS sees
+ * both. `.sh-wordmark-*` in marks.css mirrors upstream's own theme-selection
+ * blocks to resolve that.
  */
 /**
  * The product name is a proper noun and is deliberately not a translation key.
- * It lives in constants rather than inline in the JSX so `i18next/no-literal-string`
- * has nothing to flag and no `eslint-disable` has to be carried past it.
+ * `alt` carries it for screen readers, since the word is now artwork rather
+ * than text in the DOM.
  */
 const NAME = "Shorthand";
 
-// The approved silhouette occupies x=8..120 and y=20..100 inside its square
-// viewBox. These values let the stacked lockup size and centre the landscape
-// drawing by its visible bounds rather than by the empty canvas around it.
-const MARK_VIEWBOX_SIZE = 128;
-const MARK_MIN_X = 8;
-const MARK_MIN_Y = 20;
-const MARK_DRAWN_WIDTH = 112;
-const MARK_DRAWN_HEIGHT = 80;
-const MARK_WIDTH_IN_CAP_HEIGHTS = 3;
+// mark-full-colour-transparent.png is 845x498 and tightly cropped.
+const MARK_ASPECT_RATIO = 845 / 498;
+// Sized so the mark keeps the proportion it had against the word in the
+// approved lockup.
+const MARK_HEIGHT_IN_CAP_HEIGHTS = 2.15;
+
+// Measured from the generated asset (600x194, word occupying 138px of that).
+// `height` is the cap height of the word, so the image has to be scaled up from
+// it by these factors — the artwork carries the swash and its surrounding air
+// below the word, which is why the image is taller than the word itself.
+const WORDMARK_WIDTH_IN_CAP_HEIGHTS = 600 / 138;
+const WORDMARK_HEIGHT_IN_CAP_HEIGHTS = 194 / 138;
 
 interface ShorthandWordmarkProps {
-  /** Cap height of the word in px. The mark and underline both scale from it. */
+  /** Cap height of the word in px. The mark scales from it too. */
   height?: number;
   className?: string;
 }
@@ -36,63 +52,43 @@ export const ShorthandWordmark: React.FC<ShorthandWordmarkProps> = ({
   height = 22,
   className = "",
 }) => {
-  const markWidth = height * MARK_WIDTH_IN_CAP_HEIGHTS;
-  const markHeight = markWidth * (MARK_DRAWN_HEIGHT / MARK_DRAWN_WIDTH);
-  const markCanvasSize = markWidth * (MARK_VIEWBOX_SIZE / MARK_DRAWN_WIDTH);
-  const markLeft = -markCanvasSize * (MARK_MIN_X / MARK_VIEWBOX_SIZE);
-  const markTop = -markCanvasSize * (MARK_MIN_Y / MARK_VIEWBOX_SIZE);
+  const markHeight = height * MARK_HEIGHT_IN_CAP_HEIGHTS;
+  const markWidth = markHeight * MARK_ASPECT_RATIO;
+  const wordWidth = height * WORDMARK_WIDTH_IN_CAP_HEIGHTS;
+  const wordHeight = height * WORDMARK_HEIGHT_IN_CAP_HEIGHTS;
 
   return (
     <span
-      className={`inline-flex flex-col items-center text-text ${className}`}
-      // The product name remains left-to-right in every locale. Fixing its
-      // direction keeps Fraunces shaping and the underline geometry stable;
-      // the vertically stacked mark itself has no directional position.
+      className={`inline-flex flex-col items-center ${className}`}
+      // The product name remains left-to-right in every locale, and as artwork
+      // it cannot be mirrored by the layout in the first place.
       dir="ltr"
     >
-      <span
+      <img
+        src={markColour}
+        alt=""
         aria-hidden="true"
-        className="relative block shrink-0"
-        style={{
-          width: `${markWidth}px`,
-          height: `${markHeight}px`,
-          marginBottom: `${height * 0.12}px`,
-        }}
-      >
-        <ShorthandMark
-          className="absolute max-w-none"
-          size={markCanvasSize}
-          style={{ left: `${markLeft}px`, top: `${markTop}px` }}
-        />
-      </span>
-      <span
-        // FONT.md's mark height, kerning, and baseline nudge describe the
-        // superseded `[mark]horthand` lockup. The approved stack keeps only its
-        // live-type decisions: weight 650, the display axes, and -0.015em
-        // tracking.
-        style={{
-          fontFamily: "var(--brand-font-display)",
-          fontSize: `${height}px`,
-          fontVariationSettings: "var(--brand-font-display-variation-settings)",
-          fontWeight: "var(--brand-font-display-weight)",
-          letterSpacing: "-0.015em",
-          lineHeight: 1,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {NAME}
-      </span>
-      <span
-        aria-hidden="true"
-        className="block"
-        style={{
-          width: "86%",
-          height: `${Math.max(height * 0.08, 2)}px`,
-          marginTop: `${height * 0.12}px`,
-          borderRadius: "9999px",
-          backgroundColor: "var(--brand-highlighter)",
-          transform: "rotate(-1deg)",
-        }}
+        width={markWidth}
+        height={markHeight}
+        className="block shrink-0"
+        style={{ marginBottom: `${height * 0.08}px` }}
+      />
+      {/* Only one of these is displayed; see `.sh-wordmark-*` in marks.css.
+          The visible one carries the accessible name and the hidden one is
+          removed from the tree, so the name is announced exactly once. */}
+      <img
+        src={wordmarkLight}
+        alt={NAME}
+        width={wordWidth}
+        height={wordHeight}
+        className="sh-wordmark-light block shrink-0"
+      />
+      <img
+        src={wordmarkDark}
+        alt={NAME}
+        width={wordWidth}
+        height={wordHeight}
+        className="sh-wordmark-dark block shrink-0"
       />
     </span>
   );

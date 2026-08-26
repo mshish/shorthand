@@ -321,35 +321,19 @@ const Preview: React.FC = () => {
                     <button
                       key={id}
                       onClick={() => setActiveTab(id)}
-                      className={`px-4 py-2 text-sm font-medium cursor-pointer transition-colors ${
+                      className={`relative px-4 py-2 text-sm font-medium cursor-pointer transition-colors ${
                         isActive ? "" : "text-mid-gray hover:text-text"
                       }`}
                     >
-                      {/* The mark goes on the label, not the button: no
-                          underline, no border, no filled tab. */}
-                      {isActive ? (
-                        <span className="sh-sweep">
-                          <span>{label}</span>
-                        </span>
-                      ) : (
-                        label
+                      {/* A plain coral underline on the active tab — see
+                          brand/marks.css's `.sh-tab-indicator`. */}
+                      {label}
+                      {isActive && (
+                        <span className="sh-tab-indicator" aria-hidden="true" />
                       )}
                     </button>
                   );
                 })}
-              </div>
-
-              {/* The whole idea, on running text: ink under highlighter. */}
-              <div className="px-4 space-y-2">
-                <SectionLabel>The mark, on running text</SectionLabel>
-                <p className="text-sm leading-8 max-w-2xl">
-                  Shorthand is listening. The phrase{" "}
-                  <span className="sh-sweep">
-                    <span>hold to talk, release to send</span>
-                  </span>{" "}
-                  is marked the way you would mark it on paper — a highlighter
-                  laid over the ink, with a pen line drawn under it.
-                </p>
               </div>
 
               {/* Now / Proposed: the same rows, a different container. */}

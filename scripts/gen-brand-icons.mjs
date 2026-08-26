@@ -56,6 +56,39 @@ const MARK_PATHS = MARK_PATH_ELEMENTS.map((element, index) => {
   return { d, fillRule: attribute(element, "fill-rule") };
 });
 
+/**
+ * The bird's body and the pen's barrel, as fillable regions.
+ *
+ * The mark is line art: the bird (path 0) and the pen (path 2) are each drawn
+ * `evenodd` with two subpaths, so the outer silhouette minus the inner one
+ * leaves a hollow interior with a stroke-like ring around it. Painting that
+ * inner subpath *behind* the mark fills the interior without touching the
+ * ring, the wings, the tail or the nib — which is how the tray states carry
+ * their colour.
+ *
+ * Derived from mark.svg rather than duplicated, so a re-transcription of the
+ * approved artwork moves these with it. The shape is asserted because the
+ * whole technique depends on those two paths staying two-subpath evenodd
+ * shapes: if a future transcription flattens or splits either, this must fail
+ * loudly rather than quietly filling the wrong region.
+ */
+function counterOf(index, name) {
+  const path = MARK_PATHS[index];
+  const subpaths = path?.d.split(/(?=M)/).filter(Boolean) ?? [];
+  if (path?.fillRule !== "evenodd" || subpaths.length !== 2) {
+    throw new Error(
+      `Expected mark.svg path ${index} to be the ${name}: an evenodd shape ` +
+        `with 2 subpaths (outer silhouette + inner counter), got fill-rule=` +
+        `${path?.fillRule} with ${subpaths.length} subpath(s). The tray ` +
+        `state fills depend on that shape — re-check the transcription.`,
+    );
+  }
+  return subpaths[1];
+}
+
+const BIRD_BODY_PATH = counterOf(0, "bird");
+const PEN_BARREL_PATH = counterOf(2, "pen");
+
 /** Paper and ink, matching src/shorthand/brand/theme.css. */
 const PAPER = "#FAF5EA";
 const INK = "#14202B";
@@ -68,6 +101,35 @@ const TRAY_FALLBACK = "#2E6F9E";
 
 const ACCENT = "#0B5F8A";
 const ACCENT_STROKE = "#084A6C";
+
+/**
+ * Status colours for the ambient tray states (idle aside). Both match
+ * src/shorthand/brand/theme.css exactly, so the tray reads the same "live" /
+ * "working" vocabulary as the rest of the UI.
+ *
+ * Recording is `--brand-highlighter`, theme-invariant like the token itself —
+ * coral already means "happening now" everywhere else in the app.
+ * Transcribing is `--color-logo-primary`, and *is* theme-dependent (the accent
+ * flips for contrast against light vs dark), so it needs the same light/dark
+ * pair as PAPER/INK below.
+ */
+const RECORDING = "#F3673C";
+const TRANSCRIBING_ON_DARK_TRAY = "#63B7D6";
+const TRANSCRIBING_ON_LIGHT_TRAY = ACCENT;
+
+/**
+ * Warning fills the pen as well as the bird, in `--color-warning` — upstream's
+ * token, whose light/dark pair is used here against the light/dark tray. Amber
+ * is the one hue BRANDING.md reserves for warning and refuses the highlighter,
+ * so it cannot be confused with the coral "recording" state.
+ *
+ * Filling both regions rather than one is what separates warning from the
+ * ambient states at a glance: recording and transcribing tint the bird alone,
+ * so a mark whose pen has also gone colour is unambiguous even before the hue
+ * registers.
+ */
+const WARNING_ON_DARK_TRAY = "#FBBF24";
+const WARNING_ON_LIGHT_TRAY = "#D97706";
 
 // Measured from the approved artwork, whose 128-unit canvas has deliberate
 // slack around a landscape drawing. Placement fits and centres these visible
@@ -82,17 +144,29 @@ const MARK_BOUNDS = {
 /**
  * The mark, scaled and centred by its drawn bounds inside a `box`-sized square.
  * `scale` is the fraction of the box its longest visible side should occupy.
+ *
+ * `fills` optionally paints the hollow interiors behind the line art — `body`
+ * for the bird, `pen` for the barrel; see BIRD_BODY_PATH / PEN_BARREL_PATH.
+ * They go first so the mark's own rings, eye and nib all draw over the top of
+ * them and keep their `fill` colour.
  */
-function mark(box, scale, fill, dx = 0, dy = 0) {
+function mark(box, scale, fill, dx = 0, dy = 0, fills = {}) {
   const visibleSize = box * scale;
   const s = visibleSize / Math.max(MARK_BOUNDS.width, MARK_BOUNDS.height);
   const offX = (box - MARK_BOUNDS.width * s) / 2 - MARK_BOUNDS.minX * s + dx;
   const offY = (box - MARK_BOUNDS.height * s) / 2 - MARK_BOUNDS.minY * s + dy;
+  const interiors = [
+    [BIRD_BODY_PATH, fills.body],
+    [PEN_BARREL_PATH, fills.pen],
+  ]
+    .filter(([, colour]) => colour)
+    .map(([d, colour]) => `<path d="${d}" fill="${colour}"/>`)
+    .join("");
   const paths = MARK_PATHS.map(({ d, fillRule }) => {
     const fillRuleAttribute = fillRule ? ` fill-rule="${fillRule}"` : "";
     return `<path d="${d}" fill="${fill}"${fillRuleAttribute}/>`;
   }).join("");
-  return `<g transform="translate(${offX} ${offY}) scale(${s})">${paths}</g>`;
+  return `<g transform="translate(${offX} ${offY}) scale(${s})">${interiors}${paths}</g>`;
 }
 
 function svg(box, body) {
@@ -100,105 +174,73 @@ function svg(box, body) {
 }
 
 /**
- * Tray states are the mark plus a badge saying what the app is doing, always in
- * the same corner, so the eye learns one slot and only has to read what is in
- * it. The mark never changes, because it is the only thing identifying which
- * app the tray item belongs to.
+ * Idle, Recording and Transcribing are the mark at full size. The line art
+ * itself stays theme ink in every state; what changes is the bird's *body*,
+ * which fills with the status colour — see RECORDING / TRANSCRIBING_ON_*_TRAY
+ * and BIRD_BODY_PATH above.
  *
- * Each badge is the symbol its status already owns everywhere else: a solid dot
- * for recording, a gapped ring for work in progress, an exclamation for the
- * warning. Solid / hollow / punctuated stay apart from each other down to 16px,
- * which the previous disc-versus-ring pair did not do as well and, more to the
- * point, said nothing about the state it stood for.
+ * Two earlier versions are worth not re-proposing. The first shrank the mark
+ * to 62/64 units and put a status badge in the freed strip, on the theory that
+ * the badge's shape would read the way upstream's hand -> ear -> brain glyph
+ * swap does; it cost the mark most of its size for a signal a colour carries
+ * at a glance. The second recoloured the entire silhouette, pen included,
+ * which fixed the size but made the whole mark change identity on every state
+ * change — and a fully coral bird-and-pen reads as a different logo rather
+ * than the same one, busy.
  *
- * Upstream solves this by swapping the glyph itself (hand -> ear -> brain).
- * That is not available here: Shorthand has one glyph, and spending it on
- * status would cost the identity.
+ * Filling only the body keeps the mark's outline constant, so the tray item
+ * stays recognisably Shorthand while the body carries the state. It also
+ * survives the 16px menu-bar size, where the body is the largest single
+ * enclosed area in the drawing and therefore the one that still shows colour.
+ *
+ * Warning fills the pen as well, in amber — see WARNING_ON_*_TRAY. It used to
+ * shrink the mark and add an exclamation badge in the freed strip; that is
+ * gone for the same reason the status badges are, and because filling a second
+ * region already distinguishes it from the one-region ambient states without
+ * costing the mark any size.
  */
-const BADGE_X = 54;
-// One unit lower than the bounding-box estimate: the pen has lower geometry
-// near x=54, and y=55 gives its gutter real clearance while the badge still
-// ends exactly at the 64-unit frame.
-const BADGE_Y = 55;
 const TRAY_BOX = 64;
-const TRAY_MARK_WIDTH = 62;
+
+/**
+ * The tray mark is drawn WIDER than its frame and allowed to bleed off the
+ * right edge. That is deliberate, and it is the only way to make it bigger.
+ *
+ * The mark is 1.4:1 landscape (measured: 112x80 of a 128 canvas, and those
+ * bounds are tight — there is no padding to reclaim). Fitted whole inside a
+ * square tray slot it can only ever fill 69% of the height, and the leftover
+ * sits above and below as empty frame, which is what makes it read small
+ * against neighbouring icons. Cropping to the bird alone does not help: with
+ * its wing and tail flourishes the bird is 1.61:1, wider still.
+ *
+ * So the mark is scaled until its HEIGHT nearly fills the frame and the
+ * overflow is spent off one edge. Left-aligned, not centred: the nib, head and
+ * eye are what identify the mark, and they all live at the left, so the cut
+ * lands on the wing and tail — shapes that read as continuing past the frame
+ * rather than as damage.
+ *
+ * 84 units wide (91% of frame height) is the ceiling. Past roughly this the
+ * wing's feathers slice into a flat vertical edge that stops reading as a
+ * bleed. It is chosen for 16-24px, which is where a tray icon actually lives
+ * (32px at 200% DPI is the ceiling); the flat edge is visible if the SVG is
+ * inspected large, but nothing renders it that way.
+ */
+const TRAY_MARK_WIDTH = 84;
 const TRAY_MARK_SCALE = TRAY_MARK_WIDTH / TRAY_BOX;
-const TRAY_MARK_HEIGHT =
-  TRAY_MARK_WIDTH * (MARK_BOUNDS.height / MARK_BOUNDS.width);
-const TRAY_MARK_TOP_OFFSET = -(TRAY_BOX - TRAY_MARK_HEIGHT) / 2;
+/** Keeps the nib a hair clear of the frame so it never clips on the left. */
+const TRAY_MARK_LEFT_MARGIN = 1;
 
 /**
- * A landscape mark in a square frame leaves a strip below it rather than an
- * empty corner beside it, so the badge belongs in that strip. Fit the visible
- * width to 62 of 64 units and top-align it: the mark occupies about x=1..63,
- * y=0..44.3, leaving the badge room below without sacrificing the dimension
- * along which the silhouette reads. Protecting that width matters most at the
- * mark's primary 16px menu-bar size. Idle uses this same placement, so only the
- * badge changes between states.
+ * Every tray state: the mark at TRAY_MARK_WIDTH, left-aligned and bleeding off
+ * the right, its line art drawn in `color`. `fills` tints the hollow interiors
+ * — `{ body }` for the ambient states, `{ body, pen }` for warning, and nothing
+ * at all for idle.
  */
-function trayMark(fill) {
-  return mark(TRAY_BOX, TRAY_MARK_SCALE, fill, 0, TRAY_MARK_TOP_OFFSET);
-}
-
-/**
- * Black ring behind the badge. The mark is geometrically clear of it; the ring
- * remains so antialiasing can never bridge mark and badge at 16px.
- */
-function badgeGutter() {
-  return `<circle cx="${BADGE_X}" cy="${BADGE_Y}" r="10.5" fill="black"/>`;
-}
-
-function badged(color, badge) {
-  return svg(
-    64,
-    `<mask id="b"><rect width="64" height="64" fill="black"/>` +
-      trayMark("white") +
-      badgeGutter() +
-      badge +
-      `</mask>` +
-      `<rect width="64" height="64" fill="${color}" mask="url(#b)"/>`,
-  );
-}
-
-function trayIdle(color) {
-  return svg(64, trayMark(color));
-}
-
-/** Recording: a solid dot. The record symbol, unchanged since tape. */
-function trayRecording(color) {
-  return badged(
-    color,
-    `<circle cx="${BADGE_X}" cy="${BADGE_Y}" r="9" fill="white"/>`,
-  );
-}
-
-/**
- * Transcribing: a ring with a gap at the top — the shape every spinner in every
- * toolkit uses for "working". Static here, because a tray icon is a still PNG.
- */
-function trayTranscribing(color) {
-  const r = 7;
-  // Endpoints of a 270-degree clockwise sweep, leaving a quarter gap at the
-  // top — wide enough to still read as open at 16px.
-  const x0 = BADGE_X + r * Math.cos((-45 * Math.PI) / 180);
-  const y0 = BADGE_Y + r * Math.sin((-45 * Math.PI) / 180);
-  const x1 = BADGE_X + r * Math.cos((225 * Math.PI) / 180);
-  const y1 = BADGE_Y + r * Math.sin((225 * Math.PI) / 180);
-  return badged(
-    color,
-    `<path d="M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 1 1 ${x1.toFixed(2)} ${y1.toFixed(2)}" ` +
-      `fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/>`,
-  );
-}
-
-/** Warning: an exclamation, reversed out of a disc. */
-function trayWarning(color) {
-  return badged(
-    color,
-    `<circle cx="${BADGE_X}" cy="${BADGE_Y}" r="9" fill="white"/>` +
-      `<rect x="52.4" y="48" width="3.2" height="7" rx="1.6" fill="black"/>` +
-      `<circle cx="54" cy="59" r="1.8" fill="black"/>`,
-  );
+function stateMark(color, fills = {}) {
+  // `mark()` centres by default; shift left by however much that centring
+  // would have inset the (now oversized) drawing.
+  const s = TRAY_MARK_WIDTH / MARK_BOUNDS.width;
+  const dx = TRAY_MARK_LEFT_MARGIN - (TRAY_BOX - MARK_BOUNDS.width * s) / 2;
+  return svg(TRAY_BOX, mark(TRAY_BOX, TRAY_MARK_SCALE, color, dx, 0, fills));
 }
 
 /** The installed app icon: the mark reversed out of an ink tile. */
@@ -217,61 +259,72 @@ function appIcon(box) {
 
 const TARGETS = [
   // Menu bar / system tray. `*_dark.png` is upstream's name for the *dark
-  // glyph* shown on a light tray, not for dark mode. Every tray SVG paints one
-  // requested colour only; badge geometry is built in a black/white alpha mask,
-  // so its holes never introduce a second painted colour. That keeps idle and
-  // badged PNGs valid for macOS template mode.
-  { path: "src-tauri/resources/tray_idle.png", box: 64, svg: trayIdle(PAPER) },
+  // glyph* shown on a light tray, not for dark mode — so the plain files get
+  // PAPER line art and the `_dark` ones get INK, in every state.
+  //
+  // Idle is line art alone; the other states tint an interior. Every one of
+  // them except idle therefore carries a real second colour, and so has to be
+  // rendered non-templated on macOS — see tray.rs.
+  { path: "src-tauri/resources/tray_idle.png", box: 64, svg: stateMark(PAPER) },
   {
     path: "src-tauri/resources/tray_idle_dark.png",
     box: 64,
-    svg: trayIdle(INK),
+    svg: stateMark(INK),
   },
   {
     path: "src-tauri/resources/tray_recording.png",
     box: 64,
-    svg: trayRecording(PAPER),
+    // Coral is theme-invariant, matching `--brand-highlighter`, so both tray
+    // backgrounds get the same body fill and differ only in the line art.
+    svg: stateMark(PAPER, { body: RECORDING }),
   },
   {
     path: "src-tauri/resources/tray_recording_dark.png",
     box: 64,
-    svg: trayRecording(INK),
+    svg: stateMark(INK, { body: RECORDING }),
   },
   {
     path: "src-tauri/resources/tray_transcribing.png",
     box: 64,
-    svg: trayTranscribing(PAPER),
+    svg: stateMark(PAPER, { body: TRANSCRIBING_ON_DARK_TRAY }),
   },
   {
     path: "src-tauri/resources/tray_transcribing_dark.png",
     box: 64,
-    svg: trayTranscribing(INK),
+    svg: stateMark(INK, { body: TRANSCRIBING_ON_LIGHT_TRAY }),
   },
   {
     path: "src-tauri/resources/tray_idle_warning.png",
     box: 64,
-    svg: trayWarning(PAPER),
+    svg: stateMark(PAPER, {
+      body: WARNING_ON_DARK_TRAY,
+      pen: WARNING_ON_DARK_TRAY,
+    }),
   },
   {
     path: "src-tauri/resources/tray_idle_warning_dark.png",
     box: 64,
-    svg: trayWarning(INK),
+    svg: stateMark(INK, {
+      body: WARNING_ON_LIGHT_TRAY,
+      pen: WARNING_ON_LIGHT_TRAY,
+    }),
   },
-  // The tray's "Colored" theme: one fallback blue for every background.
+  // The tray's "Colored" theme (Linux): the fallback blue for line art on an
+  // uncontrolled background, with the same status fills as elsewhere.
   {
     path: "src-tauri/resources/handy.png",
     box: 64,
-    svg: trayIdle(TRAY_FALLBACK),
+    svg: stateMark(TRAY_FALLBACK),
   },
   {
     path: "src-tauri/resources/recording.png",
     box: 64,
-    svg: trayRecording(TRAY_FALLBACK),
+    svg: stateMark(TRAY_FALLBACK, { body: RECORDING }),
   },
   {
     path: "src-tauri/resources/transcribing.png",
     box: 64,
-    svg: trayTranscribing(TRAY_FALLBACK),
+    svg: stateMark(TRAY_FALLBACK, { body: TRANSCRIBING_ON_DARK_TRAY }),
   },
   // Master for `tauri icon`, at the filename that command defaults to.
   { path: "src-tauri/app-icon.png", box: 1024, svg: appIcon(1024) },

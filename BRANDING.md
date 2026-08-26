@@ -102,12 +102,15 @@ blocks to resolve it correctly.
 
 ## The mark and lockup
 
-The mark is the approved one-colour outline of a bird perched on a fountain pen.
-The detailed clay artwork tells the story at large sizes; the silhouette keeps
-the bird-and-pen contour when detail disappears. It has four paths, and two use
-`fill-rule="evenodd"` to punch counters through the bird’s body and pen barrel.
-It fills with `currentColor`, so one component can inherit ink in the UI and be
-rasterised into each tray treatment without owning a themed colour.
+There are two renderings of the mark, used for two different jobs.
+
+**The one-colour silhouette** (`mark.paths.ts` / `mark.svg`, rendered by
+`ShorthandMark.tsx`) is a bird perched on a fountain pen reduced to its
+contour: four paths, two using `fill-rule="evenodd"` to punch counters through
+the bird’s body and pen barrel. It fills with `currentColor` or an explicit
+colour, so it can inherit ink in the UI or be rasterised into each tray
+treatment without owning a fixed palette — this is what `gen-brand-icons.mjs`
+draws the app icon and every tray state from.
 
 The previous mark was a lowercase “s” written with a pointed pen. SVG cannot
 vary `stroke-width` along a path, so its visible stroke had to be an outline: a
@@ -115,65 +118,108 @@ spine offset on both sides by a width profile, producing roughly 200
 machine-derived coordinates. That was why `scripts/gen-brand-mark.ts` existed.
 The reason disappeared with the old mark, so the generator disappeared too.
 
-The new mark is approved artwork, not editable geometry. `mark.paths.ts` and
+The silhouette is approved artwork, not editable geometry. `mark.paths.ts` and
 `mark.svg` are transcribed from `brand-assets/mark-silhouette.svg`. If the
 artwork changes, re-transcribe it; do not hand-tune either copy into a fork of
 the source of truth.
 
+**The full-colour clay render** (`brand-assets/mark-full-colour-transparent.png`)
+is what `ShorthandWordmark.tsx` actually places in the UI — the sidebar, and
+the onboarding/About lockup. An initial version reused the one-colour
+silhouette here too, reasoning that the word carrying the theme’s ink was
+enough colour for one lockup; the raster mark replaced it because the approved
+artwork’s own colour is part of what makes it read as the product’s identity
+rather than a generic line icon, and the illustration’s palette (ocean blue,
+coral, cream) doesn’t need to flip for the theme the way a silhouette’s ink
+does. The PNG is already tightly cropped to the drawing, so `ShorthandWordmark`
+sizes it by its own aspect ratio (845:498) rather than by measured bounds
+inside a viewBox, the way it sizes the silhouette elsewhere.
+
 The old `[mark]horthand` lockup substituted the written “s” for the initial S.
 Its argument was coherent — a separate bug beside “Shorthand” would print two
 S’s — but the approved artwork settled the question differently. The shipped
-lockup stacks the bird and pen above the complete word **Shorthand**, with a
-coral sweep beneath, matching the composition of the raster.
+lockup stacks the coloured bird and pen above the complete word **Shorthand**,
+with its coral swash beneath, matching the composition of the raster.
 
-The word remains live type rather than outlines, so it stays crisp at any size,
-follows the theme’s ink, and never needs re-exporting. `brand-assets/FONT.md`’s
-`[mark]horthand` table now governs only the type decisions that survived:
-weight 650, `opsz 72`, `SOFT 75`, `WONK 1`, and `-0.015em` tracking. Its old
-mark-height, kerning and baseline-nudge measurements do not apply to the stacked
-lockup.
+### The word is artwork, not type
 
-## The sweep, and the rules learned by looking
+`brand-assets/wordmark-full-colour.png` is the approved clay render of the
+word and its swash, and it is what ships. `scripts/gen-brand-wordmark.mjs`
+derives the two assets the UI loads into `src/shorthand/brand/`:
+`wordmark-light.png` (the artwork, resized) and `wordmark-dark.png` (the same,
+with the ink remapped to cream).
 
-The coral sweep is the motif carried forward from “a marked-up transcript”. Its
-four rules were found by building it and screenshotting both themes; none is a
-decorative preference.
+The word used to be live Fraunces type. That was never a type decision — it was
+a workaround for one problem: the artwork’s ink is a fixed navy, and fixed navy
+is invisible on the dark ground. Live text followed `--color-text` and solved
+it, at the cost of the clay — texture, bevel and swash all became flat type,
+and the face did not match the artwork’s letterforms anyway.
 
-1. **No `mix-blend-mode: multiply`.** A physical highlighter is translucent,
-   but multiply over a dark ground deposits almost nothing. In the then-yellow
-   experiment, `#D9E84A` multiplied by `#12141A` became about `#0F1208` and put
-   the label at roughly 1.05:1 against its own mark. The dark-theme sweep became
-   a black smudge.
-2. **Mark text, never a container.** On a 40px row, rotation disappears,
-   gradient unevenness disappears, and asymmetric radii become merely rounded.
-   The result is the same flat rectangular active fill the motif exists to
-   avoid, only coral.
-3. **The text must be long enough.** Rendered aspect ratio governs the result:
-   running text at 10.4:1 works; a tab at 5.2:1 works; `AI cleanup` at 3.0:1 is
-   weak; `Modes` at 1.9:1 is a chip; `App` at 1.2:1 is a square. Below roughly
-   5:1 the radii consume the perimeter, no straight section survives, and the
-   pen line detaches into a second object.
-4. **Overshoot is lopsided, about 3:1 horizontal to vertical.** Growing both
-   axes makes the mark roomier but reduces its aspect ratio. Height is the
-   denominator; spend the overshoot on width. A hand also overshoots the first
-   and last letter, not the line height.
+Three ways to keep the artwork were considered:
 
-Running text and active tabs are eligible; the current implementation uses the
-sweep on the active tab. The sidebar instead uses an accent icon and full-weight
-label against dimmed neighbours. That is quieter for a permanent rail and
-protects the distinction between _live_ and merely _selected_.
+| Approach                               | Why it was rejected or chosen                                                                                                                                                                               |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| trace the render to full-colour vector | does not solve the problem — the navy ends up baked into paths instead of pixels, so dark is still broken; needs a new devDependency, and a traced clay render is typically larger than the PNG it replaces |
+| outline the font, or re-set it in one  | there is no font to outline: the artwork is a rendered illustration of letterforms, and the `.svg` in the pack is a PNG in an `<svg>` wrapper — one `<image>`, no paths, no `<text>`, no `@font-face`       |
+| **remap the ink per theme**            | **chosen.** Only the navy pixels move, onto a cream ramp keyed to each pixel’s own luminance, so the clay texture and bevel survive intact                                                                  |
 
-The pen hairline below the sweep is not styling. Coral against light paper is
-2.83:1, short of the 3:1 non-text floor, so the hairline remains load-bearing in
-light mode. Coral against the dark ground is 5.80:1 and clears the floor on its
-own. The line stays in both themes because one motif that changes construction
-with the theme is worse than one that is belt-and-braces on one side.
+The coral swash is left untouched by the remap. Coral is theme-invariant in
+this palette and already clears contrast on both grounds, so it needs no
+variant — which is also why the component no longer draws a CSS bar of its own.
 
-The line sits below the sweep with about a pixel of daylight. Dark-theme accent
-on coral is only 1.36:1, so tucking the line under the sweep’s edge would make it
-disappear into the mark. Separated, it is measured against the page, where the
-accent holds 7.89:1. It also looks more like a highlighter stroke with a pen line
-under it than one stroke with a darker edge.
+Both variants are rendered into the DOM and `marks.css` picks one with
+`display`. That is not a preference for CSS over a React check: the theme can
+come from the OS preference _or_ an explicit `data-theme` override, and only
+CSS sees both without the component subscribing to a store it otherwise has no
+reason to know about. `<picture>` cannot do it either — it resolves
+`prefers-color-scheme` but is blind to the attribute, so an override would show
+the wrong variant.
+
+Being artwork, the word can no longer be restyled by a type change, and the
+generator has to be re-run if the approved wordmark is re-rendered.
+`brand-assets/FONT.md`’s `[mark]horthand` table therefore no longer governs the
+lockup at all; Fraunces remains the display face for headings and the About
+lockup, but not for the word itself.
+
+## The active-tab indicator, and the sweep it replaced
+
+The active Transcription/Dictation tab carries a plain 2px coral bar
+(`.sh-tab-indicator` in `marks.css`) under its label. Coral keeps meaning “the
+one you’re looking at now” — see the accent hierarchy above — with a fade-in
+rather than a directional wipe, so it needs no mirroring for the app’s RTL
+locales.
+
+That indicator replaced a hand-drawn highlighter sweep — a gradient, four
+mismatched corner radii, a rotation and a companion pen line beneath, built to
+carry “a marked-up transcript” onto the one live UI element that used it. Its
+construction rules were real findings, earned by screenshotting both themes,
+not decorative choices:
+
+1. No `mix-blend-mode: multiply` — physically correct on paper, but multiply
+   over a dark ground deposits almost nothing (`#D9E84A` over `#12141A`
+   resolved to roughly `#0F1208`, a black smudge).
+2. Mark text, never a container — at row scale the rotation, gradient and
+   asymmetric radii all wash out into the same flat active-state rectangle the
+   motif existed to avoid.
+3. The label needs to be long enough to hold a stroke: below roughly a 5:1
+   rendered aspect ratio the corner radii eat the whole perimeter.
+4. Overshoot lopsided, about 3:1 horizontal to vertical, or the mark gets
+   roomier and less like a stroke at the same time.
+
+It shipped, and it photographed well in the component gallery — but a tab bar
+in real use is ordinary UI chrome, not a piece of marked-up paper, and the
+sweep read as noise there once it stopped being a curated screenshot. The
+lesson worth keeping isn’t the construction rules above; it’s that a motif
+proving itself in an isolated demo still has to earn its place in the actual
+surface it ships on, and it hadn’t. `.sh-sweep` and the running-text
+demonstration in `brand-preview/gallery.tsx` were removed with it — the
+gallery no longer needs to show an idea nothing in the app implements.
+
+The sidebar was never in scope for either version: its labels are shorter than
+the 5:1 floor above (“App” renders at 1.2:1), so it marks selection with an
+accent icon and full-weight label against dimmed neighbours instead. That also
+protects the distinction between _live_ (the tab indicator) and merely
+_selected_ (the sidebar row).
 
 ## Dependent settings: a rule, not a box
 
@@ -232,28 +278,34 @@ and keeps future merges cheap.
 
 The approved source pack is in `brand-assets/`:
 
-| File                  | Authority                                                      |
-| --------------------- | -------------------------------------------------------------- |
-| `direction.md`        | the bird/pen story and why each colour exists                  |
-| `colours.md`          | production token values, usage rules and measured WCAG ratios  |
-| `FONT.md`             | Fraunces, Source Code Pro and the surviving live-type settings |
-| `mark-silhouette.svg` | source of truth for the one-colour mark                        |
+| File                                      | Authority                                                                                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `direction.md`                            | the bird/pen story and why each colour exists                                                                                                                 |
+| `colours.md`                              | production token values, usage rules and measured WCAG ratios                                                                                                 |
+| `FONT.md`                                 | Fraunces, Source Code Pro and the surviving live-type settings                                                                                                |
+| `mark-silhouette.svg`                     | source of truth for the one-colour mark                                                                                                                       |
+| `mark-full-colour-transparent.png`        | source of truth for the coloured mark `ShorthandWordmark.tsx` renders                                                                                         |
+| `wordmark-full-colour.png`                | source of truth for the word and its coral swash; `gen-brand-wordmark.mjs` derives both theme variants from it                                                |
+| `wordmark-full-colour-no-stroke.png`      | the same word without the swash — delivered alongside it, currently unused; the shipped lockup wants the swash                                                |
+| `logo-full-colour-transparent.png`/`.svg` | the full lockup as delivered, mark and word composited together — reference only; the UI stacks the two separately so each can be sized and themed on its own |
 
 The fork-owned implementation is in `src/shorthand/brand/`:
 
-| File                    | What it is                                                            |
-| ----------------------- | --------------------------------------------------------------------- |
-| `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection      |
-| `marks.css`             | The sweep, its animation and reduced-motion rule; all brand selectors |
-| `ShorthandMark.tsx`     | Four-path mark component, filled with `currentColor`                  |
-| `ShorthandWordmark.tsx` | Stacked live-type lockup                                              |
-| `mark.paths.ts`         | Path data transcribed from the approved silhouette                    |
-| `mark.svg`              | Standalone approved silhouette read by the icon generator             |
+| File                    | What it is                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection                                                                                 |
+| `marks.css`             | The active-tab indicator and the wordmark's theme selection; all brand selectors                                                                 |
+| `ShorthandMark.tsx`     | Four-path silhouette component, filled with `currentColor` — used by the icon generator's reference, not currently placed directly in any screen |
+| `ShorthandWordmark.tsx` | Stacked lockup: the full-colour raster mark above the raster word                                                                                |
+| `wordmark-light.png`    | Generated: the approved word, resized. Do not hand-edit — re-run the generator                                                                   |
+| `wordmark-dark.png`     | Generated: the same word with its ink remapped to cream. Do not hand-edit                                                                        |
+| `mark.paths.ts`         | Path data transcribed from the approved silhouette                                                                                               |
+| `mark.svg`              | Standalone approved silhouette read by the icon generator                                                                                        |
 
 `theme.css` re-declares tokens upstream and Tailwind already define. It
-introduces no utility or component selector; the sweep stays in `marks.css` to
-keep that promise. Upstream can add screens or restyle components and the fork’s
-values follow without conflict.
+introduces no utility or component selector; the active-tab indicator stays in
+`marks.css` to keep that promise. Upstream can add screens or restyle
+components and the fork’s values follow without conflict.
 
 ### Where it touches upstream files
 
@@ -293,30 +345,84 @@ The mark itself is not generated. Change the source pack, then re-transcribe
 `mark.svg` and `mark.paths.ts` from `brand-assets/mark-silhouette.svg`.
 
 ```bash
-node scripts/gen-brand-icons.mjs     # node, not bun
+node scripts/gen-brand-icons.mjs     # node, not bun — app icon + every tray state
+node scripts/gen-brand-wordmark.mjs  # node, not bun — both wordmark variants
 cd src-tauri && bun x tauri icon     # slices app-icon.png to every platform
 ```
 
-The icon generator reads every path and its fill rule from `mark.svg`. It
-rasterises the 1024px app-icon master and tray PNGs through Playwright’s Chromium
-without adding a native image dependency.
+The icon generator reads every path and its fill rule from `mark.svg`. Both
+scripts rasterise through Playwright’s Chromium, which is already a
+devDependency — deliberately avoiding a native image toolchain in a fork whose
+`package.json` has to stay mergeable.
 
-Tray states keep one mark and add one badge in a learned bottom-right slot. The
-landscape mark in a square frame leaves a strip rather than an empty corner, so
-it takes 62 of 64 units of width, top-aligned, and the badge sits in the strip
-below. Width is protected because the silhouette reads along its length and
-16px in a menu bar is its primary home. Idle and badged states use identical
-mark placement; the previous generator claimed that rule while quietly scaling
-them differently.
+Re-run `gen-brand-wordmark.mjs` whenever `brand-assets/wordmark-full-colour.png`
+is re-rendered. It re-measures the artwork’s own ink range each run rather than
+assuming fixed values, so a re-render maps correctly without anyone editing
+constants — but it will fail loudly if the ink stops being blue-dominant, since
+the dark variant would silently come out identical to the light one. If the word
+is re-rendered at a different size, the ratios in `ShorthandWordmark.tsx` need
+re-measuring too; they are noted there with the numbers they came from.
 
-| State        | Badge                 | Why                                        |
-| ------------ | --------------------- | ------------------------------------------ |
-| Idle         | none                  | the app, at rest                           |
-| Recording    | solid dot             | the record symbol, unchanged since tape    |
-| Transcribing | ring with a gap       | the shape every spinner uses for “working” |
-| Warning      | exclamation on a disc | upstream’s convention, kept                |
+Every tray state draws the mark **84 units wide in a 64-unit frame,
+left-aligned, bleeding off the right edge.** That is deliberate, and it is the
+only way to make the tray icon bigger.
 
-The macOS menu bar uses template mode, so tray art is alpha-only. Every tray SVG
-paints one requested colour; its black/white badge mask changes alpha rather than
-introducing a second visible tone. The coloured tray theme uses `#2E6F9E`, the
-pack’s uncontrolled-background fallback.
+The mark is 1.4:1 landscape, and its bounds are tight — `MARK_BOUNDS` was
+verified against the rendered paths, so there is no padding to reclaim. Fitted
+whole inside a square tray slot it can only fill 69% of the height, and the
+leftover sits above and below as empty frame, which is exactly what made it
+read small beside neighbouring tray icons. Cropping to the bird alone is worse,
+not better: with its wing and tail flourishes the bird measures 1.61:1.
+
+So the mark is scaled until its height nearly fills the frame and the overflow
+is spent off a single edge. Left-aligned rather than centred because the nib,
+head and eye are what identify the mark and all sit at the left; the cut then
+lands on the wing and tail, which read as continuing past the frame rather than
+as damage. 84 units (91% of frame height) is the ceiling — past roughly there
+the wing's feathers slice into a flat vertical edge that stops reading as a
+bleed.
+
+This is tuned for 16–24px, where a tray icon actually lives (32px at 200% DPI
+is the ceiling). Inspected large, the flat cut edge is visible; nothing renders
+it that way. The installed app icon is unaffected — `appIcon()` still centres
+the whole mark inside its tile.
+
+The mark is line art: the bird and the pen are each an `evenodd` shape whose
+inner subpath leaves a hollow interior. **State is carried by filling those
+interiors, not by changing the outline.** The line art itself stays paper or
+ink in every state, so the tray item never stops looking like Shorthand:
+
+| State        | Fill                                                    | Why                                                                                                                            |
+| ------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Idle         | none — open line art                                    | the app, at rest                                                                                                               |
+| Recording    | bird body, `--brand-highlighter` coral, theme-invariant | coral already means “happening now” everywhere else                                                                            |
+| Transcribing | bird body, `--color-logo-primary` ocean blue, flipped   | the app’s conventional “working” accent                                                                                        |
+| Warning      | bird body **and pen**, `--color-warning` amber, flipped | a second filled region reads as different-in-kind before the hue even registers, and amber is the one hue reserved for warning |
+
+Two rejected versions are worth not re-proposing. The first shrank the mark and
+top-aligned it to leave a strip for a status badge in a learned bottom-right
+slot — costing roughly a third of the mark's visible size for a signal a colour
+carries at a glance. The second recoloured the entire silhouette, pen included;
+that fixed the size, but a fully coral bird-and-pen reads as a _different logo_
+rather than the same one in a different state. Filling only an interior keeps
+the outline constant, which is what makes the state legible as a state.
+
+The warning's exclamation-on-a-disc badge went with the first version. Filling
+the pen replaces it: it distinguishes warning from the one-region ambient
+states without spending any of the mark's size, and unlike a badge it survives
+16px without a dedicated antialiasing gutter.
+
+Upstream solves the same problem by swapping the glyph itself
+(hand → ear → brain). That path was considered and rejected: Shorthand has one
+glyph, and spending it on status would cost the identity a colour can carry
+just as well.
+
+The macOS menu bar uses template mode for icons whose colour is meant to be
+discarded and replaced by the OS. Only plain idle qualifies now — it has no
+second colour to lose — so it alone renders templated and blends in like any
+other menu bar glyph. Every other state tints an interior and is rendered
+non-templated (see `tray.rs::change_tray_icon`), which is what makes the fill
+visible at all; template mode would otherwise flatten each one back to the
+same alpha-only silhouette as idle. The coloured Linux tray theme uses
+`#2E6F9E` line art — the pack’s uncontrolled-background fallback — with the
+same interior fills as everywhere else.

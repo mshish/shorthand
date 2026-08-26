@@ -1,222 +1,112 @@
 /*
- * Fork-only. The mark: a highlighter sweep, and the one motion primitive.
+ * Fork-only. The active-tab indicator: the one motif that says "this is the
+ * tab you're looking at".
  *
  * Kept out of `theme.css` deliberately. That file's job is to re-declare token
  * *values*, so an upstream restyle merges without conflict; the moment it grows
- * a class it stops being only that. Everything here introduces selectors, so it
- * lives in its own file, imported alongside.
+ * a class it stops being only that. This file introduces a selector, so it
+ * lives on its own, imported alongside.
  *
- * The sweep survives from the "marked-up transcript" direction: the UI is
- * paper and ink, and coral marks the thing that is currently live. This file is
- * the only place that defines that motif.
+ * This replaced a hand-drawn highlighter sweep — a gradient, four mismatched
+ * corner radii, a rotation and a companion pen line, meant to echo the "marked
+ * up transcript" motif from the wordmark's underline. It photographed well in
+ * isolation but read as visual noise on a plain settings tab bar, which is
+ * ordinary UI chrome rather than a piece of the brand's marked-paper metaphor.
+ * A tab bar wants a tab bar's indicator: a plain bar, in the brand's colour.
  *
- * One meaning, one motif. `.sh-sweep` currently marks the active tab — and
+ * One meaning, one motif. `.sh-tab-indicator` marks the active tab — and
  * nothing else. If it starts appearing on things that are merely important
- * rather than current, the idea is gone and the file should be reverted, not
+ * rather than current, the idea is gone and this should be reverted, not
  * extended.
  */
 
-/*
- * A real highlighter is not a rectangle of flat colour:
- *
- *   - the felt tip is round, so the stroke has softened ends;
- *   - it deposits unevenly, heavier where the nib first lands and lighter as it
- *     runs out, hence the gradient rather than one colour;
- *   - a hand does not travel perfectly level, hence the fractional rotation and
- *     the asymmetric radii.
- *
- * None of that is decoration for its own sake. A perfectly rectangular flat
- * fill is what every UI framework already draws for an active state, and using
- * one here would throw away the entire reason for the direction.
- *
- * What this deliberately does NOT do is `mix-blend-mode: multiply`, even though
- * a highlighter is physically translucent. Multiply is only a valid model on
- * light paper. On the dark theme it is physically correct and visually fatal —
- * a highlighter over black paper deposits nothing. In the then-yellow version,
- * `#d9e84a` multiplied by `#12141a` resolved to about `#0f1208`, which put the
- * dark label ink at roughly 1.05:1 against its own mark. Every mark in the dark
- * theme rendered as a black smudge with only the pen line surviving. This was
- * found by screenshotting the two themes, not by reasoning, which is the
- * argument for screenshotting them.
- *
- * The translucency that actually reads is at the two ends, and the gradient's
- * alpha supplies that in both themes without a blend mode.
- */
-/*
- * Applied to the *text* of the live thing, never to its container — and only
- * where that text is long enough. Both halves of that rule were learned by
- * screenshotting, not by reasoning.
- *
- * Applied to a whole 40px sidebar row it degenerated into a flat coral
- * lozenge: the rotation imperceptible, the gradient unevenness invisible, the
- * asymmetric radii reading as plain "rounded". That is precisely the
- * rectangular active-state fill this file exists to avoid — coral substituted
- * for blue, corners rounded. So: wrap the label, not the row, and there is no
- * row-height variant.
- *
- * But moving it to the label only moved the failure one scale down. What
- * actually governs is the mark's ASPECT RATIO, measured on the rendered box:
- *
- *   running text, "hold to talk, release to send"   163 x 16   10.4:1   works
- *   tab, "Transcription"                             82 x 16    5.2:1   works
- *   sidebar, "AI cleanup"                            68 x 22    3.0:1   weak
- *   sidebar, "Modes"                                 44 x 22    1.9:1   a chip
- *   sidebar, "App"                                   28 x 22    1.2:1   a square
- *
- * Below roughly 5:1 the four corner radii consume most of the perimeter, no
- * straight section survives, and the pen line below detaches along the whole
- * bottom edge — so it reads as two objects, a badge with an underline under it,
- * rather than one stroke. A stroke needs a length to be a stroke.
- *
- * The rule, therefore: only mark text that is long enough to hold a stroke.
- * Running prose and tab labels qualify. Nav labels do not, and the sidebar
- * marks its selection with an accent icon and a full-weight label against
- * dimmed neighbours instead — which is quieter, and right for a rail that is on
- * screen permanently. Spending the one coloured mark on something merely
- * navigated-to would also weaken the rule the whole direction rests on: colour
- * means *live*, not *selected*.
- *
- * No `isolation: isolate` here. It creates a stacking context, and any future
- * `mix-blend-mode` inside one would blend against that context's own (empty)
- * backdrop rather than the page. The z-index pair on the pseudo-element and the
- * children is enough to order them without it.
- */
-.sh-sweep {
-  position: relative;
-}
-
-.sh-sweep > * {
-  position: relative;
-  z-index: 1;
-}
-
-.sh-sweep::before {
-  content: "";
+.sh-tab-indicator {
   position: absolute;
-  /* Overshoots the box on purpose: a hand marking a line does not stop exactly
-     at the word, and a mark that stops exactly at the word reads as a
-     background fill instead.
-
-     This was originally 0.08em/-0.16em/0.02em/-0.12em — inset at the top and
-     bottom, so the mark was *narrower than its own text*, and the label looked
-     squeezed inside it. The 0.15em ceiling that produced those numbers came
-     from running prose, where 0.25–0.35em ate the adjacent word spaces and the
-     mark merged with the words either side of it. There are no adjacent words
-     here: the sweep is used on tab labels only (see the aspect-ratio table
-     above), and the tab list sets gap-7 = 28px, of which this consumes about
-     11px. So the ceiling does not apply and the mark can breathe.
-
-     The overshoot is deliberately lopsided — about 3x more horizontal than
-     vertical — and the first fix for the squeezed look was not. Growing both
-     axes equally traded one defect for another: the aspect-ratio table above
-     says the mark degenerates into a chip below roughly 5:1, and a symmetric
-     -0.3em took "Dictation" from 3.9:1 to 3.5:1, so the mark got roomier and
-     less like a stroke at the same time. Height is the denominator; spend the
-     overshoot on the numerator.
-
-     It is also the more faithful reading of the complaint. What looks tight
-     about an unpadded mark is that it stops exactly at the first and last
-     letter, which is the thing a hand with a highlighter never does.
-
-     The bottom stops at -0.04em rather than going further, to stay clear of the
-     pen line below — see the note on ::after. */
-  inset: -0.18em -0.55em -0.04em -0.5em;
-  z-index: 0;
-
-  background: linear-gradient(
-    100deg,
-    color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 0%,
-    var(--brand-highlighter) 14%,
-    var(--brand-highlighter) 72%,
-    /* Not lower than ~78%: in the then-chartreuse version, 62% made the trailing
-       end muddy over the dark ground rather than merely lighter. */
-      color-mix(in srgb, var(--brand-highlighter) 78%, transparent) 100%
-  );
-
-  /* No two corners alike, but in absolute units and NOT elliptical.
-     `… / 50%` made the vertical radius half the height, so on a short label
-     ("Modes", five characters at 14px) the curves met in the middle and the
-     mark became a bean with no straight section — the same degeneration as the
-     deleted row variant, one scale down. Fixed radii keep a flat top and
-     bottom at every word length, which is what makes it read as a stroke. */
-  border-radius: 7px 11px 8px 12px;
-  transform: rotate(-0.45deg);
-}
-
-/*
- * The pen line under the highlighter.
- *
- * It is here for a reason that is not styling. Coral `#f3673c` against the
- * light paper `#faf5ea` is 2.83:1 — still short of the 3:1 required of a
- * non-text indicator. Against the dark ground `#111820` it is 5.80:1 and clears
- * that floor on its own. The hairline therefore remains load-bearing in light
- * mode and belt-and-braces in dark: changing one motif's construction with the
- * theme would be worse than keeping the same pen line in both.
- *
- * A saturated warm hue on near-white is plainly visible to an eye because hue
- * and chroma carry it, but WCAG 2.x measures luminance alone and cannot see
- * either. The accent hairline supplies the boundary where the sweep cannot.
- *
- * That constraint improved the design rather than taxing it: a highlighter
- * stroke with a pen line under it is what a marked-up page actually looks like.
- *
- * The line sits *below* the sweep rather than under its bottom edge. They used
- * to overlap, which cost nothing while the mark was yellow but matters now:
- * dark-theme accent `#63b7d6` on coral `#f3673c` is 1.36:1, so an overlapping
- * line would disappear into the mark and take the 3:1 boundary with it.
- * Separating
- * them vertically keeps the line measured against the page, where it holds
- * 7.89:1 — and two strokes with daylight between them is also closer to what a
- * marked-up page looks like than one stroke with a darker edge.
- */
-.sh-sweep::after {
-  content: "";
-  position: absolute;
-  left: -0.48em;
-  right: -0.53em;
-  /* Clears the sweep's own -0.04em bottom by ~1px at 14px. */
-  bottom: -0.26em;
+  left: 0;
+  right: 0;
+  /* Sits on the tab list's own border-b, so the coral segment reads as that
+     line picking out the active tab rather than a second, separate rule. */
+  bottom: -1px;
   height: 2px;
-  z-index: 0;
-  border-radius: 2px;
-  background: var(--color-logo-primary);
-  transform: rotate(-0.45deg);
-}
-
-/* Dark theme flips the ink on the sweep, because a bright highlighter needs
-   dark text on it in both themes. `--brand-highlighter-ink` is resolved per
-   theme in theme.css. */
-.sh-sweep {
-  color: var(--brand-highlighter-ink);
+  border-radius: 9999px;
+  background: var(--brand-highlighter);
 }
 
 /*
- * The one motion primitive: a sweep is *drawn*, left to right. Used when the
- * active tab changes. Nothing else in the settings window animates beyond
- * `transition-colors`.
- *
- * 180ms because that is about how long the eye needs to register a direction
- * without the UI feeling like it is waiting for the animation.
+ * The indicator is never the only signal — see the note in ui/Tabs.tsx.
+ * `aria-selected` and the label's own font-weight carry the state; the coral
+ * bar is confirmation, not the sole cue, which is also why a fade rather than
+ * a directional wipe is enough motion for it. A left-to-right wipe would also
+ * need mirroring for the app's RTL locales (Arabic, Hebrew); a fade needs
+ * nothing direction-specific.
  */
 @media (prefers-reduced-motion: no-preference) {
-  .sh-sweep::before,
-  .sh-sweep::after {
-    animation: sh-draw 180ms ease-out;
+  .sh-tab-indicator {
+    animation: sh-tab-indicator-in 120ms ease-out;
   }
 }
 
-@keyframes sh-draw {
+@keyframes sh-tab-indicator-in {
   from {
-    clip-path: inset(0 100% 0 0);
+    opacity: 0;
   }
   to {
-    clip-path: inset(0 0 0 0);
+    opacity: 1;
   }
 }
 
 /*
- * There is intentionally no row-height or container variant. See the note on
- * `.sh-sweep` above: at container scale the mark stops being a mark. The
- * active tab wraps its *label* in `.sh-sweep` and leaves the row itself
- * unstyled. The sidebar uses an accent icon and full-weight label instead.
+ * Wordmark theme selection.
+ *
+ * The wordmark is artwork rather than type (see brand/ShorthandWordmark.tsx),
+ * so its ink cannot follow `--color-text` the way live text did. Two variants
+ * are generated instead — navy on paper, cream on night — and CSS picks one.
+ *
+ * It has to be CSS rather than a React check on the settings store: the theme
+ * can come from the OS preference *or* from an explicit `data-theme` override,
+ * and only CSS sees both without the component subscribing to a store it has
+ * no other reason to know about. `<picture>` with a media query was the other
+ * candidate and cannot do it — it resolves `prefers-color-scheme` but is blind
+ * to the attribute, so an explicit override would show the wrong variant.
+ *
+ * The block order mirrors upstream's theme.css and brand/theme.css for the
+ * same reason they do: the attribute selectors must come after the media query
+ * so an explicit choice beats the OS preference.
+ *
+ * `display: none` rather than `visibility`/opacity, so the hidden variant is
+ * out of the accessibility tree — both <img> carry the same alt text, and two
+ * visible ones would announce the product name twice.
  */
+.sh-wordmark-light {
+  display: block;
+}
+
+.sh-wordmark-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sh-wordmark-light {
+    display: none;
+  }
+
+  :root:not([data-theme]) .sh-wordmark-dark {
+    display: block;
+  }
+}
+
+:root[data-theme="light"] .sh-wordmark-light {
+  display: block;
+}
+
+:root[data-theme="light"] .sh-wordmark-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .sh-wordmark-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .sh-wordmark-dark {
+  display: block;
+}
