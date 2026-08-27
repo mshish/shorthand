@@ -18,7 +18,7 @@
 - **Do not change `get_cpal_host()`.** It pins ALSA for microphone and playback; repointing it would alter capture for every existing Linux user, which is out of scope. Loopback gets a separate host.
 - No permission prompt, deep link, or consent UI exists or is needed on Linux.
 - Systems with neither PipeWire nor PulseAudio report unavailable. No ALSA `snd-aloop` fallback.
-- Use `Device::description()` for display and never the deprecated `name()` — `clippy -D warnings` fails on it. See Phase A Task 2.
+- `Device::name()` is gone in cpal 0.18. Use `device.to_string()` for the display/persisted name — `description()` returns a `DeviceDescription` struct, not a `String`. Match exactly what Phase A Task 2 did in `device.rs`, so the two enumerations produce comparable strings.
 - **No React unit tests.** Per `docs/FRONTEND_TESTING.md` this repo has no vitest/jest harness by deliberate decision. Frontend changes are verified manually.
 - All `cargo` commands use `--manifest-path src-tauri/Cargo.toml`.
 
@@ -183,14 +183,12 @@ pub fn list_system_audio_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::e
     let Some(host) = crate::audio_toolkit::get_system_audio_host() else {
         return Ok(Vec::new());
     };
-    let default_name = host
-        .default_output_device()
-        .and_then(|d| d.description().ok());
+    let default_name = host.default_output_device().map(|d| d.to_string());
 
     let mut out = Vec::<CpalDeviceInfo>::new();
 
     for (index, device) in host.output_devices()?.enumerate() {
-        let name = device.description().unwrap_or_else(|_| "Unknown".into());
+        let name = device.to_string();
         let is_default = Some(name.clone()) == default_name;
 
         out.push(CpalDeviceInfo {
@@ -205,7 +203,12 @@ pub fn list_system_audio_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::e
 }
 ```
 
-`description()`, not the deprecated `name()` — see the Global Constraints.
+Note `device.to_string()`, not `description()`: cpal 0.18's `description()`
+returns a `DeviceDescription` struct, not a `String`, and its `Display` impl is
+what cpal's own docs point to for the plain name. `name()` is gone. Match
+whatever `list_output_devices` ended up doing in Phase A Task 2 so both
+enumerations produce comparable strings — a mismatch here silently breaks
+device selection.
 
 - [ ] **Step 2: Re-export it**
 

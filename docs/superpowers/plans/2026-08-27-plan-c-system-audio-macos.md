@@ -67,27 +67,73 @@ git commit -m "feat(macos): add NSAudioCaptureUsageDescription consent string"
 
 ---
 
+### Task 1b: Spike — is a denied tap detectable at all?
+
+**Files:** none permanent. Produces a **finding** that decides how Tasks 3 and 4 are written.
+
+**Why this must come first.** Everything downstream assumes that when macOS denies the audio-capture permission, the loopback stream fails to open — so `system_audio_active()` goes false and we can classify it. That assumption is **unverified**, and there is a plausible alternative: the stream opens successfully and silently delivers all-zero samples. cpal's CoreAudio backend has been reported to behave that way. If that is what happens, every open-time signal reports success, availability stays `Available`, the CTA never renders, and the user is left with a toggle that appears on and captures silence. No amount of care in Tasks 3–5 recovers from building on the wrong answer.
+
+Do this on a real Mac at macOS 14.6+, after Task 1 (the consent string must exist for a prompt to appear at all).
+
+- [ ] **Step 1: Instrument a denied attempt**
+
+Reset consent, then run a debug build and enable system audio:
+
+```bash
+tccutil reset AudioCapture <bundle-id>
+```
+
+Decline the prompt. With `--debug` logging on, record:
+
+1. Did `build_loopback_stream` return `Err`? If so, the exact error text and OSStatus.
+2. If it returned `Ok`, did the stream's error callback fire later? With what?
+3. If neither, do samples arrive at the loopback data callback, and are they all zero?
+
+Add temporary logging to `build_loopback_stream_typed`'s data callback (peak absolute sample per N callbacks) if needed to answer 3. Remove it afterwards.
+
+- [ ] **Step 2: Repeat with permission granted**
+
+Grant in System Settings, repeat, and record the same three answers with audio playing. You need the contrast: "all-zero samples" only means denial if a granted tap produces non-zero ones.
+
+- [ ] **Step 3: Decide the classifier and write it down**
+
+Edit Task 3's `observe_probe_outcome` and Task 2's probe to match what you measured:
+
+- **Open fails on denial** → the plan as written is correct; proceed unchanged.
+- **Open succeeds, samples are silent** → an open-time flag cannot classify. The probe must instead play a brief known sound and sample the lane, or the design must drop automatic detection and always offer the "grant access" affordance rather than gating it behind a detected denial. Prefer the latter if the former proves unreliable: an always-available settings link is worse UX than a correct auto-detect, but far better than a CTA that never appears.
+- **Something else** → record it and reason from there.
+
+Whatever you find, write the answer into Task 3 as a comment so the next reader does not re-derive it.
+
+---
+
 ### Task 2: Probe the tap deliberately when the user enables it
 
 **Files:**
 - Modify: `src-tauri/src/managers/audio.rs`
 
 **Interfaces:**
-- Produces: `pub fn probe_system_audio(&self) -> bool` on `AudioRecordingManager` — opens the capture stream if needed so the loopback attempt (and therefore the OS consent prompt) actually happens, reports whether the lane came up, and restores the prior stream state.
+- Produces: `pub fn probe_system_audio(&self, device_name: Option<String>) -> bool` on `AudioRecordingManager` — opens the capture stream with the requested system-audio configuration so the loopback attempt (and therefore the OS consent prompt) actually happens, reports whether the lane came up, and restores the prior stream state.
+- Consumes: Task 1b's finding on whether a denied tap is detectable at open time.
 
 **Why this exists — the obvious approach silently does nothing.** `update_system_audio_capture` only restarts the stream when one was already open:
 
 ```rust
+        *self.pending_system_audio.lock().unwrap() = Some(PendingSystemAudioCapture {
+            enabled,
+            device_name,
+        });
         let restart_result = if was_open {
             self.start_microphone_stream()
         } else {
             Ok(())          // <-- managers/audio.rs:947
         };
+        *self.pending_system_audio.lock().unwrap() = None;   // config discarded
 ```
 
-On-demand microphone mode is the **default**, so when a user flips the system-audio toggle while idle, nothing opens, no tap is attempted, no consent prompt appears, and `system_audio_active()` is false. A permission check reading that would report "denied" for a prompt the user was never shown, and a retry button would reproduce it forever.
+On-demand microphone mode is the **default**, so when a user flips the toggle while idle, nothing opens, no tap is attempted, no consent prompt appears, and `system_audio_active()` is false. A permission check reading that would report "denied" for a prompt the user was never shown, and the retry button would reproduce it forever.
 
-So enabling must deliberately provoke the attempt. This also gives the better UX: the prompt appears at the moment of intent, not silently at some later recording.
+**And note the last line**: the pending configuration is cleared whether or not it was used. So a probe that simply calls `start_microphone_stream()` afterwards resolves `pending_system_audio == None` and falls back to the *persisted* `settings.system_audio_enabled` — which has not been written yet at that point in the command. It would open microphone-only and report a denial that never happened. The probe must therefore carry the requested configuration itself rather than relying on state the caller already discarded.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -132,18 +178,43 @@ impl AudioRecordingManager {
     ///
     /// Necessary because `update_system_audio_capture` is a no-op when no
     /// stream is open, which in on-demand mode (the default) is most of the
-    /// time. Restores the prior open/closed state before returning, so a probe
-    /// never leaves the microphone running behind the user's back.
-    pub fn probe_system_audio(&self) -> bool {
+    /// time. Takes the requested configuration explicitly rather than reading
+    /// persisted settings: at the point the enable command calls this, the new
+    /// value has not been written yet, and `pending_system_audio` has already
+    /// been cleared. Restores the prior open/closed state before returning, so
+    /// a probe never leaves the microphone running behind the user's back.
+    pub fn probe_system_audio(&self, device_name: Option<String>) -> bool {
         let was_open = *self.is_open.lock().unwrap();
+
+        // Supply the configuration `start_microphone_stream` will look for.
+        // Without this it falls back to the persisted setting, which is still
+        // `false` here, and the probe would open microphone-only and report a
+        // denial that never happened.
+        *self.pending_system_audio.lock().unwrap() = Some(PendingSystemAudioCapture {
+            enabled: true,
+            device_name,
+        });
 
         if needs_probe_open(was_open) {
             // Cancel any pending lazy close so it cannot race our teardown.
             self.close_generation.fetch_add(1, Ordering::SeqCst);
-            if let Err(error) = self.start_microphone_stream() {
-                warn!("System audio probe could not open the capture stream: {error}");
+        } else {
+            // A stream is already open, but it was opened without the system
+            // lane — reopen so the tap is actually attempted.
+            self.stop_microphone_stream();
+        }
+
+        let opened = self.start_microphone_stream();
+        *self.pending_system_audio.lock().unwrap() = None;
+
+        if let Err(error) = opened {
+            warn!("System audio probe could not open the capture stream: {error}");
+            if needs_probe_open(was_open) {
                 return false;
             }
+            // Best effort: put the user's stream back the way it was.
+            let _ = self.start_microphone_stream();
+            return false;
         }
 
         let active = self.system_audio_active();
@@ -193,7 +264,9 @@ git commit -m "feat(macos): probe the loopback tap when system audio is enabled"
 
 *The observation must not be trusted across restarts.* It lives in process memory and resets to `Unknown`, which maps to `Available`. If the enable also persisted `system_audio_enabled = true`, the next launch shows a checked toggle that does nothing. Task 4 prevents that by not persisting a failed enable.
 
-**On classification precision.** The exact error macOS produces on TCC denial is **not verified** — Task 6 verifies it on real hardware. Rather than bet on an unconfirmed OSStatus, this treats "the lane did not come up after a real attempt" as "needs permission", with copy that reads correctly either way. Once the real signature is known, the classifier can be tightened with no UI change.
+**A third trap, and the reason Task 1b exists.** This whole design assumes a denied tap makes the *open* fail, so that `system_audio_active()` goes false. That is **unverified**. `system_audio_active()` is set from `build_loopback_stream` succeeding — which is `stream.play()` returning, before any sample arrives. If macOS instead grants a stream that silently delivers zeros when permission is missing (a failure mode reported against cpal's CoreAudio backend), the flag stays true, availability reports `Available`, and the CTA never appears. Do **not** build this task on the assumption: run Task 1b's spike first and let its answer decide the classifier.
+
+**On classification precision.** Even given a detectable failure, the exact error macOS produces is unverified. Rather than bet on an unconfirmed OSStatus, this treats "the lane did not come up after a real attempt" as "needs permission", with copy that reads correctly either way. Once the real signature is known the classifier can be tightened with no UI change.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -344,7 +417,10 @@ In `change_system_audio_enabled_setting`, after the existing `update_system_audi
         #[cfg(target_os = "macos")]
         if enabled {
             let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
-            let live = tokio::task::spawn_blocking(move || manager.probe_system_audio())
+            let probe_device = settings.system_audio_device.clone();
+            let live = tokio::task::spawn_blocking(move || {
+                manager.probe_system_audio(probe_device)
+            })
                 .await
                 .map_err(|error| format!("audio task join failed: {error}"))?;
 

@@ -148,17 +148,38 @@ Work through `/tmp/cpal-migration-errors.txt`. For each error, apply the mechani
 
 Two changes are **not** compiler-driven and will not appear in that error list. Both must be handled here or they become runtime bugs:
 
-**`Device::name()` is deprecated in favour of `id()` and `description()`.** The guide's rule: `description()` for anything shown to a user, `id()` for anything persisted or matched against. It only warns rather than errors — but `clippy -D warnings` (Step 5) turns it into a failure, so every call site must move. `device.rs`'s `list_input_devices`/`list_output_devices` populate `CpalDeviceInfo.name`, and that value is both displayed *and* persisted (`selected_microphone`, `system_audio_device`, `clamshell_microphone` all store a device name and match on it later). Keep this migration mechanical for now — swap `name()` for `description()` so behaviour is unchanged — and do **not** switch the persisted key to `id()` in this phase: that would silently invalidate every existing user's saved device selection. Note it as a follow-up instead.
+**`Device::name()` is gone in favour of `id()` and `description()`.** The rule: `description()` for anything shown to a user, `id()` for anything persisted or matched against.
 
-**Sample-format selection was re-ranked to `F32 > F64 > integers by bit-depth descending > DSD`.** I32 and I24 now outrank I16, so hardware that previously negotiated I16 may now return I24, U24 or F64. The existing match arms in `build_stream` (`recorder.rs:360-409`) and `build_loopback_stream` (`recorder.rs:856-898`) handle only U8/I8/I16/I32/F32 and return "Unsupported sample format" otherwise — which after this bump means *capture silently fails on affected devices*. Add arms for the newly-reachable formats:
+Mind the types — `description()` does **not** return a `String`:
 
 ```rust
-                    cpal::SampleFormat::I24 => AudioRecorder::build_stream::<cpal::I24>( /* ...same args... */ ),
-                    cpal::SampleFormat::U24 => AudioRecorder::build_stream::<cpal::U24>( /* ...same args... */ ),
-                    cpal::SampleFormat::F64 => AudioRecorder::build_stream::<f64>( /* ...same args... */ ),
+fn description(&self) -> Result<DeviceDescription, Error>
+fn id(&self) -> Result<DeviceId, Error>
 ```
 
-Both generic functions are bounded `T: Sample + SizedSample + Send + 'static, f32: cpal::FromSample<T>`, which these satisfy, so no other change is needed. Confirm the exact type names against cpal 0.18's `SampleFormat` before writing them.
+`DeviceDescription` is a struct carrying name, manufacturer, device type and other metadata. For the plain display string cpal's docs direct you to `device.to_string()` (its `Display` impl). So `device.name().unwrap_or_else(|_| "Unknown".into())` becomes `device.to_string()`, and a `Some(name) == default_name` comparison compares those strings. Confirm the exact accessor against cpal 0.18's `DeviceDescription` before writing it — assuming `.name()` returns a `String` is how this gets miscompiled.
+
+`device.rs`'s `list_input_devices`/`list_output_devices` populate `CpalDeviceInfo.name`, and that value is both displayed *and* persisted (`selected_microphone`, `system_audio_device`, `clamshell_microphone` each store a device name and match on it later). Keep this mechanical — preserve the same string so behaviour is unchanged — and do **not** switch the persisted key to `id()` in this phase: that would silently invalidate every existing user's saved device selection. Note it as a follow-up.
+
+**Sample-format selection was re-ranked** to `F32 > F64 > integers by bit-depth descending > DSD`. cpal 0.18's `SampleFormat` has 15 variants (I8/I16/I24/I32/I64, U8/U16/U24/U32/U64, F32/F64, DsdU8/DsdU16/DsdU32); `build_stream` (`recorder.rs:360-409`) and `build_loopback_stream` (`recorder.rs:856-898`) handle **five** — U8/I8/I16/I32/F32 — and return "Unsupported sample format" for the rest. Under the old ranking that was fine. Under the new one, hardware that used to negotiate I16 can now land on I24, U24, I64, U32 or F64, and capture fails.
+
+Do **not** fix this by enumerating fifteen match arms. Select a format you support instead, which is less code and cannot rot as cpal's ranking changes again. In `get_preferred_config` (and its loopback sibling), keep the device default when it is already a format you handle, and otherwise pick the best supported config that is:
+
+```rust
+    /// Formats `build_stream` can convert from. cpal's default-format ranking
+    /// changed in 0.18 and can now return types this recorder never handled,
+    /// so the device's default is a preference, not a guarantee — fall back to
+    /// the best supported config we can actually decode rather than failing.
+    const SUPPORTED_FORMATS: &[cpal::SampleFormat] = &[
+        cpal::SampleFormat::F32,
+        cpal::SampleFormat::I32,
+        cpal::SampleFormat::I16,
+        cpal::SampleFormat::I8,
+        cpal::SampleFormat::U8,
+    ];
+```
+
+If the default's `sample_format()` is not in that list, search `supported_input_configs()` (or `supported_output_configs()` for loopback) for one that is, preferring the list's order, and use its `with_max_sample_rate()`. If nothing matches, keep today's error. Widening the generic path to more formats is a reasonable alternative — both `build_stream` and `build_loopback_stream_typed` are bounded `T: Sample + SizedSample + Send + 'static, f32: cpal::FromSample<T>`, which every PCM variant satisfies — but selection is the smaller, more durable change.
 - If a change looks like it alters runtime behaviour rather than just types (e.g. a changed default buffer size or a renamed method with different semantics), stop and note it — that is a finding for the human, not something to absorb silently.
 
 - [ ] **Step 5: Verify a clean build and clean lints**
@@ -682,66 +703,63 @@ Expected: PASS (2 tests).
 
 Add `commands::audio::get_system_audio_availability,` to `collect_commands![...]` in `src-tauri/src/lib.rs`, then `bun run tauri dev` briefly and confirm `src/bindings.ts` gained the command and the `SystemAudioAvailability` type.
 
-- [ ] **Step 6: Gate the three UI surfaces on availability, not OS**
+- [ ] **Step 6: Enforce availability in the commands too**
 
-All three currently early-return on `useOsType() !== "windows"`. Replace that check in each with a shared hook so the probe runs once rather than three times. Add `src/hooks/useSystemAudioAvailability.ts`:
+Step 3 makes availability *readable*; it must also be *binding*. The UI can be stale, and a Tauri command can be invoked directly, so neither is a place to rely on. In `change_system_audio_enabled_setting`, alongside the existing mute and streaming-model guards:
 
-```tsx
-import { useCallback, useEffect, useState } from "react";
-import { commands, type SystemAudioAvailability } from "@/bindings";
-
-/// `null` while the probe is in flight. `refresh` must be called after any
-/// capture attempt: on macOS (Phase C) permission state is only ever learned
-/// by attempting, so a stale value would hide a denial.
-export function useSystemAudioAvailability() {
-  const [availability, setAvailability] =
-    useState<SystemAudioAvailability | null>(null);
-
-  const refresh = useCallback(
-    () => commands.getSystemAudioAvailability().then(setAvailability),
-    [],
-  );
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { availability, refresh };
-}
+```rust
+    if enabled && get_system_audio_availability(app.clone()).await != SystemAudioAvailability::Available {
+        return Err(
+            "System audio capture is not available on this system".to_string(),
+        );
+    }
 ```
 
-In each of `SystemAudioCapture.tsx`, `SystemAudioDeviceSelector.tsx` and `ModesSettings.tsx`, replace the `osType` early-return with:
+Apply the same guard to `set_system_audio_device`. Phase B additionally normalises the persisted setting at startup, which this guard does not cover — startup never calls these commands.
+
+- [ ] **Step 7: Gate the three UI surfaces on availability, not OS**
+
+All three currently early-return on `useOsType() !== "windows"`.
+
+Put availability in the **Zustand settings store**, not a per-component hook. Three components need it, and a hook would give each its own `useState` and its own probe — so a refresh triggered by the toggle would not reach the other two, and the modes row could stay visible after a denial. Follow the existing `outputDevices`/`refreshOutputDevices` pair in `src/stores/settingsStore.ts`: add `systemAudioAvailability` state (`SystemAudioAvailability | null`, `null` meaning "probe in flight") and a `refreshSystemAudioAvailability` action backed by `commands.getSystemAudioAvailability()`. Expose both through `src/hooks/useSettings.ts` the same way `outputDevices` is, and probe once at store init where the other device lists are refreshed.
+
+Then in each of `SystemAudioCapture.tsx`, `SystemAudioDeviceSelector.tsx` and `ModesSettings.tsx`, replace the `osType` early-return with:
 
 ```tsx
-  const { availability, refresh: refreshAvailability } =
-    useSystemAudioAvailability();
+  const { systemAudioAvailability, refreshSystemAudioAvailability } =
+    useSettings();
 
-  if (availability === null || availability === "unavailable_no_sound_server") {
+  if (
+    systemAudioAvailability === null ||
+    systemAudioAvailability === "unavailable_no_sound_server"
+  ) {
     return null;
   }
 ```
 
-and remove the now-unused `useOsType` import where nothing else needs it. In `ModesSettings.tsx`, read the surrounding code first — if its `osType` check guards more than system audio, change only the system-audio part.
+Remove the now-unused `useOsType` import where nothing else needs it. In `ModesSettings.tsx`, read the surrounding code first — if its `osType` check guards more than system audio, change only the system-audio part.
 
-In `SystemAudioCapture.tsx`, also make the toggle refresh afterwards, so a macOS denial in Phase C becomes visible:
+Both toggles — the one in `SystemAudioCapture.tsx` **and** the duplicate row in `ModesSettings.tsx` — must refresh afterwards, or a macOS denial in Phase C stays invisible in whichever one the user did not touch:
 
 ```tsx
       onChange={async (enabled) => {
         await updateSetting("system_audio_enabled", enabled);
-        await refreshAvailability();
+        await refreshSystemAudioAvailability();
       }}
 ```
 
-- [ ] **Step 7: Verify the frontend**
+One more trap, which matters once Phase C lands: the settings store updates optimistically, and Phase C's enable path can persist `false` after the OS refuses while still returning `Ok`. The frontend would then show the toggle on while the backend has it off. After the refresh above, re-read the effective value rather than trusting the optimistic one — reload settings from the backend, or have `updateSetting` return the persisted value. Do this here, so both toggles inherit it.
+
+- [ ] **Step 8: Verify the frontend**
 
 ```bash
 bun run build && bun run lint
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src-tauri/src src/bindings.ts src/hooks src/components src/shorthand
+git add src-tauri/src src/bindings.ts src/hooks src/stores src/components src/shorthand
 git commit -m "feat(audio): gate system audio on runtime availability"
 ```
 
@@ -763,9 +781,10 @@ Run on a Windows machine with a working system-audio setup:
 - [ ] **No new warnings**: check the debug log for cpal-related warnings absent before the migration.
 - [ ] **Device selection survived the `name()` → `description()` swap**: confirm previously-saved microphone and system-audio device selections still resolve, rather than silently falling back to the default. A mismatch here means the persisted key changed, which Task 2 explicitly forbids in this phase.
 
-Then, on Linux and macOS — the point is only that nothing is broken or misleading, not that the feature works:
+Then, on Linux and macOS — the point is only that nothing is broken, not that the feature works. These are intermediate states that never reach a user, so do not spend effort making them coherent:
 
-- [ ] **The app builds and runs**, and ordinary dictation works.
-- [ ] **System audio reports unavailable**: the toggle, device selector and modes row do not render, and no error is surfaced. This is the expected inert state until Phases B and C.
+- [ ] **The app builds and runs**, and ordinary dictation works on both.
+- [ ] **Linux reports unavailable**: `get_system_audio_host()` returns `None` there until Phase B, so the toggle, selector and modes row do not render.
+- [ ] **macOS shows the controls but captures nothing**: its host resolves (CoreAudio is the right host already), so availability reports `Available` while `get_effective_system_audio_device` still returns `None`. Enabling the toggle therefore does nothing. That is expected until Phase C and is **not** worth fixing here — no intermediate phase ships.
 
 Any Windows difference is a defect in Tasks 1–6 and must be fixed before Phase B or C begins.

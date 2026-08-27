@@ -269,9 +269,12 @@ their phases land.
   PulseAudio) behind `get_system_audio_availability`.
 - Enforce availability in the enable/set-device commands, not merely in the UI —
   a persisted setting must not start capture on a machine with no sound server.
-- `BUILD.md` prerequisites gain `libpipewire-0.3-dev`/`libpulse-dev` (and distro
-  equivalents); `tauri.conf.json`'s `deb.depends`/`rpm.depends` gain the runtime
-  libraries; the CI Linux job and `flake.nix` need the same.
+- `BUILD.md` prerequisites gain `libpipewire-0.3-dev` (and distro equivalents);
+  `tauri.conf.json`'s `deb.depends`/`rpm.depends` gain the matching runtime
+  library; the CI Linux job and `flake.nix` need the same. **PulseAudio needs
+  no package** — cpal's PulseAudio backend is a pure-Rust implementation of the
+  wire protocol and links no `libpulse`, so adding one would restrict where the
+  package installs for nothing.
 
 ### Phase C — macOS
 
@@ -283,9 +286,17 @@ their phases land.
   `get_system_audio_availability` as `PermissionDenied`, and add an
   "open privacy settings" command. No OS-version check (Decision 2).
 - Frontend: permission-denied CTA reusing the existing settings-link pattern.
-- Guard against the known upstream bug where a Process Tap can silently degrade
-  to all-zero buffers after long uptime, by detecting a prolonged silent stretch
-  while capture is enabled and rebuilding the tap.
+- Establish empirically how cpal reports a denied tap before building the
+  permission classifier on it: an open that *fails* is detectable, an open that
+  succeeds and silently delivers zeros is not, and the two demand different
+  designs.
+- The upstream "tap degrades to all-zero buffers after long uptime" bug is
+  **not** guarded against. A watchdog was designed and cut: it necessarily
+  measures a post-VAD callback that is legitimately idle whenever the app is
+  not recording, so it would fire on healthy systems and restart the stream,
+  defeating on-demand microphone closure and discarding in-progress recordings.
+  The bug is also unreproduced on this codebase. Phase C records the deferral
+  and the constraints any real implementation must meet.
 
 ### Shared surface (owned by Phase A)
 
