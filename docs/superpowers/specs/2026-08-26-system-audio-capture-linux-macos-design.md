@@ -1,258 +1,326 @@
 # System audio capture for Linux and macOS
 
-Status: draft
+Status: draft (revised 2026-08-27 after code review — see Revision history)
 Date: 2026-08-26
 
 ## Problem
 
-System (output) audio loopback capture — recording what's currently playing
-through the machine's speakers, mixed alongside the microphone as a second
-VAD lane — exists today only on Windows. `audio_toolkit/audio/recorder.rs`
-defines `SystemAudioCapture` and gates it and its call sites end-to-end with
-`#[cfg(windows)]`:
+System (output) audio loopback capture — recording what's playing through the
+machine's speakers as a second, independently-VAD'd lane alongside the
+microphone, merged into `RecordedAudio { microphone, system }` and published as
+the `"them"` speaker — exists today only on Windows.
 
-- `audio_toolkit/audio/recorder.rs` — the `SystemAudioCapture` struct and its
-  `open()` support
+The feature is **fork-only**: commit `e22a920` ("feat(audio): transcribe Windows
+system audio as a second speaker-labelled lane") introduced it and no part of it
+exists in `upstream/main`. That matters for `AGENTS.md`'s "keep the diff
+mergeable" rule — restructuring this code costs nothing at merge time, because
+upstream has no competing version of these lines.
+
+Its `#[cfg(windows)]` gating spans:
+
+- `audio_toolkit/audio/recorder.rs` — ~70 gate sites: `SystemAudioCapture`,
+  `build_loopback_stream`, `build_loopback_stream_typed`, `downmix_loopback`,
+  `run_loopback_pump`, `LoopbackChunk`, `LoopbackPumpCmd`, `SystemAudioSession`,
+  `with_system_vad`, `with_system_audio_callback`, and the system-lane branches
+  inside `open()`, `stop()` and `close()`
 - `managers/audio.rs` — the second VAD lane, `pending_system_audio`,
   `system_stream_router`, `get_effective_system_audio_device`,
-  `update_system_audio_capture`
-- `managers/transcription.rs` — `SystemAudioTranscription`, `StreamSource::System`
-- `commands/audio.rs` — `change_system_audio_enabled_setting` and
-  `set_system_audio_device` hard-error with "System audio capture is only
-  available on Windows" under `#[cfg(not(windows))]`
-- `src/components/settings/advanced/SystemAudioCapture.tsx` — hides the
-  toggle entirely unless `useOsType() === "windows"`
+  `update_system_audio_capture`, `set_system_stream_router`
+- `managers/transcription.rs:550,628` — `SystemAudioTranscription` and its
+  enablement check
+- `commands/audio.rs:392-516` — `change_system_audio_enabled_setting` and
+  `set_system_audio_device`, which hard-error off-Windows
+- `src/components/settings/advanced/SystemAudioCapture.tsx:22-24` and
+  `SystemAudioDeviceSelector.tsx`, `ModesSettings.tsx` — UI hidden unless
+  `useOsType() === "windows"`
 
-`list_output_devices()` (`audio_toolkit/audio/device.rs`) is already
-cross-platform and unaffected.
+## What the Windows implementation actually is
 
-The Windows implementation captures by opening a cpal **output** `Device` in
-input mode (WASAPI loopback) — a device-open-time trick, not a different
-architecture. The goal of this work is to bring Linux and macOS up to the
-same capability using that same dual-lane shape, not to invent a
-platform-specific pipeline per OS.
+An earlier draft of this spec described Windows as using "cpal's
+`build_input_stream`-on-an-output-`Device` pattern" and concluded the port was
+mechanical cfg-widening. Reading the implementation showed that is only half
+right, and the correction drives most of this design.
+
+The **capture primitive** is indeed portable: `build_loopback_stream_typed`
+(`recorder.rs:965`) calls `device.build_input_stream(...)` — cpal's ordinary
+input-stream constructor — on an output device. That is exactly the primitive
+cpal now exposes natively for macOS (Core Audio Process Tap) and Linux
+(PipeWire/PulseAudio sink monitors). So there is no "migrate Windows off WASAPI"
+question; Windows is already on the portable API.
+
+What surrounds that call is **generic real-time-audio-safety plumbing**, not
+WASAPI-specific code:
+
+- a pre-allocated buffer pool (`loopback_buffer_tx`/`rx`, 16×4096) so the audio
+  callback never allocates
+- a `SystemAudioSession` generation counter so samples captured before a restart
+  are discarded rather than corrupting the next session
+- a dropped-sample counter for backpressure accounting
+- a dedicated `run_loopback_pump` thread decoupling the real-time callback from
+  the resampling consumer
+- a second `run_consumer` instance for the system lane's independent VAD
+
+Every one of those solves a problem that exists on all three platforms. None
+references a Windows API. They are `#[cfg(windows)]` only because that is the
+platform the feature was first built for.
+
+**Consequence:** the port is not "widen the gates so Linux/macOS reach cpal
+directly." It is "**remove** the gates, so all three platforms share one
+implementation." Since the app targets only Windows, macOS and Linux, most of
+these gates can be deleted rather than converted to a three-way `any(...)`.
 
 ## Research findings
 
-Two independent web-research passes (Aug 2026) established the following.
-Full findings and citations are in the conversation this spec came from; the
-load-bearing conclusions:
+Two web-research passes (Aug 2026) plus direct source verification.
 
-**macOS**: `cpal` itself added native macOS loopback support in v0.17.0
-(released 2025-12-20; current 0.18.2), built on Apple's Core Audio Process
-Tap API (`AudioHardwareCreateProcessTap`/`CATapDescription`, introduced
-macOS 14.2, stable per cpal's own compatibility table from **macOS 14.6**).
-The usage pattern is identical to the existing Windows code: call
-`build_input_stream` on an output `Device`; cpal detects this and builds the
-aggregate-device/process-tap machinery internally. No custom Objective-C/Swift
-shim is needed.
+### macOS: cpal has native Process Tap support, at a steep OS cost
 
-Permission is a dedicated, one-time TCC prompt under `kTCCServiceAudioCapture`
-(distinct from Screen Recording), tied to an `NSAudioCaptureUsageDescription`
-Info.plist string. Unlike the Windows registry-based precheck, **there is no
-public API to precheck or proactively request this permission** — it fires
-implicitly on first capture attempt. Denial requires guiding the user to
-System Settings; the exact pane/row for this specific TCC bucket was not
-confirmed by research (Screen Recording's deep link does not apply here,
-since this is a different permission).
+`cpal` added macOS loopback in v0.17.0, built on Apple's Core Audio Process Tap
+API (`AudioHardwareCreateProcessTap`/`CATapDescription`). Usage is identical to
+the existing Windows call site, so no Objective-C/Swift shim is needed.
 
-The alternative, ScreenCaptureKit's `SCStreamConfiguration.capturesAudio`,
-works down to macOS 13 but rides the Screen Recording TCC grant — a heavier,
-more alarming permission to ask for (a persistent screen-recording indicator)
-for what is, to the user, "just" audio. Given the explicit goal of a simple
-permission ask, and that cpal already gives us the Process Tap path for
-free, ScreenCaptureKit is rejected as the primary path.
+Permission is a dedicated one-time TCC prompt under `kTCCServiceAudioCapture` —
+distinct from, and lighter than, Screen Recording — tied to an
+`NSAudioCaptureUsageDescription` Info.plist string, and marked by a purple
+menu-bar dot rather than the orange screen-recording one. No hardened-runtime
+entitlement is required (the app does not use App Sandbox; verified against
+`Entitlements.plist`, which declares only microphone/audio-input).
 
-A virtual-driver approach (BlackHole-style) is rejected outright: it requires
-a separate installer and manual Multi-Output Device configuration in Audio
-MIDI Setup, which fails the "simple to grant access" requirement outright.
+**There is no public API to precheck this permission.** It is requested
+implicitly on first capture attempt, so status can only be *observed* from an
+attempt's outcome, never queried ahead of time.
 
-Known risk: Apple's Process Tap API has an open, unresolved bug where taps
-can silently degrade to all-zero PCM buffers after extended uptime, requiring
-a teardown/rebuild to recover. cpal has landed several loopback fixes since
-0.17.0 but this particular issue was still open in upstream Apple forums as
-of research time.
+The steep cost, confirmed against cpal's own compatibility table:
 
-**Linux**: cpal gained native `pipewire` and `pulseaudio` Cargo features
-(both off-by-default) in the same 0.18.0 release, landing PRs merged
-2026-02-19 and 2026-03-02. When both are compiled in, cpal prioritizes
-PipeWire > PulseAudio > ALSA — the same backend-priority order the codebase
-already uses for mute control (`wpctl` > `pactl` > `amixer` in
-`managers/audio.rs`'s `set_mute`/`get_mute`). The PipeWire backend opens a
-capture stream against the default sink's monitor via PipeWire's own
-`STREAM_CAPTURE_SINK` mechanism — the direct native equivalent of WASAPI
-loopback. The PulseAudio backend uses a from-scratch pure-Rust protocol
-implementation (not `libpulse-binding`, which is comparatively stale) and
-picks up monitor sources the same way `pactl list sources` does, working
-identically whether the actual server is real PulseAudio or PipeWire's
-`pipewire-pulse` compatibility shim.
+> `CoreAudio | macOS | 1.85 | macOS 14.2 (loopback recording requires 14.6+)`
 
-Plain ALSA enumeration does **not** expose per-sink monitor sources — reaching
-them requires going through the PipeWire or PulseAudio client protocol, which
-is exactly what these new cpal features do. This confirms a new capture path
-is required; it cannot be added by extending the existing ALSA-only ID
-enumeration.
+That **macOS 14.2 floor applies to the entire CoreAudio backend**, not just
+loopback. cpal 0.17+ references `AudioHardwareCreateProcessTap`
+unconditionally, so on older macOS it fails both at link time and at runtime
+with "Symbol not found" ([cpal#1241](https://github.com/RustAudio/cpal/issues/1241)).
+The follow-up PR only *documented* the requirement; there is no weak-linking
+mitigation, and nothing in the changelog since restores older support. The app
+currently declares `minimumSystemVersion: "10.15"`.
 
-No permission prompt applies. PipeWire's portal-based access control
-(`xdg-desktop-portal`) is a Flatpak/Snap sandboxing mechanism; a non-sandboxed
-`.deb`/`.rpm`/AppImage process talking to the PipeWire or PulseAudio socket
-directly gets unrestricted access by default — identical exposure to today's
-microphone capture.
+Rejected alternatives: **ScreenCaptureKit** (`SCStreamConfiguration.capturesAudio`)
+reaches back to macOS 13 but rides the Screen Recording TCC grant — a scarier
+ask with a persistent orange indicator, for what the user experiences as audio
+only. A **virtual audio driver** (BlackHole-style) needs a separate installer
+plus manual Multi-Output Device setup in Audio MIDI Setup, failing the
+"simple to grant access" requirement outright.
 
-Systems running neither PipeWire nor PulseAudio (rare, minimal-WM setups)
-have no supported path; the ALSA `snd-aloop` workaround requires the user to
-have already manually rerouted their entire system audio output, which
-cannot be set up or reliably detected by the app, so this case is treated as
-"feature unavailable," not "attempt anyway."
+### Linux: cpal 0.18 backends, no permission model at all
 
-Risk noted: the cpal PipeWire/PulseAudio backend is young — merged
-Feb/Mar 2026, first released Jun 2026, and still receiving near-weekly fixes
-as of the research date. Treat as promising, not battle-tested.
+cpal gained off-by-default `pipewire` and `pulseaudio` Cargo features in 0.18.0.
+With both compiled in, cpal prioritizes PipeWire > PulseAudio > ALSA — the same
+order the codebase already uses for mute control (`wpctl` > `pactl` > `amixer`
+in `managers/audio.rs`). The PipeWire backend captures a sink's monitor via
+PipeWire's own `STREAM_CAPTURE_SINK`, the direct analogue of WASAPI loopback;
+the PulseAudio backend enumerates monitor sources the way `pactl list sources`
+does and works identically against real PulseAudio or `pipewire-pulse`.
+
+Plain ALSA enumeration does **not** expose per-sink monitors, so a new backend
+genuinely is required — this cannot be done by extending the current ALSA-only
+path.
+
+**No permission prompt exists or applies.** PipeWire's portal-based access
+control is a Flatpak/Snap sandboxing mechanism; a non-sandboxed
+`.deb`/`.rpm`/AppImage process gets unrestricted access, exactly like today's
+microphone capture. The Linux side is therefore pure capture plumbing.
+
+Systems running neither PipeWire nor PulseAudio have no supported path. The ALSA
+`snd-aloop` workaround requires the user to have already rerouted all system
+output through a loopback device, which the app can neither configure nor
+reliably detect — so that case reports "unavailable" rather than attempting
+anything.
+
+Risk: this backend is young (merged Feb/Mar 2026, released Jun 2026, still
+receiving frequent fixes). Pin an exact version rather than a range.
+
+### The cpal bump is a migration, not a version bump
+
+Verified against `Cargo.lock` and the vendored fork:
+
+- The pinned `cjpais/rodio` fork declares `cpal = { version = "0.16.0" }`.
+  `audio_feedback.rs:119` passes a `cpal::Device` into
+  `OutputStreamBuilder::from_device`, so bumping only the app's cpal produces
+  two incompatible `Device` types and fails to compile.
+- That fork is upstream rodio 0.20.1 plus exactly **one commit** — "update cpal
+  to 0.16.0". There is no other fork-specific change to preserve.
+- Upstream rodio 0.22.2 (Mar 2026) is itself only on cpal 0.17.
+- cpal 0.16 → 0.18 additionally carries breaking changes to device naming,
+  stream configuration and error types, which the existing `recorder.rs`,
+  `device.rs` and `audio_feedback.rs` all touch.
+
+### Follow-stream needs no work — verified
+
+`--follow-stream` is already fully cross-platform and requires **zero** changes
+for this feature:
+
+- The transport uses `interprocess`'s `local_socket` abstraction, whose
+  `GenericNamespaced` name type is supported on every platform — named pipes on
+  Windows, the abstract namespace on Linux, and `/tmp/` paths on macOS/BSD.
+  Both `#[cfg(windows)]` and `#[cfg(unix)]` branches are fully implemented
+  (per-user identity via SID vs `geteuid()`; hardening via security descriptor
+  vs socket file mode).
+- The dual-speaker merge and `"me"`/`"them"` labelling in
+  `managers/transcription.rs` carries no platform gates at all and is already
+  unit-tested against `StreamSource::System`.
+
+The only follow-stream-adjacent gates are `SystemAudioTranscription` and its
+enablement check, which this design ungates along with everything else. Once
+capture produces a second lane, follow-stream publishes it automatically.
 
 ## Decisions
 
-1. **Two independent specs/plans, not one.** Per `AGENTS.md`'s "give
-   fork-only features a boundary" / "keep the diff mergeable" guidance, Linux
-   and macOS support are unrelated capabilities that happen to touch the same
-   files. Either could ship without the other. This design covers both, but
-   downstream implementation plans are separate documents so each can be
-   reviewed, merged, and (if needed) reverted independently.
+1. **Remove the platform gates; don't widen them.** The system-audio machinery
+   is fork-only, portable in substance, and needed on all three target
+   platforms. Deleting `#[cfg(windows)]` from it yields one shared
+   implementation rather than a three-way `any(...)` repeated ~70 times.
 
-2. **Extend cpal, don't hand-roll a backend.** Both platforms converge on
-   "bump cpal, widen an existing `#[cfg(windows)]` gate" rather than adding a
-   new audio library or writing native FFI glue. This keeps the capture
-   pipeline (VAD lanes, `StreamRouter`, `RecordedAudio` merging) completely
-   unchanged — only device resolution and availability-detection are new.
+2. **Raise the macOS floor to 14.6.** Accepted deliberately, with eyes open:
+   dropping macOS 10.15–14.5 excludes pre-2018 Macs that cannot run Sonoma,
+   including Intel models `BUILD.md` explicitly supports. In exchange, the
+   implementation is materially simpler — cpal provides the tap, and because
+   14.6 is *at* the loopback requirement, **no runtime OS-version check is
+   needed anywhere**; `SystemAudioAvailability` never reports a version failure
+   on macOS. Users on 14.2–14.5 can reach 14.6 via a free same-major update.
 
-3. **Availability is a runtime question, not just a compile-time `cfg`.**
-   Today's `#[cfg(not(windows))]` hard error becomes a real tri-state per
-   platform: available / unavailable (OS version too old, or no sound server
-   present) / permission-denied (macOS only). A new `get_system_audio_availability`
-   command replaces the implicit "ask and get a hard-coded error string" flow
-   so the frontend can render the right message instead of a generic failure.
+3. **Fork rodio to bump cpal to 0.18.** Mirrors precedent exactly — the existing
+   dependency is already a fork whose sole purpose is a cpal bump. Keeps one
+   cpal version in the graph and no cross-version `Device` boundary. The
+   alternative (two coexisting cpal versions, routing playback through
+   `rodio::cpal`) was rejected: it doubles the compiled backends and encodes a
+   subtle invariant that a future contributor would silently break.
 
-4. **macOS permission handling is necessarily reactive.** Since there is no
-   precheck API for `kTCCServiceAudioCapture`, the flow is: attempt capture →
-   on TCC-denial-shaped failure, surface a "grant access" affordance that
-   opens System Settings (exact pane TBD — resolved empirically during
-   implementation, falling back to the Privacy & Security root pane with
-   instructional text if no precise deep link exists) → same shape as the
-   existing Windows microphone-permission UI in `commands/audio.rs`
-   (`get_windows_microphone_permission_status` / `open_microphone_privacy_settings`),
-   reused as a pattern, not literally shared code (the underlying permission
-   models differ too much: registry read vs. reactive-failure detection).
+4. **The cpal migration is its own prerequisite plan.** It is a breaking
+   dependency migration with no user-visible feature, gating both platform
+   plans. Bundling it into either would mean neither could be verified
+   independently.
 
-5. **Linux needs no permission UX at all.** The Linux plan is pure capture
-   plumbing: enable the cpal features, add build dependencies, wire
-   availability detection (PipeWire/PulseAudio socket presence). No consent
-   flow, no settings deep link, no new frontend permission state beyond
-   "unavailable."
+5. **Availability is a runtime question with a per-platform answer.** A new
+   `get_system_audio_availability` command replaces today's hard-coded
+   `#[cfg(not(windows))]` error string, reporting `Available`,
+   `UnavailableNoSoundServer` (Linux only) or `PermissionDenied` (macOS only).
+   The frontend gates on this rather than on OS name.
 
-6. **Minimum versions are hard floors, not soft warnings.** macOS <14.6 and
-   Linux without PipeWire/PulseAudio get "unavailable," full stop — no
-   degraded fallback capture path (e.g. no ALSA `snd-aloop` attempt).
+6. **macOS permission handling is necessarily reactive.** With no precheck API,
+   the flow is: attempt capture → classify a TCC-denial-shaped failure → surface
+   a "grant access" affordance opening System Settings. Modelled on the existing
+   Windows microphone-permission pattern in `commands/audio.rs`, reused as a
+   *pattern*, not shared code — the underlying mechanisms differ (registry read
+   vs. observed failure).
 
-7. **No cross-repo impact.** This is entirely internal to `shorthand-app`'s
-   capture pipeline. It does not touch the `--follow-stream` protocol or any
-   entry point `shorthand-core` imports, so none of the "not done when
-   tagged" obligations in the root `CLAUDE.md` / `shorthand-core/AGENTS.md`
+7. **Linux needs no permission UX at all** — no consent flow, no deep link, no
+   permission state.
+
+8. **No fallbacks below the floor.** Linux without PipeWire/PulseAudio reports
+   unavailable; no `snd-aloop` attempt. macOS below 14.6 cannot run the app at
+   all, so the case does not arise.
+
+9. **No cross-repo impact.** Entirely internal to `shorthand-app`'s capture
+   pipeline; touches neither the `--follow-stream` protocol nor any entry point
+   `shorthand-core` imports, so the root `CLAUDE.md` tagging obligations do not
    apply.
 
 ## Architecture
 
-No new architectural shape — the existing dual-lane design in `managers/audio.rs`
-(independent `SmoothedVad` per lane, independent `StreamRouter`, merged into
-`RecordedAudio { microphone, system }` on stop) is reused as-is. Per platform:
+Three sequential plans. Plan A is a prerequisite for B and C; B and C are
+independent of each other and may land in either order.
 
-### macOS
+### Plan A — cpal 0.18 migration and de-platforming (prerequisite)
 
-- Bump `cpal` from `0.16.0` to a pinned `≥0.18.2`.
-- Widen every `#[cfg(windows)]` in the files listed under Problem to also
-  cover `target_os = "macos"` where the logic is genuinely
-  platform-independent (device open, VAD lane, stream routing). Anything
-  Windows-registry-specific (permission status read) stays Windows-only and
-  gets a macOS-specific sibling, not a shared code path.
-- Gate the feature itself on a runtime macOS-version check (≥14.6); below
-  that, `get_system_audio_availability` reports unavailable rather than
-  attempting to open the tap.
-- Add `NSAudioCaptureUsageDescription` to the Tauri macOS bundle Info.plist
-  configuration with clear, specific copy explaining why Shorthand wants
-  system audio (shown verbatim in the OS consent dialog — this string *is*
-  the simple-UX lever on macOS, since there's no multi-step flow to design
-  around).
-- New macOS permission-status command: since there's no precheck API, this
-  reports `Unknown` until a capture attempt has actually been made this
-  session, then `Allowed`/`Denied` based on the outcome of that attempt.
-  Persist the last-known state (not the OS's — ours, observed) so the UI
-  doesn't need to force a capture attempt just to render a status.
-- New "open System Audio privacy settings" command (macOS analog of
-  `open_microphone_privacy_settings`), using the best available deep link;
-  if none is confirmed by the time of implementation, open the Privacy &
-  Security root pane and show in-app instructional text naming the row to
-  look for.
-- Health check for the known silent-tap bug: while system audio is enabled
-  and expected to be producing samples, detect an implausibly long silent
-  stretch and transparently close/reopen the tap. Exact thresholds are an
-  implementation-plan detail, not a design decision.
+No user-visible change. Delivers: Windows system audio works exactly as before,
+on cpal 0.18, with the machinery compiling on all three platforms.
 
-### Linux
+- Fork `cjpais/rodio` → bump its `cpal` to 0.18, repoint `Cargo.toml`.
+- Bump the app's `cpal` 0.16 → pinned 0.18.x; fix the breaking API changes
+  across `recorder.rs`, `device.rs`, `audio_feedback.rs`.
+- Raise `minimumSystemVersion` 10.15 → 14.6; update `BUILD.md` and any CI
+  matrix declaring a macOS deployment target.
+- Delete `#[cfg(windows)]` from the portable system-audio machinery in
+  `recorder.rs`, `managers/audio.rs`, `managers/transcription.rs`, so it
+  compiles unconditionally. Device *resolution* remains unimplemented for
+  Linux/macOS at this stage — `get_effective_system_audio_device` returns
+  `None` there, so the feature is inert but the code is live.
+- Windows regression pass is the gate: this plan must not change Windows
+  behaviour at all.
 
-- Enable cpal's `pipewire` and `pulseaudio` Cargo features (Linux-only,
-  via target-specific `[target.'cfg(target_os = "linux")'.dependencies]` in
-  `Cargo.toml` — do not enable on other platforms).
-- Widen the same `#[cfg(windows)]` gates to also cover `target_os = "linux"`.
-- Add a Linux availability check: PipeWire/PulseAudio socket presence at
-  runtime (mirroring how `get_mute`/`set_mute` already probe `wpctl` then
-  `pactl` then fall back). No sound server present → unavailable.
-- `BUILD.md` Linux prerequisites gain `libpipewire-0.3-dev` (or distro
-  equivalent) and `libpulse-dev` to the apt/dnf/pacman lists.
-- Packaging (`.deb`/`.rpm`/AppImage) needs the corresponding runtime shared
-  libraries declared as dependencies or bundled, matching how ALSA is
-  handled today.
-- No permission-status command, no settings deep link — `get_system_audio_availability`
-  only ever returns available/unavailable on Linux, never a permission state.
+### Plan B — Linux
 
-### Shared (both platforms)
+- Enable cpal's `pipewire` + `pulseaudio` features under
+  `[target.'cfg(target_os = "linux")'.dependencies]` only.
+- Implement Linux device resolution in `get_effective_system_audio_device`,
+  and a reachability probe (attempt `host_from_id` for PipeWire, then
+  PulseAudio) behind `get_system_audio_availability`.
+- Enforce availability in the enable/set-device commands, not merely in the UI —
+  a persisted setting must not start capture on a machine with no sound server.
+- `BUILD.md` prerequisites gain `libpipewire-0.3-dev`/`libpulse-dev` (and distro
+  equivalents); `tauri.conf.json`'s `deb.depends`/`rpm.depends` gain the runtime
+  libraries; the CI Linux job and `flake.nix` need the same.
 
-- `commands/audio.rs`: replace the `#[cfg(not(windows))]` hard error strings
-  in `change_system_audio_enabled_setting` and `set_system_audio_device`
-  with real logic. Add `get_system_audio_availability(app) -> SystemAudioAvailability`
-  (a new enum: `Available`, `UnavailableOsVersion`, `UnavailableNoSoundServer`,
-  `PermissionDenied` — the last macOS-only in practice, but modeled generically
-  so the frontend doesn't need per-OS branching to interpret it).
-- Frontend: `SystemAudioCapture.tsx`'s `if (osType !== "windows") return null;`
-  becomes a query against `get_system_audio_availability` instead of an OS
-  name check. macOS's `PermissionDenied` state renders a "grant access" CTA
-  analogous to whatever pattern the existing mic-permission-denied UI uses
-  elsewhere in `CaptureSettings.tsx`/`ModesSettings.tsx` — reuse that pattern,
-  don't invent a new one.
-- i18n: new strings needed for the availability/permission states go wherever
-  the existing `settings.advanced.systemAudio.*` keys already live (upstream
-  vs. fork-only file — confirm at implementation time per `AGENTS.md`'s i18n
-  rules; do not guess).
+### Plan C — macOS
+
+- Implement macOS device resolution in `get_effective_system_audio_device`
+  (output device → cpal loopback input stream, as on Windows).
+- Add `NSAudioCaptureUsageDescription` to `Info.plist`. This string is shown
+  verbatim in the OS consent dialog and *is* the permission UX.
+- Observe permission state from capture attempts; expose it via
+  `get_system_audio_availability` as `PermissionDenied`, and add an
+  "open privacy settings" command. No OS-version check (Decision 2).
+- Frontend: permission-denied CTA reusing the existing settings-link pattern.
+- Guard against the known upstream bug where a Process Tap can silently degrade
+  to all-zero buffers after long uptime, by detecting a prolonged silent stretch
+  while capture is enabled and rebuilding the tap.
+
+### Shared surface (Plans B and C)
+
+- `commands/audio.rs`: real per-platform logic replacing the
+  `#[cfg(not(windows))]` errors, plus `get_system_audio_availability`.
+- Frontend: `SystemAudioCapture.tsx`, `SystemAudioDeviceSelector.tsx` and
+  `ModesSettings.tsx` gate on availability rather than `useOsType()`.
+- i18n: new keys go wherever the existing `settings.advanced.systemAudio.*` keys
+  live — confirm upstream-shared vs. fork-only per `AGENTS.md` before adding.
 
 ## Testing
 
-Device enumeration, VAD lane wiring, and `RecordedAudio` merging are already
-exercised by the existing Windows-only tests/paths and only need the `cfg`
-gates widened — low new-code risk there.
+The portable machinery (buffer pool, session generation, pump, merge) is already
+exercised by existing tests and gains coverage automatically once ungated.
+Availability decision logic is pure and unit-testable. Device resolution and
+permission flows are OS-state-dependent and require manual verification:
 
-Permission and availability flows cannot be meaningfully unit-tested (a TCC
-prompt and a PipeWire-absent environment are both real-OS-state-dependent).
-Manual test matrix required before shipping either plan:
-
-- macOS ≥14.6: grant, deny, deny-then-re-grant-via-Settings
-- macOS <14.6: confirm graceful "unavailable" with no crash/hang
-- Linux with PipeWire (current default on most distros)
-- Linux with PulseAudio only (PipeWire disabled/absent)
-- Linux with neither sound server present
+- Windows regression after Plan A (no behaviour change)
+- Linux with PipeWire; with PulseAudio only; with neither
+- macOS 14.6+: grant, deny, deny-then-re-grant
+- macOS: confirm the purple (not orange) capture indicator
+- Verify the real cpal error surfaced on TCC denial matches what the classifier
+  matches on — the OSStatus value assumed in Plan C is unverified until then
 
 ## Open questions carried into implementation
 
-- Exact System Settings pane/row for `kTCCServiceAudioCapture` on macOS —
-  resolve by testing on a real 14.6+ machine; don't guess a deep link URL
-  into the spec.
-- Silent-tap health-check thresholds (how long is "implausibly silent")
-  are an implementation-plan detail.
-- Whether `settings.advanced.systemAudio.*` i18n keys are upstream-shared or
-  fork-only — confirm before adding new keys.
+- Exact System Settings pane for `kTCCServiceAudioCapture` — resolve empirically
+  on a 14.6+ machine; fall back to the Privacy & Security root with
+  instructional text if no precise deep link exists.
+- The exact error string/OSStatus cpal 0.18 surfaces on TCC denial.
+- Silent-tap detection threshold.
+- Whether `settings.advanced.systemAudio.*` keys are fork-only or upstream.
+
+## Revision history
+
+**2026-08-27** — substantially revised after reviewing the actual implementation
+and an independent Codex review of the first-draft plans. Corrections:
+
+- The first draft claimed Windows used a bare cpal call and that porting was
+  mechanical cfg-widening. In fact the call is portable but is wrapped in
+  RT-safety plumbing that was gated Windows-only for no intrinsic reason; the
+  right move is gate *removal*, not widening. The draft also under-scoped the
+  gate surface (~70 sites in `recorder.rs` alone, including
+  `with_system_vad`/`with_system_audio_callback` whose *definitions* were gated,
+  so the draft plans would not have compiled).
+- The cpal bump was treated as a one-line change. It is a breaking migration
+  that additionally conflicts with the pinned rodio fork's cpal 0.16 and raises
+  the macOS floor from 10.15 to 14.2+ for *all* audio. Now a separate
+  prerequisite plan, with the floor raised to 14.6 and rodio re-forked, both by
+  explicit decision.
+- Follow-stream was listed as an open concern; verified to need no work.
+- Two plans became three.
