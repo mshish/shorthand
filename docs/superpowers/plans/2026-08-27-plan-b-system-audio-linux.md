@@ -63,63 +63,88 @@ git commit -m "build(linux): enable cpal pipewire and pulseaudio backends"
 
 ---
 
-### Task 2: Add the system-audio host resolver and availability probe
+### Task 2: Spike — establish how cpal actually exposes Linux loopback
 
-**Files:**
-- Modify: `src-tauri/src/audio_toolkit/utils.rs`
-- Modify: `src-tauri/src/audio_toolkit/mod.rs` (export the new function)
-- Test: `src-tauri/src/commands/audio.rs` (inline `#[cfg(test)]` module, added in Task 4)
+**Files:** none permanent. This task produces **findings**, not shipped code. Write them into this plan (edit Task 3 below) before continuing.
 
-**Interfaces:**
-- Produces: `pub fn get_system_audio_host() -> Option<cpal::Host>` — the host to use for loopback capture. `Some` on Linux when PipeWire or PulseAudio is reachable, `None` when neither is; on other platforms always `Some(get_cpal_host())`.
+**Why this task exists.** The Windows implementation opens an *output* device as an input stream, and `get_preferred_loopback_config` asks that device for its **output** config. Neither is guaranteed on Linux: an independent review raised that cpal's PipeWire host may expose its synthetic default-output entry as output-only (with loopback living on a separate duplex entry), and that its PulseAudio host may reject input streams on sink devices entirely, requiring the monitor **source** to be selected as an input device instead. If that is right, Task 3's resolution logic is wrong in a way that would only surface at runtime on a machine none of the earlier tasks touch. Half an hour here saves debugging a silent no-audio bug later.
 
-- [ ] **Step 1: Add the resolver**
+Do this on a real Linux machine with PipeWire running.
 
-Append to `src-tauri/src/audio_toolkit/utils.rs`:
+- [ ] **Step 1: Enumerate what each host actually offers**
+
+Write a scratch binary (`src-tauri/examples/loopback_probe.rs`, deleted at the end of this task) that, for each of `HostId::PipeWire` and `HostId::PulseAudio`:
 
 ```rust
-/// Returns the CPAL host to use for system-audio (loopback) capture, or `None`
-/// when this machine cannot support it.
-///
-/// This is deliberately NOT `get_cpal_host()`. That function pins ALSA on
-/// Linux for microphone capture and playback, and ALSA does not expose the
-/// per-sink monitor sources loopback needs — reaching those requires the
-/// PipeWire or PulseAudio client protocol. Constructing the host attempts a
-/// real connection, so `Some` here means a sound server is actually running,
-/// not merely that the feature was compiled in.
-///
-/// PipeWire is tried first, then PulseAudio, matching both cpal's own
-/// Linux host priority and this codebase's existing mute-control order
-/// (`wpctl` > `pactl` > `amixer` in `managers::audio`).
-pub fn get_system_audio_host() -> Option<cpal::Host> {
-    #[cfg(target_os = "linux")]
-    {
+// For each host: print every device's name, whether it appears in
+// input_devices(), output_devices(), or both; and for each, whether
+// default_input_config() and default_output_config() succeed.
+```
+
+Run it with `cargo run --manifest-path src-tauri/Cargo.toml --example loopback_probe`.
+
+- [ ] **Step 2: Record the answers**
+
+For each backend, answer in writing:
+
+1. Which device does "capture what is currently playing" correspond to — the sink itself, a separate `*.monitor` entry, or a synthetic default?
+2. Does that device appear in `output_devices()`, `input_devices()`, or both?
+3. Does `default_output_config()` succeed on it, or only `default_input_config()`?
+4. Does `host.default_output_device()` return something that can actually be opened for input, or is a named device required?
+
+- [ ] **Step 3: Prove capture end-to-end**
+
+Extend the scratch binary to build an input stream on the device your answers point at, play audio from another app, and print the peak sample value per callback. Confirm non-zero values while audio plays and near-zero when it stops — for **both** PipeWire and PulseAudio (stop PipeWire to test the latter).
+
+- [ ] **Step 4: Fold the findings into Task 3**
+
+Edit Task 3's Step 1 and Step 3 below so their code matches what you measured — particularly whether `list_system_audio_devices` should enumerate `output_devices()` or `input_devices()`, and whether the default-device path needs to resolve a named device instead. If the answers differ between PipeWire and PulseAudio, Task 3 must branch on the host, and say so.
+
+If capture cannot be made to work on either backend, **stop and report** rather than proceeding — the rest of this plan rests on it.
+
+- [ ] **Step 5: Delete the scratch binary and commit the findings**
+
+```bash
+rm src-tauri/examples/loopback_probe.rs
+git add docs/superpowers/plans/2026-08-27-plan-b-system-audio-linux.md
+git commit -m "docs(linux): record cpal loopback device findings from spike"
+```
+
+---
+
+### Task 2b: Enable the real Linux host resolution
+
+**Files:**
+- Modify: `src-tauri/src/audio_toolkit/utils.rs` (`get_system_audio_host`, added by Plan A)
+
+**Interfaces:**
+- Produces: `get_system_audio_host()` returns a real host on Linux instead of Plan A's placeholder `None`.
+
+Plan A added this function with its Linux arm stubbed to `None`, because naming the `HostId::PipeWire`/`PulseAudio` variants before Task 1 enabled their Cargo features would not compile. Now that they exist, fill it in.
+
+- [ ] **Step 1: Replace the Linux arm**
+
+In `src-tauri/src/audio_toolkit/utils.rs`, change the `#[cfg(target_os = "linux")]` arm of `get_system_audio_host` from `None` to:
+
+```rust
+        // Constructing the host attempts a real connection, so `Some` here
+        // means a sound server is actually running — not merely that the
+        // feature was compiled in. PipeWire first, then PulseAudio, matching
+        // cpal's own Linux host priority and this codebase's existing
+        // mute-control order (`wpctl` > `pactl` > `amixer`).
         cpal::host_from_id(cpal::HostId::PipeWire)
             .or_else(|_| cpal::host_from_id(cpal::HostId::PulseAudio))
             .ok()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Some(get_cpal_host())
-    }
-}
 ```
 
-- [ ] **Step 2: Export it**
+Delete the now-obsolete sentence in the doc comment about the Linux arm returning `None` until this plan lands.
 
-In `src-tauri/src/audio_toolkit/mod.rs`, add `get_system_audio_host` to the same `pub use` that already exports `get_cpal_host`.
-
-- [ ] **Step 3: Verify it compiles**
+- [ ] **Step 2: Verify and commit**
 
 ```bash
 cargo check --manifest-path src-tauri/Cargo.toml
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src-tauri/src/audio_toolkit/utils.rs src-tauri/src/audio_toolkit/mod.rs
-git commit -m "feat(linux): resolve a separate cpal host for loopback capture"
+git add src-tauri/src/audio_toolkit/utils.rs
+git commit -m "feat(linux): resolve PipeWire or PulseAudio for loopback capture"
 ```
 
 ---
@@ -136,6 +161,8 @@ git commit -m "feat(linux): resolve a separate cpal host for loopback capture"
 - Produces: `pub fn list_system_audio_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>>` — output devices as seen by the loopback host. `get_effective_system_audio_device` resolves against that host on all platforms.
 
 Why a separate list: on Linux the loopback host (PipeWire/PulseAudio) enumerates a **different device set** than `list_output_devices()`'s ALSA host. Sharing the playback selector's list would show names that cannot be matched at capture time.
+
+> **Depends on Task 2's findings.** The code below assumes the loopback device appears in `output_devices()` and that `host.default_output_device()` is openable for input — the shape that holds on Windows. Task 2 exists to verify that on Linux. If it found otherwise (monitor sources appearing as *input* devices, a named device required instead of the synthetic default, or the two backends differing), amend the code below to match what you measured before writing it. Do not implement this task without Task 2's answers in hand.
 
 - [ ] **Step 1: Add the enumeration**
 
@@ -370,9 +397,38 @@ In `change_system_audio_enabled_setting`, delete the `#[cfg(windows)]` / `#[cfg(
     }
 ```
 
-This is the backend enforcement the spec requires: a persisted setting or a direct command invocation cannot start capture on a machine with no sound server.
-
 Apply the same de-gating to `set_system_audio_device` (delete both `#[cfg]` arms, keep the former Windows body).
+
+- [ ] **Step 5b: Enforce at startup too — the command guard is not enough**
+
+The guard above only fires when the user toggles the setting. **Startup does not go through it**: `lib.rs` (around line 171) reads persisted settings directly and constructs the managers, so a settings file carrying `system_audio_enabled = true` from a machine that had a sound server would still attempt capture on one that does not.
+
+At the point in `lib.rs` where persisted settings are read and the system-audio transcription manager is created, gate that construction on availability, and normalise the setting so the UI does not show a toggle that lies:
+
+```rust
+    // A settings file can arrive from a machine that had a sound server, or
+    // this one may have lost it since. Availability is a property of the
+    // running system, not of the saved preference.
+    if settings.system_audio_enabled
+        && commands::audio::get_system_audio_availability(app.handle().clone())
+            != commands::audio::SystemAudioAvailability::Available
+    {
+        log::warn!("System audio was enabled in settings but is unavailable here; disabling");
+        let mut settings = settings.clone();
+        settings.system_audio_enabled = false;
+        write_settings(app.handle(), settings);
+    }
+```
+
+Read the surrounding startup code first and splice this where `settings` is already in scope and before the managers are built. If `get_system_audio_availability` takes an `AppHandle` (it does once Plan C lands; it does not before), match whichever signature is current.
+
+- [ ] **Step 5c: Verify the guard**
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Then confirm manually in Task 7 — with no sound server, a persisted `system_audio_enabled = true` must be corrected at startup rather than attempted.
 
 - [ ] **Step 6: Register the commands**
 
@@ -437,9 +493,14 @@ with:
   const [availability, setAvailability] =
     useState<SystemAudioAvailability | null>(null);
 
+  const refreshAvailability = useCallback(
+    () => commands.getSystemAudioAvailability().then(setAvailability),
+    [],
+  );
+
   useEffect(() => {
-    commands.getSystemAudioAvailability().then(setAvailability);
-  }, []);
+    refreshAvailability();
+  }, [refreshAvailability]);
 
   // Null while the probe is in flight; hide rather than flash a control that
   // may be about to disappear.
@@ -447,6 +508,17 @@ with:
     return null;
   }
 ```
+
+Then make the toggle re-read availability after every enable attempt. On macOS (Plan C) permission state is only *observed* from an attempt, so without this the UI can never learn it was denied:
+
+```tsx
+      onChange={async (enabled) => {
+        await updateSetting("system_audio_enabled", enabled);
+        await refreshAvailability();
+      }}
+```
+
+Import `useCallback` alongside `useEffect`/`useState`.
 
 Add the imports:
 
@@ -541,6 +613,6 @@ No files change. These states cannot be exercised in CI.
 - [ ] **Follow-stream**: run `handy --follow-stream` during a dual-speaker session and confirm both `"speaker":"me"` and `"speaker":"them"` events appear. No code change should have been needed for this.
 - [ ] **PulseAudio only**: `systemctl --user stop pipewire pipewire-pulse wireplumber`, start PulseAudio, confirm the toggle still appears and capture still works via the fallback host.
 - [ ] **Neither server**: stop both, confirm `get_system_audio_availability` returns `unavailable_no_sound_server`, the toggle and selector do not render, and nothing crashes or hangs.
-- [ ] **Backend enforcement**: with no sound server running, set `system_audio_enabled = true` directly in the persisted settings file, restart the app, and confirm it does not attempt capture and surfaces no crash — the Task 4 Step 5 guard should reject it.
+- [ ] **Startup enforcement**: with no sound server running, set `system_audio_enabled = true` directly in the persisted settings file, restart the app, and confirm the Task 4 Step 5b startup guard corrects the setting (check the log for the "disabling" warning), no capture is attempted, and nothing crashes. Note that the Step 5 command guard alone would *not* catch this — startup never calls that command, which is why 5b exists.
 - [ ] **Microphone unaffected**: confirm ordinary dictation still works on all three configurations — `get_cpal_host()` was deliberately left on ALSA and must not have regressed.
 - [ ] **Lints**: `cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && bun run lint`.

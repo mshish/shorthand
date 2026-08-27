@@ -243,10 +243,24 @@ git commit -m "build(macos): raise minimum macOS to 14.6 for cpal 0.18"
 
 The gates being deleted fall into two groups. **Delete** the ones on portable machinery. **Keep** any gate on genuinely platform-specific code (the Windows registry permission reads in `commands/audio.rs`, the `wpctl`/`pactl`/`amixer` mute helpers in `managers/audio.rs`) — those are not part of this task.
 
-- [ ] **Step 1: Inventory the gates**
+- [ ] **Step 1: Inventory the gates — and find every PAIR first**
+
+A lone `#[cfg(windows)]` can simply be deleted. A **pair** — `#[cfg(windows)] X` followed by `#[cfg(not(windows))] Y` — cannot: deleting one half leaves two conflicting definitions or a missing binding, and deleting both loses `Y`'s logic. Every pair must be *merged* by hand, keeping the Windows form.
+
+Find the pairs before touching anything, because they are the only sites that need thought:
 
 ```bash
-grep -n 'cfg(windows)\|cfg(not(windows))' \
+grep -n 'cfg(not(windows))' src-tauri/src/audio_toolkit/audio/recorder.rs \
+  src-tauri/src/managers/audio.rs src-tauri/src/managers/transcription.rs \
+  src-tauri/src/commands/audio.rs src-tauri/src/lib.rs
+```
+
+Each hit is one half of a pair. At the time of writing `recorder.rs` has three in the system-audio path — Step 2 walks all three — but **verify against the current file rather than trusting that count**, and handle any the grep turns up that Step 2 does not name.
+
+Then inventory the rest:
+
+```bash
+grep -n 'cfg(windows)' \
   src-tauri/src/audio_toolkit/audio/recorder.rs \
   src-tauri/src/audio_toolkit/audio/mod.rs \
   src-tauri/src/managers/audio.rs \
@@ -258,9 +272,9 @@ wc -l /tmp/gates.txt
 
 Classify each line as portable-machinery (delete the gate) or platform-specific (leave alone). The portable set is: `SystemAudioCapture`, `LoopbackChunk`, `LoopbackPumpCmd`, `SystemAudioSession`, `build_loopback_stream`, `build_loopback_stream_typed`, `downmix_loopback`, `run_loopback_pump`, `with_system_vad`, `with_system_audio_callback`, the `system_audio` parameter of `open()`, every `system_*` channel/field/branch inside `open()`/`stop()`/`close()`, `PendingSystemAudioCapture`, `system_stream_router`, `pending_system_audio`, `get_effective_system_audio_device`, `update_system_audio_capture`, `set_system_stream_router`, `SystemAudioTranscription`, `StreamSource::System`.
 
-- [ ] **Step 2: Delete the gates in `recorder.rs`**
+- [ ] **Step 2: Delete the gates in `recorder.rs`, merging the three pairs**
 
-Remove `#[cfg(windows)]` / `#[cfg(not(windows))]` from every portable-machinery site. Two sites need more than attribute deletion:
+Remove `#[cfg(windows)]` from every portable-machinery site. **Three** sites are pairs and need merging rather than deletion:
 
 `open()`'s dual return (`recorder.rs:451-454`) currently reads:
 
@@ -290,23 +304,73 @@ and delete the now-duplicated `#[cfg(not(windows))]` arm of the `match init_resu
 
 Keep only the `match system_response` form.
 
+**Pair 3 — `open()`'s init result (`recorder.rs:570-582`).** This is the pair most easily missed, and Task 5 depends on getting it right. It currently reads:
+
+```rust
+        match init_rx.recv() {
+            Ok(Ok(system_audio_active)) => {
+                #[cfg(not(windows))]
+                let _ = system_audio_active;
+                self.device = Some(device);
+                self.cmd_tx = Some(cmd_tx);
+                #[cfg(windows)]
+                {
+                    self.system_cmd_tx = system_audio_active.then_some(system_cmd_tx);
+                    self.loopback_pump_tx = system_audio_active.then_some(loopback_pump_tx);
+                }
+                self.worker_handle = Some(worker);
+                Ok(())
+            }
+```
+
+Merge to the Windows form, dropping the `let _ =` discard:
+
+```rust
+        match init_rx.recv() {
+            Ok(Ok(system_audio_active)) => {
+                self.device = Some(device);
+                self.cmd_tx = Some(cmd_tx);
+                self.system_cmd_tx = system_audio_active.then_some(system_cmd_tx);
+                self.loopback_pump_tx = system_audio_active.then_some(loopback_pump_tx);
+                self.worker_handle = Some(worker);
+                Ok(())
+            }
+```
+
 - [ ] **Step 3: Delete the gates in the remaining files**
 
 Same treatment for `audio_toolkit/audio/mod.rs` (the `SystemAudioCapture` re-export), `managers/audio.rs` (import, `PendingSystemAudioCapture`, `create_audio_recorder`'s parameter and system-VAD block, the struct fields and their initializers, `get_effective_system_audio_device`, the `start_microphone_stream` call site, `update_system_audio_capture`, `set_system_stream_router`), `managers/transcription.rs:550,628`, `commands/audio.rs:5-8`, and the `SystemAudioTranscription` registration in `lib.rs`.
 
 - [ ] **Step 4: Make device resolution return `None` off-Windows for now**
 
-`get_effective_system_audio_device` in `managers/audio.rs` now compiles everywhere, but only Windows has a meaningful implementation. Plans B and C fill in the other two. Until then, make the absence explicit rather than accidental — at the top of the function body:
+`get_effective_system_audio_device` in `managers/audio.rs` now compiles everywhere, but only Windows has a meaningful implementation. Plans B and C fill in the other two. Until then, make the absence explicit rather than accidental.
+
+Note the shape carefully: the early return must come **after** the existing `if !enabled` guard (which already uses `enabled`), and the existing body must be wrapped in `#[cfg(windows)]`. Placing an unconditional `return None` above live code instead would trip `unreachable_code` and fail `clippy -D warnings`.
 
 ```rust
+    fn get_effective_system_audio_device(
+        &self,
+        enabled: bool,
+        device_name: Option<&str>,
+    ) -> Option<SystemAudioCapture> {
+        if !enabled {
+            return None;
+        }
+
         // Linux and macOS device resolution land in Plans B and C. Until then
         // the machinery is compiled but inert on those platforms: no device
         // resolves, so `open()` runs microphone-only exactly as before.
         #[cfg(not(windows))]
         {
-            let _ = (enabled, device_name);
-            return None;
+            let _ = device_name;
+            None
         }
+
+        #[cfg(windows)]
+        {
+            // ...the existing body, unchanged...
+        }
+    }
 ```
 
 - [ ] **Step 5: Keep the off-Windows command errors honest**
@@ -344,7 +408,167 @@ git commit -m "refactor(audio): make system-audio machinery platform-neutral"
 
 ---
 
-### Task 5: Windows regression verification
+### Task 5: Surface whether the loopback stream actually opened
+
+**Files:**
+- Modify: `src-tauri/src/audio_toolkit/audio/recorder.rs` (`open()`, `get_preferred_loopback_config`)
+- Modify: `src-tauri/src/managers/audio.rs` (`start_microphone_stream`, `update_system_audio_capture`)
+- Modify: `src-tauri/src/audio_toolkit/utils.rs` and `src-tauri/src/audio_toolkit/mod.rs`
+
+**Interfaces:**
+- Produces:
+  - `AudioRecorder::open(...) -> Result<bool, Box<dyn std::error::Error>>` — the `bool` is "the system-audio loopback stream opened successfully", already computed internally today and currently thrown away.
+  - `AudioRecordingManager::system_audio_active(&self) -> bool` — the last open's loopback outcome.
+  - `pub fn get_system_audio_host() -> Option<cpal::Host>` — the host loopback capture should use.
+
+**Why this task exists.** `open()` deliberately swallows loopback failures: `recorder.rs:417-436` catches a failed `build_loopback_stream`, logs a warning and continues microphone-only, so `open()` returns `Ok` whether or not system audio actually started. That is correct behaviour — a broken loopback must never break dictation — but it means **no caller can tell whether system audio is working**. Plan C's permission detection depends entirely on that signal, and without this task it would silently observe "success" on every denied attempt. The value already exists (`init_tx.send(Ok(loopback_stream.is_some()))`, `recorder.rs:516`); it is discarded at `recorder.rs:571`. This task plumbs it out.
+
+- [ ] **Step 1: Return the flag from `open()`**
+
+Change the signature:
+
+```rust
+    /// Opens the capture stream(s). The returned flag reports whether the
+    /// system-audio loopback stream opened; `false` means capture is running
+    /// microphone-only, which is a normal degraded state rather than an error
+    /// (a missing device, or a denied OS permission, both land here).
+    pub fn open(
+        &mut self,
+        device: Option<Device>,
+        system_audio: Option<SystemAudioCapture>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+```
+
+In the `Ok(Ok(system_audio_active))` arm merged in Task 4 Step 2, return the flag instead of `()`:
+
+```rust
+                self.worker_handle = Some(worker);
+                Ok(system_audio_active)
+```
+
+Fix the two other `Ok(())` returns in this function: the already-open early return at `recorder.rs:256` should report the current state rather than inventing one — return the flag you now store (see Step 2).
+
+- [ ] **Step 2: Remember the flag on the recorder**
+
+Add a field to `AudioRecorder`, defaulting to `false`, set from the init result in `open()`:
+
+```rust
+    /// Whether the most recent `open()` brought up the loopback stream.
+    system_audio_active: bool,
+```
+
+Have the "already open" early return in `open()` return `Ok(self.system_audio_active)`, and reset it to `false` in `close()`.
+
+- [ ] **Step 3: Make loopback config resolution platform-aware**
+
+`get_preferred_loopback_config` (`recorder.rs:976-984`) currently reads:
+
+```rust
+    #[cfg(windows)]
+    fn get_preferred_loopback_config(
+        device: &cpal::Device,
+    ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
+        // WASAPI render endpoints reject input-config enumeration even though
+        // cpal can open them for shared-mode loopback. Their output default is
+        // therefore the authoritative loopback format.
+        Ok(device.default_output_config()?)
+    }
+```
+
+That comment states a **WASAPI-specific** reason, so the `default_output_config()` call must not be assumed correct elsewhere — on a backend where the loopback device is an ordinary input (a PulseAudio monitor source, for instance), querying an output config can fail outright. Ungate the function and make the fallback explicit:
+
+```rust
+    fn get_preferred_loopback_config(
+        device: &cpal::Device,
+    ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
+        // WASAPI render endpoints reject input-config enumeration even though
+        // cpal can open them for shared-mode loopback, so their output default
+        // is the authoritative loopback format. Other backends may expose the
+        // loopback endpoint as an ordinary input device instead, where the
+        // output query fails — fall back to the input config rather than
+        // assuming either shape.
+        match device.default_output_config() {
+            Ok(config) => Ok(config),
+            Err(output_error) => device.default_input_config().map_err(|input_error| {
+                format!(
+                    "no loopback config: output query failed ({output_error}), \
+                     input query failed ({input_error})"
+                )
+                .into()
+            }),
+        }
+    }
+```
+
+Plan B verifies empirically which branch each Linux backend actually takes.
+
+- [ ] **Step 4: Add the loopback host resolver**
+
+Append to `src-tauri/src/audio_toolkit/utils.rs`:
+
+```rust
+/// Returns the CPAL host to use for system-audio (loopback) capture, or `None`
+/// when this machine cannot support it.
+///
+/// Deliberately NOT `get_cpal_host()`: that pins ALSA on Linux for microphone
+/// capture and playback, and ALSA cannot see the per-sink monitor sources
+/// loopback needs. On Windows and macOS the default host is already correct.
+///
+/// The Linux arm returns `None` until Plan B enables cpal's `pipewire` and
+/// `pulseaudio` features — referencing those `HostId` variants before the
+/// features exist would not compile.
+pub fn get_system_audio_host() -> Option<cpal::Host> {
+    #[cfg(target_os = "linux")]
+    {
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some(get_cpal_host())
+    }
+}
+```
+
+Export it from `src-tauri/src/audio_toolkit/mod.rs` next to `get_cpal_host`.
+
+- [ ] **Step 5: Thread the flag through the manager**
+
+In `managers/audio.rs`, `start_microphone_stream` calls `rec.open(...)` in two places (the initial attempt and the retry after re-resolving a stale device). Capture the returned flag from whichever call succeeds and store it on `AudioRecordingManager`:
+
+```rust
+    /// Whether the current stream has a live system-audio lane. `false` when
+    /// system audio is disabled, its device is missing, or the OS refused it.
+    system_audio_active: Arc<AtomicBool>,
+```
+
+Add the accessor:
+
+```rust
+    pub fn system_audio_active(&self) -> bool {
+        self.system_audio_active.load(Ordering::Acquire)
+    }
+```
+
+- [ ] **Step 6: Verify**
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml \
+  && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings \
+  && cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Expected: all pass. Every `open()` call site must now handle a `bool` return.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src-tauri/src
+git commit -m "feat(audio): report whether the loopback stream opened"
+```
+
+---
+
+### Task 6: Windows regression verification
 
 No files change. This is the gate that proves the plan shipped no behaviour change.
 
@@ -356,6 +580,7 @@ Run on a Windows machine with a working system-audio setup:
 - [ ] **Toggling off still works**: disable system audio, record, confirm microphone-only output and no errors in the log.
 - [ ] **Follow-stream still emits both speakers**: run `handy --follow-stream` against a dual-speaker session and confirm `"speaker":"me"` and `"speaker":"them"` events both appear.
 - [ ] **Audio feedback still plays**: confirm start/stop sounds play (this exercises the rodio/cpal boundary from Task 1) on both the default device and an explicitly selected output device.
+- [ ] **The loopback flag reports honestly** (Task 5): with system audio enabled and working, confirm `system_audio_active()` is true; then select a system-audio device and physically remove/disable it so the loopback stream fails to open, and confirm the flag reports false while dictation still works microphone-only. This signal is what Plan C's permission detection rests on, so a false "true" here would silently break that plan.
 - [ ] **No new warnings**: check the debug log for cpal-related warnings absent before the migration.
 
 Any difference here is a defect in Tasks 1–4 and must be fixed before Plans B or C begin.

@@ -324,3 +324,39 @@ and an independent Codex review of the first-draft plans. Corrections:
   explicit decision.
 - Follow-stream was listed as an open concern; verified to need no work.
 - Two plans became three.
+
+**2026-08-27 (second pass)** — a further Codex review of the rewritten plans
+found six more defects, all confirmed against the code and fixed:
+
+- **Permission detection was reading a signal that is always "success."**
+  `open()` swallows loopback failures by design (`recorder.rs:417-436`) and
+  returns `Ok` while degrading to microphone-only, so a denied TCC prompt was
+  indistinguishable from success. The flag already existed internally
+  (`recorder.rs:516`) and was discarded at `recorder.rs:571`; Plan A now
+  surfaces it as `AudioRecorder::open() -> Result<bool, _>` and
+  `AudioRecordingManager::system_audio_active()`, which Plan C classifies on.
+- **A third `cfg` *pair* was missed** at `recorder.rs:570-582`. Pairs must be
+  merged, not half-deleted; Plan A now enumerates pairs before touching
+  anything.
+- **`get_preferred_loopback_config` was assumed portable.** Its own comment
+  states a WASAPI-specific rationale for querying an *output* config, which
+  need not hold where the loopback endpoint is an ordinary input device. Now
+  falls back to the input config.
+- **Linux device/config resolution was assumed to match Windows' shape.**
+  cpal's PipeWire and PulseAudio hosts may expose monitors as input devices or
+  require a named device rather than the synthetic default. Plan B now opens
+  with a spike that measures this before any code is written.
+- **Availability was enforced only in the command,** but startup reads
+  persisted settings directly and never calls it. Plan B now also normalises
+  the setting at startup.
+- **The UI could observe a denial but never recover from one.** Availability
+  was fetched once at mount and the denied state replaced the toggle, leaving
+  no way to retry after granting. Both plans now refresh after every attempt,
+  and the denied state carries an explicit retry.
+- **The macOS silent-tap watchdog was cut, not fixed.** It timed a post-VAD
+  callback that is legitimately idle whenever the app is not recording, so it
+  would have fired on healthy systems and restarted the stream — defeating
+  on-demand mic closure and discarding in-progress recordings. The bug it
+  guarded against is unconfirmed on this codebase. Plan C Task 6 now records
+  the deferral, why, and the four constraints any real implementation must
+  meet.
