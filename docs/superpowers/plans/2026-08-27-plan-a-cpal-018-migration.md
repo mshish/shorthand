@@ -10,11 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-26-system-audio-capture-linux-macos-design.md`
 
-**This plan is a prerequisite** for Plan B (Linux) and Plan C (macOS). Neither can start until this one is green.
+**Phase 1 of 3, all on one branch.** Plans A, B and C are sequential phases of a single piece of work that ships together — nothing here is released on its own. So this phase may leave Linux and macOS system audio *inert* (compiled but resolving no device); Phases B and C fill that in. Do not add guards, fallbacks or UI states whose only purpose is to make an intermediate phase safe for users — no intermediate phase reaches users. Each **commit** should still build, so the tree stays bisectable.
 
 ## Global Constraints
 
-- **Windows behaviour must not change.** This plan ships no feature. Any observable difference in Windows system-audio capture is a bug in this plan, not an improvement.
+- **Windows behaviour must not change.** This phase ships no feature. Any observable difference in Windows system-audio capture is a bug in this phase, not an improvement.
+- This phase owns everything **shared** between Linux and macOS — the availability enum and command, the de-gated Tauri commands, and the availability-driven frontend. Phases B and C then only add what is specific to their platform. Anything both would otherwise write belongs here instead, so the two cannot drift.
 - Pin cpal to an exact version (`=0.18.x`), not a range — the Linux backends are young and receiving frequent fixes.
 - The system-audio machinery is **fork-only** (commit `e22a920`, absent from `upstream/main`), so restructuring it carries no upstream merge cost. Gates on it should be **deleted**, not converted to `any(windows, target_os = "linux", target_os = "macos")`.
 - Do **not** add a React unit-test harness. Per `docs/FRONTEND_TESTING.md` the repo deliberately has no vitest/jest — only Playwright smoke tests in `tests/app.spec.ts`. Frontend verification in these plans is manual.
@@ -143,7 +144,21 @@ Expected: FAIL, with errors concentrated in `recorder.rs` (stream building, samp
 Work through `/tmp/cpal-migration-errors.txt`. For each error, apply the mechanical change the upgrade guide prescribes. Constraints while doing so:
 
 - Change only what the compiler requires. This is a migration, not a refactor — resist tidying adjacent code.
-- Preserve behaviour exactly, especially the sample-format match arms in `build_stream` and `build_loopback_stream` (`recorder.rs:360-409`, `recorder.rs:856-898`) and the channel-averaging logic in `build_stream`'s callback (`recorder.rs:795-816`).
+- Preserve the channel-averaging logic in `build_stream`'s callback (`recorder.rs:795-816`) exactly.
+
+Two changes are **not** compiler-driven and will not appear in that error list. Both must be handled here or they become runtime bugs:
+
+**`Device::name()` is deprecated in favour of `id()` and `description()`.** The guide's rule: `description()` for anything shown to a user, `id()` for anything persisted or matched against. It only warns rather than errors — but `clippy -D warnings` (Step 5) turns it into a failure, so every call site must move. `device.rs`'s `list_input_devices`/`list_output_devices` populate `CpalDeviceInfo.name`, and that value is both displayed *and* persisted (`selected_microphone`, `system_audio_device`, `clamshell_microphone` all store a device name and match on it later). Keep this migration mechanical for now — swap `name()` for `description()` so behaviour is unchanged — and do **not** switch the persisted key to `id()` in this phase: that would silently invalidate every existing user's saved device selection. Note it as a follow-up instead.
+
+**Sample-format selection was re-ranked to `F32 > F64 > integers by bit-depth descending > DSD`.** I32 and I24 now outrank I16, so hardware that previously negotiated I16 may now return I24, U24 or F64. The existing match arms in `build_stream` (`recorder.rs:360-409`) and `build_loopback_stream` (`recorder.rs:856-898`) handle only U8/I8/I16/I32/F32 and return "Unsupported sample format" otherwise — which after this bump means *capture silently fails on affected devices*. Add arms for the newly-reachable formats:
+
+```rust
+                    cpal::SampleFormat::I24 => AudioRecorder::build_stream::<cpal::I24>( /* ...same args... */ ),
+                    cpal::SampleFormat::U24 => AudioRecorder::build_stream::<cpal::U24>( /* ...same args... */ ),
+                    cpal::SampleFormat::F64 => AudioRecorder::build_stream::<f64>( /* ...same args... */ ),
+```
+
+Both generic functions are bounded `T: Sample + SizedSample + Send + 'static, f32: cpal::FromSample<T>`, which these satisfy, so no other change is needed. Confirm the exact type names against cpal 0.18's `SampleFormat` before writing them.
 - If a change looks like it alters runtime behaviour rather than just types (e.g. a changed default buffer size or a renamed method with different semantics), stop and note it — that is a finding for the human, not something to absorb silently.
 
 - [ ] **Step 5: Verify a clean build and clean lints**
@@ -373,14 +388,11 @@ Note the shape carefully: the early return must come **after** the existing `if 
     }
 ```
 
-- [ ] **Step 5: Keep the off-Windows command errors honest**
+- [ ] **Step 5: De-gate the Tauri commands entirely**
 
-`change_system_audio_enabled_setting` and `set_system_audio_device` in `commands/audio.rs` still have `#[cfg(not(windows))]` arms returning "only available on Windows". Leave the arms in place for this plan (Plans B and C replace them), but correct the wording, since the gate is now about device resolution rather than the platform:
+`change_system_audio_enabled_setting` and `set_system_audio_device` in `commands/audio.rs` each split into a `#[cfg(windows)]` body and a `#[cfg(not(windows))]` arm returning "only available on Windows". Delete both `#[cfg]` arms in each, keeping the former Windows body as the only body — every type it touches is now available everywhere.
 
-```rust
-    #[cfg(not(windows))]
-    Err("System audio capture is not yet available on this platform".to_string())
-```
+The commands are safe to run on Linux/macOS at this point because device resolution returns `None` there (Step 4), so they configure a lane that never opens. Task 6 adds the availability gate that makes that state legible.
 
 - [ ] **Step 6: Verify all three targets compile**
 
@@ -514,7 +526,7 @@ Append to `src-tauri/src/audio_toolkit/utils.rs`:
 /// capture and playback, and ALSA cannot see the per-sink monitor sources
 /// loopback needs. On Windows and macOS the default host is already correct.
 ///
-/// The Linux arm returns `None` until Plan B enables cpal's `pipewire` and
+/// The Linux arm returns `None` until Phase B enables cpal's `pipewire` and
 /// `pulseaudio` features — referencing those `HostId` variants before the
 /// features exist would not compile.
 pub fn get_system_audio_host() -> Option<cpal::Host> {
@@ -528,6 +540,8 @@ pub fn get_system_audio_host() -> Option<cpal::Host> {
     }
 }
 ```
+
+macOS gets a real host immediately — its default host is CoreAudio, which is the one with Process Tap loopback — so Phase C has no host work to do. Only Linux needs the deferred arm, and only because of the feature gate.
 
 Export it from `src-tauri/src/audio_toolkit/mod.rs` next to `get_cpal_host`.
 
@@ -568,9 +582,174 @@ git commit -m "feat(audio): report whether the loopback stream opened"
 
 ---
 
-### Task 6: Windows regression verification
+### Task 6: Shared availability plumbing
 
-No files change. This is the gate that proves the plan shipped no behaviour change.
+**Files:**
+- Modify: `src-tauri/src/commands/audio.rs`
+- Modify: `src-tauri/src/lib.rs` (`collect_commands![...]`, near line 770)
+- Modify: `src/components/settings/advanced/SystemAudioCapture.tsx:22-24`
+- Modify: `src/components/settings/advanced/SystemAudioDeviceSelector.tsx:26-30`
+- Modify: `src/shorthand/settings/ModesSettings.tsx` (~line 415)
+- Test: `src-tauri/src/commands/audio.rs` (inline `#[cfg(test)]` module)
+
+**Interfaces:**
+- Produces:
+  - `SystemAudioAvailability` — `Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type`, `#[serde(rename_all = "snake_case")]`, variants `Available`, `UnavailableNoSoundServer`, `PermissionDenied`.
+  - `pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability`
+
+This lives here, not in B or C, because both platforms need it and duplicating it across two phases is how the two drift. Phases B and C then only supply their own answer to "is it available", not the mechanism.
+
+At the end of this task the feature reports **unavailable on Linux and macOS** — correct, since neither resolves a device yet — and unchanged on Windows.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+#[cfg(test)]
+mod system_audio_availability_tests {
+    use super::*;
+
+    #[test]
+    fn available_when_a_loopback_host_is_reachable() {
+        assert_eq!(
+            availability_from_host_probe(true),
+            SystemAudioAvailability::Available
+        );
+    }
+
+    #[test]
+    fn unavailable_when_no_loopback_host_is_reachable() {
+        assert_eq!(
+            availability_from_host_probe(false),
+            SystemAudioAvailability::UnavailableNoSoundServer
+        );
+    }
+}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml system_audio_availability_tests
+```
+
+- [ ] **Step 3: Implement**
+
+Near the existing `PermissionAccess` enum in `src-tauri/src/commands/audio.rs`:
+
+```rust
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAudioAvailability {
+    Available,
+    UnavailableNoSoundServer,
+    PermissionDenied,
+}
+
+/// Pure decision logic, split from the real host probe so it is unit-testable
+/// without a running sound server.
+fn availability_from_host_probe(loopback_host_reachable: bool) -> SystemAudioAvailability {
+    if loopback_host_reachable {
+        SystemAudioAvailability::Available
+    } else {
+        SystemAudioAvailability::UnavailableNoSoundServer
+    }
+}
+
+/// Async deliberately: constructing a PulseAudio host can block for seconds
+/// while it waits on the server socket, and Tauri runs non-async commands on
+/// the main thread — a synchronous version would stall the UI.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability {
+    let _ = &app; // Phase C reads macOS permission state from here.
+    tokio::task::spawn_blocking(|| {
+        availability_from_host_probe(crate::audio_toolkit::get_system_audio_host().is_some())
+    })
+    .await
+    .unwrap_or(SystemAudioAvailability::UnavailableNoSoundServer)
+}
+```
+
+- [ ] **Step 4: Run the test and watch it pass**
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml system_audio_availability_tests
+```
+
+Expected: PASS (2 tests).
+
+- [ ] **Step 5: Register and regenerate bindings**
+
+Add `commands::audio::get_system_audio_availability,` to `collect_commands![...]` in `src-tauri/src/lib.rs`, then `bun run tauri dev` briefly and confirm `src/bindings.ts` gained the command and the `SystemAudioAvailability` type.
+
+- [ ] **Step 6: Gate the three UI surfaces on availability, not OS**
+
+All three currently early-return on `useOsType() !== "windows"`. Replace that check in each with a shared hook so the probe runs once rather than three times. Add `src/hooks/useSystemAudioAvailability.ts`:
+
+```tsx
+import { useCallback, useEffect, useState } from "react";
+import { commands, type SystemAudioAvailability } from "@/bindings";
+
+/// `null` while the probe is in flight. `refresh` must be called after any
+/// capture attempt: on macOS (Phase C) permission state is only ever learned
+/// by attempting, so a stale value would hide a denial.
+export function useSystemAudioAvailability() {
+  const [availability, setAvailability] =
+    useState<SystemAudioAvailability | null>(null);
+
+  const refresh = useCallback(
+    () => commands.getSystemAudioAvailability().then(setAvailability),
+    [],
+  );
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { availability, refresh };
+}
+```
+
+In each of `SystemAudioCapture.tsx`, `SystemAudioDeviceSelector.tsx` and `ModesSettings.tsx`, replace the `osType` early-return with:
+
+```tsx
+  const { availability, refresh: refreshAvailability } =
+    useSystemAudioAvailability();
+
+  if (availability === null || availability === "unavailable_no_sound_server") {
+    return null;
+  }
+```
+
+and remove the now-unused `useOsType` import where nothing else needs it. In `ModesSettings.tsx`, read the surrounding code first — if its `osType` check guards more than system audio, change only the system-audio part.
+
+In `SystemAudioCapture.tsx`, also make the toggle refresh afterwards, so a macOS denial in Phase C becomes visible:
+
+```tsx
+      onChange={async (enabled) => {
+        await updateSetting("system_audio_enabled", enabled);
+        await refreshAvailability();
+      }}
+```
+
+- [ ] **Step 7: Verify the frontend**
+
+```bash
+bun run build && bun run lint
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src-tauri/src src/bindings.ts src/hooks src/components src/shorthand
+git commit -m "feat(audio): gate system audio on runtime availability"
+```
+
+---
+
+### Task 7: Windows regression verification
+
+No files change. This is the gate that proves the phase shipped no behaviour change.
 
 Run on a Windows machine with a working system-audio setup:
 
@@ -582,5 +761,11 @@ Run on a Windows machine with a working system-audio setup:
 - [ ] **Audio feedback still plays**: confirm start/stop sounds play (this exercises the rodio/cpal boundary from Task 1) on both the default device and an explicitly selected output device.
 - [ ] **The loopback flag reports honestly** (Task 5): with system audio enabled and working, confirm `system_audio_active()` is true; then select a system-audio device and physically remove/disable it so the loopback stream fails to open, and confirm the flag reports false while dictation still works microphone-only. This signal is what Plan C's permission detection rests on, so a false "true" here would silently break that plan.
 - [ ] **No new warnings**: check the debug log for cpal-related warnings absent before the migration.
+- [ ] **Device selection survived the `name()` → `description()` swap**: confirm previously-saved microphone and system-audio device selections still resolve, rather than silently falling back to the default. A mismatch here means the persisted key changed, which Task 2 explicitly forbids in this phase.
 
-Any difference here is a defect in Tasks 1–4 and must be fixed before Plans B or C begin.
+Then, on Linux and macOS — the point is only that nothing is broken or misleading, not that the feature works:
+
+- [ ] **The app builds and runs**, and ordinary dictation works.
+- [ ] **System audio reports unavailable**: the toggle, device selector and modes row do not render, and no error is surfaced. This is the expected inert state until Phases B and C.
+
+Any Windows difference is a defect in Tasks 1–6 and must be fixed before Phase B or C begins.

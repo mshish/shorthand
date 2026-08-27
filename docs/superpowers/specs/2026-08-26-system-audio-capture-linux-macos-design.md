@@ -193,10 +193,19 @@ capture produces a second lane, follow-stream publishes it automatically.
    `rodio::cpal`) was rejected: it doubles the compiled backends and encodes a
    subtle invariant that a future contributor would silently break.
 
-4. **The cpal migration is its own prerequisite plan.** It is a breaking
-   dependency migration with no user-visible feature, gating both platform
-   plans. Bundling it into either would mean neither could be verified
-   independently.
+4. **Three phases, one branch, shipped together.** The work splits into a
+   dependency migration and two platform enablements, kept as separate
+   *documents* so each can be reviewed and executed in sequence — but they are
+   not separately shippable, and no intermediate state reaches users. That
+   removes a class of otherwise-necessary work: a phase need not leave the
+   feature safe or coherent for a platform a later phase completes. Commits
+   should still build, to keep the tree bisectable.
+
+   Phase A additionally owns everything **shared** between the two platforms —
+   the availability enum and command, the de-gated Tauri commands, the
+   availability-driven UI — so Phases B and C cannot drift from each other.
+   An earlier draft duplicated that plumbing across both platform plans and it
+   diverged immediately.
 
 5. **Availability is a runtime question with a per-platform answer.** A new
    `get_system_audio_availability` command replaces today's hard-coded
@@ -225,13 +234,18 @@ capture produces a second lane, follow-stream publishes it automatically.
 
 ## Architecture
 
-Three sequential plans. Plan A is a prerequisite for B and C; B and C are
-independent of each other and may land in either order.
+Three sequential **phases of one branch**, landing together. Nothing here
+ships on its own, so no phase needs guards or UI states whose only purpose is
+to make an intermediate state safe for users. Each commit should still build,
+so the tree stays bisectable. Phase A owns everything shared between the two
+platforms, so B and C cannot drift.
 
-### Plan A — cpal 0.18 migration and de-platforming (prerequisite)
+### Phase A — cpal 0.18 migration, de-platforming, shared plumbing
 
 No user-visible change. Delivers: Windows system audio works exactly as before,
-on cpal 0.18, with the machinery compiling on all three platforms.
+on cpal 0.18; the machinery compiles on all three platforms; and the shared
+availability plumbing exists, reporting unavailable on Linux and macOS until
+their phases land.
 
 - Fork `cjpais/rodio` → bump its `cpal` to 0.18, repoint `Cargo.toml`.
 - Bump the app's `cpal` 0.16 → pinned 0.18.x; fix the breaking API changes
@@ -246,7 +260,7 @@ on cpal 0.18, with the machinery compiling on all three platforms.
 - Windows regression pass is the gate: this plan must not change Windows
   behaviour at all.
 
-### Plan B — Linux
+### Phase B — Linux
 
 - Enable cpal's `pipewire` + `pulseaudio` features under
   `[target.'cfg(target_os = "linux")'.dependencies]` only.
@@ -259,7 +273,7 @@ on cpal 0.18, with the machinery compiling on all three platforms.
   equivalents); `tauri.conf.json`'s `deb.depends`/`rpm.depends` gain the runtime
   libraries; the CI Linux job and `flake.nix` need the same.
 
-### Plan C — macOS
+### Phase C — macOS
 
 - Implement macOS device resolution in `get_effective_system_audio_device`
   (output device → cpal loopback input stream, as on Windows).
@@ -273,7 +287,7 @@ on cpal 0.18, with the machinery compiling on all three platforms.
   to all-zero buffers after long uptime, by detecting a prolonged silent stretch
   while capture is enabled and rebuilding the tap.
 
-### Shared surface (Plans B and C)
+### Shared surface (owned by Phase A)
 
 - `commands/audio.rs`: real per-platform logic replacing the
   `#[cfg(not(windows))]` errors, plus `get_system_audio_availability`.
@@ -360,3 +374,39 @@ found six more defects, all confirmed against the code and fixed:
   guarded against is unconfirmed on this codebase. Plan C Task 6 now records
   the deferral, why, and the four constraints any real implementation must
   meet.
+
+
+**2026-08-27 (third pass)** — a further review, plus the decision that all three
+phases ship on one branch. Changes:
+
+- **Intermediate-state work was cut.** Two findings (Phase B alone exposing an
+  unfinished macOS build; Phase C not independently landable) only mattered if
+  phases shipped separately. They do not, so the idempotency scaffolding and
+  cross-phase guards those would have required are gone.
+- **Shared plumbing moved into Phase A** — availability enum and command,
+  command de-gating, and UI gating — because duplicating it across B and C had
+  already produced drift between them.
+- **The macOS permission probe was fundamentally broken.**
+  `update_system_audio_capture` returns `Ok` without opening anything when no
+  stream is open (`managers/audio.rs:947`), which in the default on-demand mode
+  is most of the time. Enabling the toggle therefore never attempted the tap,
+  never triggered the consent prompt, and left permission unknowable. Phase C
+  now adds a deliberate `probe_system_audio()` that opens, observes and
+  restores — so the prompt fires at the moment of intent.
+- **A denied enable is no longer persisted**, since the observation is
+  process-local and would otherwise resurface after restart as a checked toggle
+  that captures nothing.
+- **`Device::name()` is deprecated** in cpal 0.18 in favour of `description()`
+  and `id()`; under `clippy -D warnings` that is a build failure. Phase A
+  migrates display to `description()` and explicitly defers changing the
+  persisted key to `id()`, which would invalidate every saved device selection.
+- **Sample-format ranking changed** to `F32 > F64 > integers by bit-depth
+  descending`, so I24/U24/F64 can now be selected where I16 was before. The
+  recorder's match arms rejected those, which would have meant silent capture
+  failure on affected hardware; Phase A adds them.
+- **`libpulse-dev` was dropped** — cpal's PulseAudio backend is a pure-Rust
+  protocol implementation and links no native library, so the dependency would
+  have restricted package installation for nothing.
+- Frontend: availability is now refreshed after every capture attempt via a
+  shared `useSystemAudioAvailability` hook, and `useSettings` gains the
+  system-audio device list it must expose for the selector to build.

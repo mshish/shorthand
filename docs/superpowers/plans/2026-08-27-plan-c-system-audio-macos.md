@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Capture system (output) audio on macOS as a second speaker-labelled lane alongside the microphone, with a permission flow a user can complete without instructions — one system prompt, and if declined, one button that takes them to the right place.
+**Goal:** Capture system (output) audio on macOS as a second speaker-labelled lane alongside the microphone, with a permission flow a user can complete without instructions — one system prompt at the moment they ask for the feature, and if declined, one button that takes them to the right place and one that retries.
 
-**Architecture:** Plan A already made the capture machinery platform-neutral and put cpal 0.18 in place, whose CoreAudio backend implements loopback via Apple's Core Audio Process Tap. Because Plan A also set the app's minimum to macOS 14.6 — at or above every version requirement involved — **no runtime OS-version check is needed anywhere in this plan.** What remains is macOS-specific: the Info.plist consent string, observing permission state (there is no API to query it), and the UI for a declined prompt.
+**Architecture:** Phases A and B did nearly all the platform-neutral work: the machinery compiles everywhere, `get_system_audio_host()` already returns CoreAudio (the host with Process Tap loopback) on macOS, `get_effective_system_audio_device` already resolves through it, and the availability plumbing and UI gating exist. What is left is entirely macOS-specific — the Info.plist consent string, and the permission flow. Because Phase A set the app minimum to macOS 14.6, at or above every version requirement involved, **no runtime OS-version check is needed anywhere.**
 
 **Tech Stack:** Rust, `cpal` 0.18.x (CoreAudio Process Tap), Tauri 2.x, React/TypeScript.
 
 **Spec:** `docs/superpowers/specs/2026-08-26-system-audio-capture-linux-macos-design.md`
 
-**Prerequisite:** Plan A (`2026-08-27-plan-a-cpal-018-migration.md`) must be complete and green. Independent of Plan B (Linux) — either may land first, so Tasks 1 and 3 begin by checking what already exists.
+**Phase 3 of 3, all on one branch.** Phases A and B must be complete and green first — B's Task 4 rewrite of `get_effective_system_audio_device` removes Phase A's placeholder for *all* platforms, so macOS device resolution already works when this phase starts. All three phases ship together.
 
 ## Global Constraints
 
-- **No OS-version gating.** The app minimum is macOS 14.6 (set in Plan A), which is at the loopback requirement. Any version check would be dead code.
-- **No entitlement change.** Process Tap capture is gated by the `NSAudioCaptureUsageDescription` Info.plist key alone. This app does not use App Sandbox — `Entitlements.plist` declares only microphone/audio-input — and hardened runtime plus that key is sufficient. Do not add sandbox entitlements.
+- **No OS-version gating.** The app minimum is macOS 14.6 (set in Phase A), which is at the loopback requirement. Any version check would be dead code.
+- **No entitlement change.** Process Tap capture is gated by the `NSAudioCaptureUsageDescription` Info.plist key alone. This app does not use App Sandbox — `Entitlements.plist` declares only microphone/audio-input — and hardened runtime plus that key is sufficient.
 - **Permission state can only be observed, never queried.** There is no precheck API for `kTCCServiceAudioCapture`. Any code that appears to ask the OS for current status is wrong.
 - **No React unit tests.** Per `docs/FRONTEND_TESTING.md` this repo deliberately has no vitest/jest harness. Frontend verification is manual.
 - Ship as a `.app` bundle (Tauri's default). A bare executable requesting this permission class cannot be managed from System Settings on current macOS.
@@ -23,61 +23,14 @@
 
 ---
 
-### Task 1: macOS device resolution
-
-**Files:**
-- Modify: `src-tauri/src/managers/audio.rs` (`get_effective_system_audio_device`)
-
-**Interfaces:**
-- Produces: `get_effective_system_audio_device` resolves a real output device on macOS, so `open()` builds a loopback stream instead of running microphone-only.
-
-Plan A already added `get_system_audio_host()`, whose non-Linux arm returns the default host — which on macOS is CoreAudio, the one with Process Tap loopback. So macOS needs no new host logic: only Plan A's deliberate placeholder has to come out.
-
-**Do not add a Linux arm here.** Plan A's Linux arm returns `None` on purpose, and Plan B replaces it. Naming `HostId::PipeWire`/`PulseAudio` from this plan would fail to compile on Linux, because only Plan B enables the Cargo features those variants live behind — which would break an A+C branch in CI.
-
-- [ ] **Step 1: Check whether Plan B already did this**
-
-```bash
-grep -n "get_system_audio_host\|cfg(not(windows))" src-tauri/src/managers/audio.rs
-```
-
-If `get_effective_system_audio_device` already calls `get_system_audio_host()` and Plan A's `#[cfg(not(windows))]` stub is gone, Plan B landed first and did this work — **skip to Task 2.** Otherwise continue.
-
-- [ ] **Step 2: Remove Plan A's stub and resolve through the loopback host**
-
-In `get_effective_system_audio_device`, delete the `#[cfg(not(windows))] { let _ = device_name; None }` block Plan A added (and unwrap the `#[cfg(windows)]` block around the real body, so it applies to every platform). Change the default-device branch from `crate::audio_toolkit::get_cpal_host().default_output_device()` to:
-
-```rust
-            crate::audio_toolkit::get_system_audio_host()
-                .and_then(|host| host.default_output_device())
-```
-
-- [ ] **Step 3: Verify**
-
-```bash
-cargo check --manifest-path src-tauri/Cargo.toml \
-  && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src-tauri/src/audio_toolkit src-tauri/src/managers/audio.rs
-git commit -m "feat(macos): resolve system audio devices via the loopback host"
-```
-
----
-
-### Task 2: The consent string
+### Task 1: The consent string
 
 **Files:**
 - Modify: `src-tauri/Info.plist`
 
-**Interfaces:** none — but this string is shown verbatim in the OS consent dialog and is the single most user-visible artifact of this plan. It is the permission UX.
+**Interfaces:** none — but this string is shown verbatim in the OS consent dialog and is the single most user-visible artifact of this phase. It *is* the permission UX.
 
 - [ ] **Step 1: Add the key**
-
-Change `src-tauri/Info.plist` to:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -103,7 +56,7 @@ bun run tauri build --bundles app
 plutil -p src-tauri/target/release/bundle/macos/*.app/Contents/Info.plist | grep -A1 AudioCapture
 ```
 
-Expected: the key and string appear verbatim. If the `.app` path differs, locate it with `find src-tauri/target/release/bundle -name "Info.plist"`. If the build fails at the signing step, that is the pre-existing `signCommand`/Trusted Signing issue documented in `BUILD.md` — it does not affect whether the plist was written, so check for the `.app` anyway.
+Expected: the key and string appear verbatim. If the build fails at the signing step, that is the pre-existing `signCommand`/Trusted Signing issue documented in `BUILD.md` — it does not affect whether the plist was written, so check for the `.app` anyway.
 
 - [ ] **Step 3: Commit**
 
@@ -114,38 +67,135 @@ git commit -m "feat(macos): add NSAudioCaptureUsageDescription consent string"
 
 ---
 
-### Task 3: Observe permission state and expose availability
+### Task 2: Probe the tap deliberately when the user enables it
+
+**Files:**
+- Modify: `src-tauri/src/managers/audio.rs`
+
+**Interfaces:**
+- Produces: `pub fn probe_system_audio(&self) -> bool` on `AudioRecordingManager` — opens the capture stream if needed so the loopback attempt (and therefore the OS consent prompt) actually happens, reports whether the lane came up, and restores the prior stream state.
+
+**Why this exists — the obvious approach silently does nothing.** `update_system_audio_capture` only restarts the stream when one was already open:
+
+```rust
+        let restart_result = if was_open {
+            self.start_microphone_stream()
+        } else {
+            Ok(())          // <-- managers/audio.rs:947
+        };
+```
+
+On-demand microphone mode is the **default**, so when a user flips the system-audio toggle while idle, nothing opens, no tap is attempted, no consent prompt appears, and `system_audio_active()` is false. A permission check reading that would report "denied" for a prompt the user was never shown, and a retry button would reproduce it forever.
+
+So enabling must deliberately provoke the attempt. This also gives the better UX: the prompt appears at the moment of intent, not silently at some later recording.
+
+- [ ] **Step 1: Write the failing test**
+
+The probe itself touches real devices, so test the decision it encodes — that a probe is only needed when no stream is already open:
+
+```rust
+#[cfg(test)]
+mod system_audio_probe_tests {
+    use super::*;
+
+    #[test]
+    fn probing_is_needed_when_no_stream_is_open() {
+        assert!(needs_probe_open(false));
+    }
+
+    #[test]
+    fn probing_reuses_an_already_open_stream() {
+        // Opening again would tear down and rebuild a live capture for nothing.
+        assert!(!needs_probe_open(true));
+    }
+}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml system_audio_probe_tests
+```
+
+- [ ] **Step 3: Implement**
+
+```rust
+/// Whether `probe_system_audio` must open a stream itself, given whether one
+/// is already open.
+fn needs_probe_open(stream_already_open: bool) -> bool {
+    !stream_already_open
+}
+
+impl AudioRecordingManager {
+    /// Forces a loopback open attempt so the OS consent prompt fires now,
+    /// and reports whether the system-audio lane actually came up.
+    ///
+    /// Necessary because `update_system_audio_capture` is a no-op when no
+    /// stream is open, which in on-demand mode (the default) is most of the
+    /// time. Restores the prior open/closed state before returning, so a probe
+    /// never leaves the microphone running behind the user's back.
+    pub fn probe_system_audio(&self) -> bool {
+        let was_open = *self.is_open.lock().unwrap();
+
+        if needs_probe_open(was_open) {
+            // Cancel any pending lazy close so it cannot race our teardown.
+            self.close_generation.fetch_add(1, Ordering::SeqCst);
+            if let Err(error) = self.start_microphone_stream() {
+                warn!("System audio probe could not open the capture stream: {error}");
+                return false;
+            }
+        }
+
+        let active = self.system_audio_active();
+
+        if needs_probe_open(was_open) {
+            self.stop_microphone_stream();
+        }
+
+        active
+    }
+}
+```
+
+Note the lock discipline: read `is_open` into a local and let the guard drop before calling `start_microphone_stream`/`stop_microphone_stream`, both of which take that same lock. Holding it across either call deadlocks.
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml system_audio_probe_tests
+```
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+git add src-tauri/src/managers/audio.rs
+git commit -m "feat(macos): probe the loopback tap when system audio is enabled"
+```
+
+---
+
+### Task 3: Observe permission state and fold it into availability
 
 **Files:**
 - Modify: `src-tauri/src/commands/audio.rs`
-- Modify: `src-tauri/src/lib.rs` (state registration and `collect_commands![...]`)
+- Modify: `src-tauri/src/lib.rs` (state registration)
 - Test: `src-tauri/src/commands/audio.rs` (inline `#[cfg(test)]` module)
 
 **Interfaces:**
 - Produces:
-  - `SystemAudioAvailability` — variants `Available`, `UnavailableNoSoundServer`, `PermissionDenied` (declare it here if Plan B has not already; check first).
-  - `MacosSystemAudioCaptureState(pub Mutex<PermissionAccess>)` — Tauri-managed, holding the last *observed* outcome of a capture attempt.
-  - `pub fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability`
+  - `MacosSystemAudioCaptureState(pub Mutex<PermissionAccess>)` — Tauri-managed, holding the last *observed* outcome.
+  - `get_system_audio_availability` (Phase A Task 6) gains its macOS branch.
 
-**Read this before writing any code — the obvious approach does not work.**
+**Two traps to know before writing code.**
 
-You cannot detect denial from whether `update_system_audio_capture` returned `Ok`. `AudioRecorder::open()` deliberately swallows loopback failures: `recorder.rs:417-436` catches a failed `build_loopback_stream`, logs a warning, and continues **microphone-only and successful**. A denied TCC prompt therefore produces `Ok(())`, and a classifier reading that result would record `Allowed` on every denial — the deny CTA would never appear.
+*You cannot detect denial from whether the enable command returned `Ok`.* `AudioRecorder::open()` deliberately swallows loopback failures (`recorder.rs:417-436`): it logs a warning and continues microphone-only and **successful**. A denied prompt yields `Ok`. The real signal is Phase A's `system_audio_active()`, reported by Task 2's probe.
 
-The correct signal is the flag Plan A Task 5 surfaced: `AudioRecordingManager::system_audio_active()`, which reports whether the loopback stream actually opened. Enable succeeded **and** the lane is live → `Allowed`. Enable succeeded but the lane is dead → something refused it, which on a Mac at our minimum OS is overwhelmingly a declined prompt → `Denied`.
+*The observation must not be trusted across restarts.* It lives in process memory and resets to `Unknown`, which maps to `Available`. If the enable also persisted `system_audio_enabled = true`, the next launch shows a checked toggle that does nothing. Task 4 prevents that by not persisting a failed enable.
 
-**On classification precision.** The exact error macOS produces on TCC denial is **not verified** — Task 7 verifies it on real hardware. Rather than bet the UX on an unconfirmed OSStatus, this task treats "loopback did not come up" as "needs permission", with copy that reads correctly either way. Once Task 7 establishes the real signature, the classifier can be tightened to distinguish denial from a merely-missing device, with no UI change.
+**On classification precision.** The exact error macOS produces on TCC denial is **not verified** — Task 6 verifies it on real hardware. Rather than bet on an unconfirmed OSStatus, this treats "the lane did not come up after a real attempt" as "needs permission", with copy that reads correctly either way. Once the real signature is known, the classifier can be tightened with no UI change.
 
-- [ ] **Step 1: Check what Plan B already added**
-
-```bash
-grep -n "enum SystemAudioAvailability\|fn get_system_audio_availability" src-tauri/src/commands/audio.rs
-```
-
-If present, Plan B landed first: you will **extend** the existing enum usage and change the function's signature to take `app: AppHandle`. If absent, you add both.
-
-- [ ] **Step 2: Write the failing test**
-
-Add to `src-tauri/src/commands/audio.rs`:
+- [ ] **Step 1: Write the failing test**
 
 ```rust
 #[cfg(test)]
@@ -153,32 +203,15 @@ mod macos_system_audio_permission_tests {
     use super::*;
 
     #[test]
-    fn a_live_loopback_lane_is_observed_as_allowed() {
-        assert_eq!(
-            observe_capture_outcome(true, true),
-            PermissionAccess::Allowed
-        );
+    fn a_live_lane_after_a_real_attempt_is_allowed() {
+        assert_eq!(observe_probe_outcome(true), PermissionAccess::Allowed);
     }
 
     #[test]
-    fn a_dead_loopback_lane_after_a_successful_enable_is_observed_as_denied() {
-        // The enable "succeeded" because open() degrades to microphone-only
-        // rather than failing. The lane being dead is the real signal.
+    fn a_dead_lane_after_a_real_attempt_is_denied() {
         // Deliberately coarse: macOS offers no way to ask why a tap failed,
         // and at our minimum OS a declined prompt is the likeliest cause.
-        assert_eq!(
-            observe_capture_outcome(true, false),
-            PermissionAccess::Denied
-        );
-    }
-
-    #[test]
-    fn an_outright_failed_enable_says_nothing_about_permission() {
-        // The stream never got far enough to ask. Don't accuse the user.
-        assert_eq!(
-            observe_capture_outcome(false, false),
-            PermissionAccess::Unknown
-        );
+        assert_eq!(observe_probe_outcome(false), PermissionAccess::Denied);
     }
 
     #[test]
@@ -191,7 +224,7 @@ mod macos_system_audio_permission_tests {
 
     #[test]
     fn an_unattempted_state_reports_available_not_denied() {
-        // Before any attempt we must not accuse the user of having denied
+        // Before any attempt we must not accuse the user of declining
         // something they were never asked about.
         assert_eq!(
             macos_availability(PermissionAccess::Unknown),
@@ -201,45 +234,36 @@ mod macos_system_audio_permission_tests {
 }
 ```
 
-- [ ] **Step 3: Run it and watch it fail**
+- [ ] **Step 2: Run and watch it fail**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml macos_system_audio_permission_tests
 ```
 
-Expected: FAIL — `observe_capture_outcome` and `macos_availability` not found.
-
-- [ ] **Step 4: Implement**
-
-Add to `src-tauri/src/commands/audio.rs` (declaring `SystemAudioAvailability` too if Step 1 found it absent — copy the definition from Plan B Task 4 Step 3 verbatim so the two plans cannot drift):
+- [ ] **Step 3: Implement**
 
 ```rust
-/// The last observed outcome of a macOS system-audio capture attempt.
+/// The last observed outcome of a macOS system-audio probe.
 ///
-/// macOS exposes no way to query `kTCCServiceAudioCapture` state, so this is
-/// the only source of truth available: it records what happened the last time
-/// we tried, not what the OS currently thinks.
+/// macOS exposes no way to query `kTCCServiceAudioCapture`, so this is the
+/// only source of truth available: what happened last time we tried. It is
+/// process-local and deliberately not persisted — a stale "denied" would
+/// outlive a grant made in System Settings.
 pub struct MacosSystemAudioCaptureState(pub std::sync::Mutex<PermissionAccess>);
 
-/// Maps a capture attempt to an observed permission state.
-///
-/// `enable_succeeded` is whether `update_system_audio_capture` returned `Ok`;
-/// `loopback_live` is `AudioRecordingManager::system_audio_active()` after it.
-/// The second is the load-bearing one: `open()` degrades to microphone-only on
-/// a refused loopback rather than failing, so a denied prompt looks like a
-/// successful enable with a dead lane.
-fn observe_capture_outcome(enable_succeeded: bool, loopback_live: bool) -> PermissionAccess {
-    match (enable_succeeded, loopback_live) {
-        (true, true) => PermissionAccess::Allowed,
-        (true, false) => PermissionAccess::Denied,
-        // The enable itself failed, so the tap was never reached — this tells
-        // us nothing about permission.
-        (false, _) => PermissionAccess::Unknown,
+/// Maps a probe's outcome to an observed permission state. The input is
+/// `AudioRecordingManager::probe_system_audio()`, which performs a real open
+/// attempt — so `false` means the OS refused, not that we never asked.
+fn observe_probe_outcome(loopback_live: bool) -> PermissionAccess {
+    if loopback_live {
+        PermissionAccess::Allowed
+    } else {
+        PermissionAccess::Denied
     }
 }
 
 /// Availability from the last observed permission state. `Unknown` means we
-/// have not attempted capture yet, which is not a denial.
+/// have not probed yet, which is not a denial.
 fn macos_availability(observed: PermissionAccess) -> SystemAudioAvailability {
     match observed {
         PermissionAccess::Denied => SystemAudioAvailability::PermissionDenied,
@@ -250,12 +274,12 @@ fn macos_availability(observed: PermissionAccess) -> SystemAudioAvailability {
 }
 ```
 
-Then write `get_system_audio_availability` so each platform contributes its own answer:
+Then give `get_system_audio_availability` (Phase A Task 6) its macOS branch. Phase A left `let _ = &app;` there as the seam:
 
 ```rust
 #[tauri::command]
 #[specta::specta]
-pub fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability {
+pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability {
     #[cfg(target_os = "macos")]
     {
         let observed = *app
@@ -263,50 +287,22 @@ pub fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability 
             .0
             .lock()
             .unwrap();
-        macos_availability(observed)
+        return macos_availability(observed);
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = &app;
-        availability_from_host_probe(crate::audio_toolkit::get_system_audio_host().is_some())
+        tokio::task::spawn_blocking(|| {
+            availability_from_host_probe(crate::audio_toolkit::get_system_audio_host().is_some())
+        })
+        .await
+        .unwrap_or(SystemAudioAvailability::UnavailableNoSoundServer)
     }
 }
 ```
 
-If Plan B has not landed, `availability_from_host_probe` does not exist yet — add it from Plan B Task 4 Step 3, unchanged, so whichever plan lands second finds it already correct.
-
-- [ ] **Step 5: Record the observation at the capture attempt**
-
-In `change_system_audio_enabled_setting`, the existing body calls `update_system_audio_capture` through `spawn_blocking` and maps its error. Capture that result before mapping it, and record the observation on macOS:
-
-```rust
-        let capture_result = tokio::task::spawn_blocking(move || {
-            manager_for_update.update_system_audio_capture(enabled, device_name, stream_router)
-        })
-        .await
-        .map_err(|error| format!("audio task join failed: {error}"))?;
-
-        // Only an enable attempt tells us anything about permission; disabling
-        // always succeeds and must not overwrite a known state. Note we ask
-        // the manager whether the lane is actually live — `capture_result`
-        // alone is Ok even when the tap was refused.
-        #[cfg(target_os = "macos")]
-        if enabled {
-            let observed =
-                observe_capture_outcome(capture_result.is_ok(), manager.system_audio_active());
-            if observed != PermissionAccess::Unknown {
-                *app.state::<MacosSystemAudioCaptureState>().0.lock().unwrap() = observed;
-            }
-        }
-
-        capture_result
-            .map_err(|error| format!("Failed to update system audio capture: {error}"))?;
-```
-
-Splice this to match the real surrounding code — read it first; the point is that the result is observed before `?` discards it.
-
-- [ ] **Step 6: Run the tests and watch them pass**
+- [ ] **Step 4: Run and watch it pass**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml macos_system_audio_permission_tests
@@ -314,43 +310,93 @@ cargo test --manifest-path src-tauri/Cargo.toml macos_system_audio_permission_te
 
 Expected: PASS (4 tests).
 
-- [ ] **Step 7: Register state and command**
+- [ ] **Step 5: Register the state**
 
-In `src-tauri/src/lib.rs`:
-- Register the state alongside the app's other `.manage(...)` calls:
-  ```rust
-  #[cfg(target_os = "macos")]
-  let app_handle_for_state = app.handle().clone();
-  #[cfg(target_os = "macos")]
-  app_handle_for_state.manage(commands::audio::MacosSystemAudioCaptureState(
-      std::sync::Mutex::new(commands::audio::PermissionAccess::Unknown),
-  ));
-  ```
-  Match the surrounding code's actual style for registering managed state rather than copying this shape blindly.
-- Add `commands::audio::get_system_audio_availability,` to `collect_commands![...]` if Plan B did not already.
+In `src-tauri/src/lib.rs`, register it alongside the app's other managed state, gated `#[cfg(target_os = "macos")]`, initialised to `PermissionAccess::Unknown`. Match the surrounding code's actual `.manage(...)` style rather than copying a shape blindly.
 
-- [ ] **Step 8: Regenerate bindings and commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-bun run tauri dev   # briefly, to regenerate src/bindings.ts
-git add src-tauri/src/commands/audio.rs src-tauri/src/lib.rs src/bindings.ts
-git commit -m "feat(macos): observe and surface system audio permission state"
+git add src-tauri/src
+git commit -m "feat(macos): observe system audio permission from a real probe"
 ```
 
 ---
 
-### Task 4: Open the privacy settings
+### Task 4: Wire the probe into the enable command
+
+**Files:**
+- Modify: `src-tauri/src/commands/audio.rs` (`change_system_audio_enabled_setting`)
+
+**Interfaces:**
+- Consumes: `probe_system_audio` (Task 2), `observe_probe_outcome` (Task 3).
+
+- [ ] **Step 1: Probe on enable, and do not persist a failed enable**
+
+In `change_system_audio_enabled_setting`, after the existing `update_system_audio_capture` call succeeds and before the settings write, add:
+
+```rust
+        // macOS only: force a real loopback attempt so the consent prompt
+        // fires now, and record what happened. Without this the tap is never
+        // touched in on-demand mode and permission stays unknowable.
+        #[cfg(target_os = "macos")]
+        let mut enabled = enabled;
+        #[cfg(target_os = "macos")]
+        if enabled {
+            let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+            let live = tokio::task::spawn_blocking(move || manager.probe_system_audio())
+                .await
+                .map_err(|error| format!("audio task join failed: {error}"))?;
+
+            *app.state::<MacosSystemAudioCaptureState>().0.lock().unwrap() =
+                observe_probe_outcome(live);
+
+            if !live {
+                // Don't persist an enabled state the OS just refused: the
+                // observation is process-local, so on the next launch the
+                // toggle would read as on while capturing nothing.
+                warn!("System audio was refused; leaving the setting disabled");
+                enabled = false;
+            }
+        }
+```
+
+then let the existing `settings.system_audio_enabled = enabled; write_settings(...)` run as before, now writing the corrected value.
+
+`probe_system_audio` opens and closes cpal streams, so it must go through `spawn_blocking` — calling it inline would block the webview/main run loop exactly as the existing `spawn_blocking` calls in this file avoid doing.
+
+- [ ] **Step 2: Verify**
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml \
+  && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings \
+  && cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src-tauri/src/commands/audio.rs
+git commit -m "feat(macos): prompt for system audio permission on enable"
+```
+
+---
+
+### Task 5: Privacy settings link and the denied-state UI
 
 **Files:**
 - Modify: `src-tauri/src/commands/audio.rs`
 - Modify: `src-tauri/src/lib.rs` (`collect_commands![...]`)
+- Modify: `src/components/settings/advanced/SystemAudioCapture.tsx`
+- Modify: the fork's i18n catalogue (located in Step 3 — do not guess)
 
 **Interfaces:**
 - Produces: `pub fn open_system_audio_privacy_settings() -> Result<(), String>`
+- Consumes: the `useSystemAudioAvailability` hook from Phase A Task 6.
 
-- [ ] **Step 1: Add the command**
+- [ ] **Step 1: Add the settings-link command**
 
-Next to the existing `open_microphone_privacy_settings` in `src-tauri/src/commands/audio.rs`:
+Next to the existing `open_microphone_privacy_settings`:
 
 ```rust
 #[tauri::command]
@@ -360,9 +406,9 @@ pub fn open_system_audio_privacy_settings() -> Result<(), String> {
     {
         use std::process::Command;
         // `kTCCServiceAudioCapture` is a newer bucket than Screen Recording and
-        // its exact System Settings anchor is unverified (see Task 7). This URL
+        // its exact System Settings anchor is unverified (see Task 6). This URL
         // opens Privacy & Security itself, which is correct regardless; if
-        // Task 7 finds a working per-pane anchor, tighten it here.
+        // Task 6 finds a working per-pane anchor, tighten it here.
         Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security")
             .spawn()
@@ -375,39 +421,7 @@ pub fn open_system_audio_privacy_settings() -> Result<(), String> {
 }
 ```
 
-- [ ] **Step 2: Register it**
-
-Add `commands::audio::open_system_audio_privacy_settings,` to `collect_commands![...]` in `src-tauri/src/lib.rs`, next to `open_microphone_privacy_settings`.
-
-- [ ] **Step 3: Verify and commit**
-
-```bash
-cargo check --manifest-path src-tauri/Cargo.toml
-bun run tauri dev   # briefly, to regenerate bindings
-git add src-tauri/src/commands/audio.rs src-tauri/src/lib.rs src/bindings.ts
-git commit -m "feat(macos): add a command to open system audio privacy settings"
-```
-
----
-
-### Task 5: Permission-denied UI
-
-**Files:**
-- Modify: `src/components/settings/advanced/SystemAudioCapture.tsx`
-- Modify: the fork's i18n catalogue (locate it in Step 2 — do not guess)
-
-**Interfaces:**
-- Consumes: `commands.getSystemAudioAvailability()`, `commands.openSystemAudioPrivacySettings()`.
-
-No unit tests — verification is manual, in Task 7.
-
-- [ ] **Step 1: Check the component's current state**
-
-```bash
-grep -n "availability\|useOsType" src/components/settings/advanced/SystemAudioCapture.tsx
-```
-
-If it still gates on `useOsType()`, apply Plan B Task 5 Step 2's transformation first (query `getSystemAudioAvailability` into an `availability` state, early-return `null` while `null` or `"unavailable_no_sound_server"`). This plan builds on that shape.
+Register `commands::audio::open_system_audio_privacy_settings,` in `collect_commands![...]`, then regenerate bindings with a brief `bun run tauri dev`.
 
 - [ ] **Step 2: Find the right i18n file**
 
@@ -415,17 +429,16 @@ If it still gates on `useOsType()`, apply Plan B Task 5 Step 2's transformation 
 grep -rn "systemAudio" src/i18n/locales/en/translation.json src/shorthand/locales/en.json src/shorthand/english-copy.json
 ```
 
-Per `AGENTS.md`'s i18n rules, add the new key to whichever file already owns the `settings.advanced.systemAudio.*` keys. If they live in `src/i18n/locales/en/translation.json` (upstream's catalogue) but this key is fork-only, it belongs in `src/shorthand/locales/en.json` instead — the `check:locale-drift` gate enforces this. Add:
+Per `AGENTS.md`'s i18n rules, fork-only keys belong in `src/shorthand/locales/en.json`, never `src/i18n/locales/` — the `check:locale-drift` gate enforces this. Add, matching the file's existing key convention:
 
 ```json
-"settings.advanced.systemAudio.permissionNeeded": "Shorthand needs permission to record audio playing on this Mac. If you declined the prompt, you can grant it in System Settings."
+"settings.advanced.systemAudio.permissionNeeded": "Shorthand needs permission to record audio playing on this Mac. If you declined the prompt, you can grant it in System Settings.",
+"settings.advanced.systemAudio.tryAgain": "Try again"
 ```
-
-(Use the flat dotted-key form if the fork catalogue uses it; match the surrounding file's convention.)
 
 - [ ] **Step 3: Add the denied branch**
 
-In `SystemAudioCapture.tsx`, insert after the existing early-return and before the toggle's `return`:
+Phase A already gave `SystemAudioCapture.tsx` the `useSystemAudioAvailability` hook and a toggle that refreshes after each attempt. Add, after the existing early-return and before the toggle's `return`:
 
 ```tsx
   if (availability === "permission_denied") {
@@ -443,9 +456,9 @@ In `SystemAudioCapture.tsx`, insert after the existing early-return and before t
           </button>
           <button
             onClick={async () => {
-              // Re-attempt capture: granting in System Settings cannot change
-              // our observed state on its own, because the only way to learn
-              // the new state is to try again.
+              // Re-attempt: granting in System Settings cannot change our
+              // observed state on its own, because the only way to learn the
+              // new state is to try again.
               await updateSetting("system_audio_enabled", true);
               await refreshAvailability();
             }}
@@ -459,15 +472,11 @@ In `SystemAudioCapture.tsx`, insert after the existing early-return and before t
   }
 ```
 
-**The retry button is not optional.** This branch replaces the toggle, so without it a user who grants permission in System Settings has no way back: the observed state only changes when a capture attempt is made, and nothing here would make one. That would strand the feature permanently off after a single denial.
+**The retry button is not optional.** This branch replaces the toggle, so without it a user who grants permission in System Settings has no way back — the observed state only changes when an attempt is made, and nothing else here would make one.
 
-`accessibility.openSettings` is an existing key already used for the Windows microphone-permission button in `AccessibilityOnboarding.tsx:354` — reuse it rather than adding a second "Open Settings" string. `tryAgain` is new; add it in Step 2 alongside `permissionNeeded`:
+`accessibility.openSettings` is an existing key already used for the Windows microphone-permission button (`AccessibilityOnboarding.tsx:354`) — reuse it rather than adding a second "Open Settings" string.
 
-```json
-"settings.advanced.systemAudio.tryAgain": "Try again"
-```
-
-- [ ] **Step 4: Verify the gates pass**
+- [ ] **Step 4: Verify the gates**
 
 ```bash
 bun run build && bun run lint && bun run check:translations && bun run check:locale-drift && bun run check:fork-translations
@@ -478,45 +487,45 @@ Expected: all pass. The locale-drift gate exists precisely to catch a fork-only 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/
-git commit -m "feat(macos): add grant-access CTA when system audio permission is denied"
+git add src-tauri/src src/bindings.ts src/
+git commit -m "feat(macos): add grant-access and retry when system audio is denied"
 ```
 
 ---
 
 ### Task 6: Silent-tap watchdog — DEFERRED, do not implement
 
-**Status: cut from this plan.** An earlier draft specified a background thread that rebuilt the tap after ten minutes without system-audio samples, to work around an upstream report that Core Audio Process Taps can silently degrade to all-zero buffers after long uptime. An independent review showed the design was **actively harmful**, and it is deferred rather than shipped broken.
+**Status: cut.** An earlier draft specified a background thread that rebuilt the tap after ten minutes without system-audio samples, working around an upstream report that Core Audio Process Taps can silently degrade to all-zero buffers after long uptime. Review showed the design was **actively harmful**, so it is deferred rather than shipped broken.
 
 Why it was cut, so nobody re-adds it unexamined:
 
-- **It measured the wrong signal.** The watchdog would have timed `with_system_audio_callback`, but that callback is fed *post-VAD* and returns early while the app is not recording (`recorder.rs:1289`). An enabled-but-idle app therefore looks permanently "silent", so the watchdog would fire on healthy systems as a matter of course.
-- **Firing is destructive.** Its recovery called `start_microphone_stream()`, which would defeat on-demand microphone closure entirely, and — if it fired mid-session — restart the whole mic+system stream and discard the recording in progress. `AudioRecorder` has no per-lane reopen, so there is no cheap version of this.
+- **It measured the wrong signal.** It would have timed `with_system_audio_callback`, which is fed *post-VAD* and returns early while the app is not recording (`recorder.rs:1289`). An enabled-but-idle app therefore looks permanently "silent", so the watchdog would fire on healthy systems as a matter of course.
+- **Firing is destructive.** Its recovery called `start_microphone_stream()`, defeating on-demand microphone closure entirely, and — if it fired mid-session — restarting the whole mic+system stream and discarding the recording in progress. `AudioRecorder` has no per-lane reopen, so there is no cheap version.
 - **The bug is unconfirmed here.** We have not reproduced the upstream report on this codebase.
 
 If Task 7's long-session check shows real degradation, implement it properly rather than reviving the sketch:
 
-1. Measure at the **raw loopback callback or the pump** (`build_loopback_stream_typed`'s data callback, or `run_loopback_pump`), which sees every frame regardless of VAD and recording state — not the post-VAD consumer callback.
+1. Measure at the **raw loopback callback or the pump** (`build_loopback_stream_typed`'s data callback, or `run_loopback_pump`), which sees every frame regardless of VAD and recording state.
 2. Distinguish "the tap is delivering silence" from "the tap has stopped delivering". The former is normal; only the latter is the bug.
 3. Never restart while `is_recording()` is true. Defer to the next idle moment.
-4. Prefer rebuilding only the system lane. If that means adding a per-lane reopen to `AudioRecorder`, that is the actual work — and its cost is a reason to be sure the bug is real first.
+4. Prefer rebuilding only the system lane. If that needs a per-lane reopen on `AudioRecorder`, that is the actual work — and its cost is a reason to be sure the bug is real first.
 
 ---
 
 ### Task 7: Manual verification matrix
 
-No files change. None of this can run in CI.
+No files change. None of this can run in CI. Run on a real Mac at macOS 14.6 or later.
 
-Run on a real Mac at macOS 14.6 or later:
-
-- [ ] **First-run consent**: with a fresh TCC state (`tccutil reset AudioCapture <bundle-id>`), enable system audio capture. Confirm the system dialog appears showing the Task 2 string **verbatim**, and that granting it starts capture.
-- [ ] **The right indicator**: while capturing, confirm a **purple** menu-bar dot appears — not the orange screen-recording one. Orange means something is using ScreenCaptureKit and the design's central premise is wrong; stop and report.
+- [ ] **First-run consent fires at the toggle**: with a fresh TCC state (`tccutil reset AudioCapture <bundle-id>`) and the app in its default on-demand microphone mode, enable system audio capture **without recording anything**. The system dialog must appear immediately, showing the Task 1 string verbatim. If no prompt appears until you start a recording, Task 2's probe is not working.
+- [ ] **The right indicator**: while capturing, confirm a **purple** menu-bar dot — not the orange screen-recording one. Orange means something is using ScreenCaptureKit and the design's central premise is wrong; stop and report.
+- [ ] **The probe leaves no stream running**: after enabling while idle, confirm the microphone is not left open (no mic indicator, and the log shows the probe's stop).
 - [ ] **Both speakers transcribe**: play audio from another app, record, confirm the transcript contains `me` and `them` lanes as on Windows.
 - [ ] **Follow-stream**: run `handy --follow-stream` during a dual-speaker session; confirm both `"speaker":"me"` and `"speaker":"them"` events appear. No code change should have been needed.
-- [ ] **Deny path**: reset TCC, decline the prompt, confirm `get_system_audio_availability` returns `permission_denied` and the Task 5 CTA renders.
-- [ ] **Settings link**: click the CTA. Record **which pane actually opens** and whether the audio-capture row is reachable from there. If a more precise anchor exists, tighten `open_system_audio_privacy_settings` (Task 4) and re-verify; if not, confirm the copy is enough to guide the user.
-- [ ] **Re-grant path**: grant from System Settings, return to the app, and click the CTA's **Try again** button (Task 5). Confirm capture works and availability flips back to `available`. This is the path that strands users if the retry button is missing — the toggle is not visible in the denied state, so there is no other way to trigger a fresh attempt.
-- [ ] **Capture the real denial error**: with `--debug`, record the exact error text and OSStatus that `update_system_audio_capture` surfaces on a denied attempt. Add it as a comment above `observe_capture_outcome` (Task 3). If it is reliably distinguishable, tighten that function to classify only that signature as `Denied` and everything else as `Unknown`, and update its test.
-- [ ] **Microphone unaffected**: confirm ordinary dictation still works with system audio both on and off.
-- [ ] **Long-session check (decides Task 6)**: leave capture enabled and idle for >15 minutes with nothing playing, then play audio and record. If it still captures, the tap did not degrade and Task 6 stays deferred — write that result into Task 6 so the next person does not re-litigate it. If it captures nothing, the upstream bug is real here: report it, and implement Task 6 to the four constraints listed there rather than to the sketch that was cut.
+- [ ] **Deny path**: reset TCC, decline the prompt, confirm the CTA renders and the toggle did **not** persist as enabled.
+- [ ] **Denial does not survive restart as a lie**: after denying, restart the app and confirm the toggle reads as off rather than on-but-broken.
+- [ ] **Settings link**: click it and record **which pane actually opens** and whether the audio-capture row is reachable. If a more precise anchor exists, tighten `open_system_audio_privacy_settings` (Task 5) and re-verify; if not, confirm the copy is enough to guide the user.
+- [ ] **Re-grant path**: grant from System Settings, return to the app, click **Try again**, confirm capture works and availability flips to `available`. This is the path that strands users if the retry button is missing.
+- [ ] **Capture the real denial error**: with `--debug`, record the exact error text and OSStatus surfaced on a denied attempt and add it as a comment above `observe_probe_outcome` (Task 3). If reliably distinguishable, tighten that function to treat only that signature as `Denied`, and update its test.
+- [ ] **Microphone unaffected**: confirm ordinary dictation still works with system audio both on and off, in both on-demand and always-on microphone modes.
+- [ ] **Long-session check (decides Task 6)**: leave capture enabled and idle for >15 minutes with nothing playing, then play audio and record. If it still captures, the tap did not degrade — write that result into Task 6 so nobody re-litigates it. If it captures nothing, the upstream bug is real here: report it and implement Task 6 to the four constraints listed there.
 - [ ] **Lints**: `cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && bun run lint`.
