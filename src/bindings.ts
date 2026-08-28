@@ -868,9 +868,39 @@ async setSelectedChannel(channel: number | null) : Promise<Result<null, string>>
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Constructing a PulseAudio host can wait on its server socket, so keep the
+ * CPAL probe off Tauri's webview/main run loop.
+ */
+async getSystemAudioAvailability() : Promise<SystemAudioAvailability> {
+    return await TAURI_INVOKE("get_system_audio_availability");
+},
+async getAvailableSystemAudioDevices() : Promise<Result<SystemAudioDevice[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_available_system_audio_devices") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeSystemAudioEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_system_audio_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Change Dictation's mode-owned system-audio setting while keeping the
+ * physical capture lane aligned with whichever mode is active. This must not
+ * be folded into `change_dictation_settings`: that general transaction is
+ * intentionally side-effect free and must never trigger system privacy
+ * prompts as a by-product of saving unrelated Dictation preferences.
+ */
+async changeDictationSystemAudioEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_dictation_system_audio_enabled_setting", { enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1259,6 +1289,20 @@ export type StreamTextEvent = { source: StreamSource; committed: string; tentati
  * Semantic kind of "working" phase, used to localize the spinner label.
  */
 export type StreamWorkKind = "transcribing" | "polishing"
+/**
+ * Whether this machine can expose a system-audio loopback device at all.
+ * 
+ * This is deliberately separate from whether a particular capture attempt
+ * succeeded. A reachable host is enough to render the controls; the recorder
+ * continues to report its actual loopback-open outcome independently.
+ */
+export type SystemAudioAvailability = "available" | "unavailable_no_sound_server" | "permission_denied"
+/**
+ * A capture-capable system-audio endpoint. Unlike `AudioDevice`, `id` is an
+ * opaque persisted value: Linux uses CPAL's stable DeviceId serialization,
+ * while legacy Windows settings retain their existing display-name values.
+ */
+export type SystemAudioDevice = { id: string; label: string; is_default: boolean }
 /**
  * UI appearance mode. `System` follows the OS `prefers-color-scheme`; `Light`
  * and `Dark` force one of the two palettes Handy already ships.
