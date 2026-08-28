@@ -1,6 +1,13 @@
 name: "Build Test"
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      sign-binaries:
+        description: "Sign and notarize the binaries (needs the Apple and Azure secrets to be populated)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-test:
@@ -37,7 +44,18 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      sign-binaries: true
+      # Off by default, because a test build is usually wanted to answer "does
+      # this compile" and the signing steps fail outright when the Apple secrets
+      # are unset — the certificate import dies before a single crate is built,
+      # so an unsigned run is the difference between an answer and nothing.
+      # Everything needed for signing is still here and still wired: tick the
+      # box on dispatch once the Developer ID certificate is in the secrets.
+      #
+      # Unsigned macOS artifacts are quarantined on download. Testers need
+      # `xattr -dr com.apple.quarantine <app>`, or Open Anyway under Privacy &
+      # Security. Unsigned builds also carry no minisign signature, so they
+      # install and run but will not auto-update — see SIGNING_AND_UPDATES.md.
+      sign-binaries: ${{ inputs.sign-binaries }}
       asset-prefix: "handy-test"
       upload-artifacts: true
       is-debug-build: ${{ contains(matrix.args, '--debug') }}
