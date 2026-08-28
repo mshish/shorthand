@@ -55,5 +55,15 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       upload-artifacts: true
-      sign-binaries: true
+      # TEMPORARY: off until the signing secrets are populated. The Windows
+      # signing steps run before anything is compiled and fail hard when the
+      # Azure Trusted Signing secrets are unset, which would cost the whole
+      # build for a signature these artifacts do not need — main builds are
+      # 30-day testing artifacts, not releases, and release.yml still signs
+      # unconditionally.
+      #
+      # Note this also drops the minisign updater signature, so these builds
+      # install and run but will not auto-update (SIGNING_AND_UPDATES.md).
+      # Set back to true once the secrets exist; nothing else has to change.
+      sign-binaries: false
     secrets: inherit
