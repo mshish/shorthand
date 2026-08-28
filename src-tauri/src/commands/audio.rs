@@ -109,6 +109,34 @@ fn set_system_audio_enabled_for_scope(
     }
 }
 
+/// Whether the shared system-audio lane has to exist at all.
+///
+/// Meetings and Dictation each own an enabled flag over one physical lane, so
+/// it is needed as soon as either scope wants it. Dictation's flag only counts
+/// while Dictation itself is enabled, because `dictation::apply_mode` falls
+/// back to the Meetings values otherwise.
+pub fn system_audio_lane_required(settings: &AppSettings) -> bool {
+    settings.system_audio_enabled
+        || (settings.dictation.enabled && settings.dictation.system_audio_enabled)
+}
+
+/// Releases the system-audio lane's transcription manager and the model it is
+/// holding. Without this a disable leaves a second model resident for the rest
+/// of the session.
+fn release_system_audio_transcription(app: &AppHandle) {
+    let previous = app
+        .state::<SystemAudioTranscription>()
+        .0
+        .lock()
+        .unwrap()
+        .take();
+    if let Some(manager) = previous {
+        if let Err(error) = manager.unload_model() {
+            warn!("Failed to unload the system audio model: {error}");
+        }
+    }
+}
+
 fn ensure_system_audio_transcription(app: &AppHandle) -> Result<Arc<TranscriptionManager>, String> {
     let system_state = app.state::<SystemAudioTranscription>();
     let mut slot = system_state.0.lock().unwrap();
@@ -562,7 +590,12 @@ async fn change_system_audio_enabled_for_scope(
         crate::shorthand::mode::active(&app),
     );
     let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
-    let stream_router = Some(ensure_system_audio_transcription(&app)?.stream_router());
+    let lane_required = system_audio_lane_required(&candidate_settings);
+    let stream_router = if lane_required {
+        Some(ensure_system_audio_transcription(&app)?.stream_router())
+    } else {
+        None
+    };
     let manager_for_update = Arc::clone(&manager);
     tokio::task::spawn_blocking(move || {
         manager_for_update.apply_system_audio_configuration(
@@ -575,7 +608,18 @@ async fn change_system_audio_enabled_for_scope(
     .map_err(|error| format!("audio task join failed: {error}"))?
     .map_err(|error| format!("Failed to update system audio capture: {error}"))?;
 
-    write_settings(&app, candidate_settings);
+    if !lane_required {
+        release_system_audio_transcription(&app);
+    }
+
+    // Re-read immediately before writing rather than persisting the snapshot
+    // taken at entry. The availability probe and the capture reconfiguration
+    // above both await, and the frontend can save an unrelated setting (model
+    // choice, a shortcut, the paste method) while they are in flight; writing
+    // the stale snapshot back would silently revert it.
+    let mut settings = get_settings(&app);
+    set_system_audio_enabled_for_scope(&mut settings, scope, enabled);
+    write_settings(&app, settings);
     Ok(())
 }
 
@@ -598,7 +642,11 @@ pub async fn set_system_audio_device(
         crate::shorthand::mode::active(&app),
     );
     let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
-    let stream_router = Some(ensure_system_audio_transcription(&app)?.stream_router());
+    let stream_router = if system_audio_lane_required(&candidate_settings) {
+        Some(ensure_system_audio_transcription(&app)?.stream_router())
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || {
         manager.apply_system_audio_configuration(
             resolved.system_audio_enabled,
@@ -610,7 +658,12 @@ pub async fn set_system_audio_device(
     .map_err(|error| format!("audio task join failed: {error}"))?
     .map_err(|error| format!("Failed to update system audio device: {error}"))?;
 
-    write_settings(&app, candidate_settings);
+    // Re-read immediately before writing: see the note in
+    // `change_system_audio_enabled_for_scope`. This command owns only the
+    // device field.
+    let mut settings = get_settings(&app);
+    settings.system_audio_device = normalized_device;
+    write_settings(&app, settings);
     Ok(())
 }
 

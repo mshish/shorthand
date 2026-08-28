@@ -13,7 +13,7 @@ use cpal::{
 };
 
 use crate::audio_toolkit::{
-    audio::{AudioVisualiser, FrameResampler},
+    audio::{device_display_name, AudioVisualiser, FrameResampler},
     constants,
     vad::{self, VadFrame},
     VoiceActivityDetector,
@@ -307,13 +307,13 @@ impl AudioRecorder {
             let loopback_sample_rate = Arc::new(AtomicU32::new(0));
             let init_result = (|| -> Result<_, String> {
                 let config_started = Instant::now();
-                let device_name = thread_device.to_string();
+                let device_name = device_display_name(&thread_device).unwrap_or_default();
                 let cached_config = config_cache
                     .lock()
                     .unwrap()
                     .as_ref()
                     .filter(|(name, _)| !device_name.is_empty() && *name == device_name)
-                    .map(|(_, cfg)| cfg.clone());
+                    .map(|(_, cfg)| *cfg);
                 let config_was_cached = cached_config.is_some();
                 let config = match cached_config {
                     Some(cfg) => cfg,
@@ -788,7 +788,7 @@ impl AudioRecorder {
         };
 
         device.build_input_stream(
-            config.clone().into(),
+            (*config).into(),
             stream_cb,
             |err| log::error!("Stream error: {}", err),
             None,
@@ -934,7 +934,7 @@ impl AudioRecorder {
 
         let error_available = Arc::clone(&available);
         device.build_input_stream(
-            config.clone().into(),
+            (*config).into(),
             data_callback,
             move |error| {
                 error_available.store(false, Ordering::Release);
@@ -952,10 +952,12 @@ impl AudioRecorder {
         // is authoritative there. Other backends may expose loopback as an
         // ordinary input device instead; fall back to that config shape.
         match device.default_output_config() {
-            Ok(config) => Self::select_supported_config(config, device.supported_output_configs()?),
+            Ok(config) => {
+                Self::select_supported_config(config, || device.supported_output_configs())
+            }
             Err(output_error) => match device.default_input_config() {
                 Ok(config) => {
-                    Self::select_supported_config(config, device.supported_input_configs()?)
+                    Self::select_supported_config(config, || device.supported_input_configs())
                 }
                 Err(input_error) => Err(format!(
                     "no loopback config: output query failed ({output_error}), input query failed ({input_error})"
@@ -975,7 +977,7 @@ impl AudioRecorder {
         device: &cpal::Device,
     ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
         let default_config = device.default_input_config()?;
-        Self::select_supported_config(default_config, device.supported_input_configs()?)
+        Self::select_supported_config(default_config, || device.supported_input_configs())
     }
 
     /// Formats `build_stream` and `build_loopback_stream_typed` can convert
@@ -989,21 +991,36 @@ impl AudioRecorder {
         cpal::SampleFormat::U8,
     ];
 
-    fn select_supported_config(
+    /// `supported_configs` is a closure, not an already-evaluated iterator, so
+    /// enumeration only happens when the device default is a format we cannot
+    /// decode. Some virtual and exotic capture devices answer
+    /// `default_*_config()` fine but fail config enumeration; asking eagerly
+    /// turned that into a hard `open()` failure where it had always been a
+    /// warning and a fall back to the default.
+    fn select_supported_config<I>(
         default_config: cpal::SupportedStreamConfig,
-        supported_configs: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
-    ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
+        supported_configs: impl FnOnce() -> Result<I, cpal::Error>,
+    ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>>
+    where
+        I: Iterator<Item = cpal::SupportedStreamConfigRange>,
+    {
         if Self::SUPPORTED_FORMATS.contains(&default_config.sample_format()) {
             return Ok(default_config);
         }
 
-        let supported_configs: Vec<_> = supported_configs.collect();
+        let supported_configs: Vec<_> = match supported_configs() {
+            Ok(configs) => configs.collect(),
+            Err(error) => {
+                log::warn!("Could not enumerate stream configs ({error}), using device default");
+                return Ok(default_config);
+            }
+        };
         for sample_format in Self::SUPPORTED_FORMATS {
             if let Some(config) = supported_configs
                 .iter()
                 .find(|config| config.sample_format() == *sample_format)
             {
-                return Ok(config.clone().with_max_sample_rate());
+                return Ok((*config).with_max_sample_rate());
             }
         }
 

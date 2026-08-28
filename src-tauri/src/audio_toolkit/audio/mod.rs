@@ -8,8 +8,8 @@ mod visualizer;
 #[cfg(target_os = "linux")]
 pub use device::resolve_linux_system_audio_device;
 pub use device::{
-    list_input_devices, list_output_devices, list_system_audio_devices, CpalDeviceInfo,
-    SystemAudioDeviceInfo,
+    device_display_name, list_input_devices, list_output_devices, list_system_audio_devices,
+    CpalDeviceInfo, SystemAudioDeviceInfo,
 };
 pub use recorder::SystemAudioCapture;
 pub use recorder::{

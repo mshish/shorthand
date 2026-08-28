@@ -109,7 +109,9 @@ fn play_audio_file(
 
             let mut found_device = None;
             for device in devices {
-                if device.to_string() == device_name {
+                if crate::audio_toolkit::device_display_name(&device)
+                    .is_some_and(|name| name == *device_name)
+                {
                     found_device = Some(device);
                     break;
                 }

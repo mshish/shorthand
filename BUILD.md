@@ -71,16 +71,19 @@ MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib 
 
 - Build essentials
 - ALSA development libraries
+- PipeWire development libraries (system-audio capture). PulseAudio needs no
+  package: cpal's PulseAudio backend is a pure-Rust reimplementation of the
+  wire protocol and links no `libpulse`.
 - Install with:
 
   ```bash
   # Ubuntu/Debian
   sudo apt update
-  sudo apt install build-essential clang libclang-dev libevdev-dev libasound2-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
+  sudo apt install build-essential clang libclang-dev libevdev-dev libasound2-dev libpipewire-0.3-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
 
   # Fedora/RHEL
   sudo dnf groupinstall "Development Tools"
-  sudo dnf install alsa-lib-devel pkgconf openssl-devel vulkan-devel glslc \
+  sudo dnf install alsa-lib-devel pipewire-devel pkgconf openssl-devel vulkan-devel glslc \
     clang clang-devel libevdev-devel \
     spirv-headers-devel spirv-tools-devel glslang \
     gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel \
@@ -88,7 +91,7 @@ MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib 
     cmake
 
   # Arch Linux
-  sudo pacman -S base-devel clang libevdev shaderc spirv-headers glslang alsa-lib pkgconf openssl vulkan-devel \
+  sudo pacman -S base-devel clang libevdev shaderc spirv-headers glslang alsa-lib libpipewire pkgconf openssl vulkan-devel \
     gtk3 webkit2gtk-4.1 libappindicator-gtk3 librsvg gtk-layer-shell \
     cmake
   ```

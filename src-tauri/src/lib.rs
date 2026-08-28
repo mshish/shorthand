@@ -167,6 +167,10 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
+    // `mut` is load-bearing only for the Linux normalisation directly below.
+    // That block is compiled out everywhere else, leaving a binding that is
+    // never reassigned -- which `unused_mut` rejects under `-D warnings`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut initial_settings = settings::get_settings(app_handle);
     // Linux has no ALSA-loopback fallback. If neither supported sound-server
     // backend can be opened at startup, persist the same disabled state that
@@ -182,18 +186,30 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         initial_settings.dictation.system_audio_enabled = false;
         settings::write_settings(app_handle, initial_settings.clone());
     }
-    // Meetings and Dictation each own a system-audio preference. Construct
-    // the lightweight lane now so the active mode can select it at hotkey
-    // time; model loading remains lazy inside TranscriptionManager.
-    let system_audio_transcription = Arc::new(
-        TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
-            .expect("Failed to initialize system audio transcription manager"),
-    );
+    // Meetings and Dictation each own a system-audio preference over one
+    // shared lane. Construct it when either wants it, so the active mode can
+    // select it at hotkey time; model loading remains lazy inside
+    // TranscriptionManager. Constructing it unconditionally would start its
+    // idle-watcher thread on every platform for every user, and the router it
+    // hands the recording manager is also what makes every recorder allocate a
+    // second Silero session. `ensure_system_audio_transcription` builds it
+    // later if the user turns the lane on.
+    let system_audio_transcription =
+        if commands::audio::system_audio_lane_required(&initial_settings) {
+            Some(Arc::new(
+                TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
+                    .expect("Failed to initialize system audio transcription manager"),
+            ))
+        } else {
+            None
+        };
     let recording_manager = Arc::new(
         AudioRecordingManager::new(
             app_handle,
             transcription_manager.stream_router(),
-            Some(system_audio_transcription.stream_router()),
+            system_audio_transcription
+                .as_ref()
+                .map(|manager| manager.stream_router()),
         )
         .expect("Failed to initialize recording manager"),
     );
@@ -227,9 +243,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(follow_stream::FollowStreamServer::default());
     app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
-    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(Some(
+    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
         system_audio_transcription,
-    ))));
+    )));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
 

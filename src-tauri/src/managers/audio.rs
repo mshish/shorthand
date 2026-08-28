@@ -1,4 +1,4 @@
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::audio_toolkit::audio::list_output_devices;
 use crate::audio_toolkit::audio::SystemAudioCapture;
 use crate::audio_toolkit::{
@@ -13,7 +13,7 @@ use crate::helpers::clamshell;
 use crate::managers::transcription::StreamRouter;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use cpal::traits::HostTrait;
 use log::{debug, error, info, trace, warn};
 use std::path::Path;
@@ -526,8 +526,11 @@ impl AudioRecordingManager {
 
         #[cfg(target_os = "linux")]
         {
-            return crate::audio_toolkit::resolve_linux_system_audio_device(device_name)
-                .map(|device| SystemAudioCapture { device });
+            let device = crate::audio_toolkit::resolve_linux_system_audio_device(device_name);
+            if device.is_none() {
+                warn!("Configured system audio device is unavailable; continuing microphone-only");
+            }
+            return device.map(|device| SystemAudioCapture { device });
         }
 
         #[cfg(target_os = "macos")]
@@ -654,12 +657,17 @@ impl AudioRecordingManager {
                 )
                 .map_err(|e| anyhow::anyhow!("Failed to resolve VAD path: {}", e))?;
             let settings = get_settings(&self.app_handle);
+            // Bound to a local rather than passed inline: a `MutexGuard`
+            // temporary in an argument list lives until the whole call
+            // expression finishes, which would hold `system_stream_router`
+            // across the recorder build while `recorder` is already held.
+            let system_stream_router = self.system_stream_router.lock().unwrap().clone();
             *recorder_opt = Some(create_audio_recorder(
                 &vad_path,
                 &self.app_handle,
                 settings.selected_channel,
                 Arc::clone(&self.stream_router),
-                self.system_stream_router.lock().unwrap().clone(),
+                system_stream_router,
             )?);
         }
         Ok(())
@@ -1006,10 +1014,17 @@ impl AudioRecordingManager {
     /// always-on microphone starts.
     pub fn prepare_system_audio_for_active_mode(&self) -> Result<(), anyhow::Error> {
         let settings = crate::shorthand::dictation::resolve_settings(&self.app_handle);
+        // The clone must be bound to a local. A `MutexGuard` temporary inside
+        // an argument list is not dropped until the enclosing call expression
+        // completes, so passing it inline holds `system_stream_router` for the
+        // whole of `apply_system_audio_configuration` — which re-locks it in
+        // `set_system_stream_router`. `std::sync::Mutex` is not reentrant, so
+        // that self-deadlocks and hangs the app.
+        let stream_router = self.system_stream_router.lock().unwrap().clone();
         self.apply_system_audio_configuration(
             settings.system_audio_enabled,
             settings.system_audio_device,
-            self.system_stream_router.lock().unwrap().clone(),
+            stream_router,
         )
     }
 
@@ -1032,14 +1047,41 @@ impl AudioRecordingManager {
         let active = self.active_system_audio.lock().unwrap().clone();
 
         if !was_open || active.as_ref() == Some(&desired) {
+            // No capture restart is needed, but the router still has to be
+            // recorded. It only exists while some mode wants system audio, so
+            // a mode that turns the lane on while the active mode's capture is
+            // unchanged would otherwise leave `None` here, and the next hotkey
+            // would hand `update_system_audio_capture` no router at all.
+            if self.store_system_stream_router(stream_router) && !was_open {
+                // Rebuilding the recorder is what adds or drops the system VAD
+                // lane. Swapping it out from under a live stream wedges
+                // `start_microphone_stream`, which then sees `is_open` set and
+                // no recorder, so only do it while the stream is closed — with
+                // the stream open the running configuration is unchanged
+                // anyway and the next open rebuilds.
+                *self.recorder.lock().unwrap() = None;
+            }
             return Ok(());
         }
 
         self.update_system_audio_capture(desired.enabled, desired.device_name, stream_router)
     }
 
+    /// Records the lane's router without disturbing an open stream. Returns
+    /// whether it actually changed.
+    fn store_system_stream_router(&self, router: Option<Arc<StreamRouter>>) -> bool {
+        let mut current = self.system_stream_router.lock().unwrap();
+        let changed = match (current.as_ref(), router.as_ref()) {
+            (None, None) => false,
+            (Some(existing), Some(new)) => !Arc::ptr_eq(existing, new),
+            _ => true,
+        };
+        *current = router;
+        changed
+    }
+
     pub fn set_system_stream_router(&self, router: Option<Arc<StreamRouter>>) {
-        *self.system_stream_router.lock().unwrap() = router;
+        self.store_system_stream_router(router);
         // Force a fresh recorder so VAD and callbacks match the lane's state.
         *self.recorder.lock().unwrap() = None;
     }

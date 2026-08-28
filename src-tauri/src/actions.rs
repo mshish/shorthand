@@ -555,16 +555,14 @@ impl ShortcutAction for TranscribeAction {
         // Meeting's system stream could leak into a Dictation action that has
         // explicitly disabled system audio.
         let rm = app.state::<Arc<AudioRecordingManager>>();
+        // A broken system-audio lane must never break dictation. This fails
+        // whenever the recorder is not Idle -- a push-to-talk retrigger, or a
+        // hotkey pressed while the previous capture is still Stopping -- and
+        // returning here would leave the user with an error toast and no
+        // dictation at all. Microphone capture is unaffected either way, so
+        // log and carry on into a microphone-only session.
         if let Err(error) = rm.prepare_system_audio_for_active_mode() {
-            error!("Failed to configure system audio for active mode: {error}");
-            let _ = app.emit(
-                "recording-error",
-                RecordingErrorEvent {
-                    error_type: "unknown".to_string(),
-                    detail: Some(format!("Failed to configure system audio: {error}")),
-                },
-            );
-            return;
+            warn!("Failed to configure system audio for active mode, continuing microphone-only: {error}");
         }
 
         // Load ASR model and VAD model in parallel

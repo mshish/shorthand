@@ -1,6 +1,22 @@
-use cpal::traits::HostTrait;
-#[cfg(target_os = "linux")]
 use cpal::traits::DeviceTrait;
+use cpal::traits::HostTrait;
+
+/// The device name CPAL's `Display` impl writes, without its panic.
+///
+/// Every CPAL 0.18 host implements `Display for Device` as
+/// `f.write_str(self.description().map_err(|_| fmt::Error)?.name())`, and a
+/// `Display` that returns `Err` makes `ToString::to_string` panic. A dynamic
+/// default-device handle whose endpoint has vanished, or a device whose
+/// property store carries neither FriendlyName nor DeviceDesc, does exactly
+/// that. The string returned here is byte-identical to `to_string()` for any
+/// device that answers, so persisted `selected_microphone`,
+/// `system_audio_device` and `clamshell_microphone` values keep matching.
+pub fn device_display_name(device: &cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_string())
+}
 
 #[derive(Clone)]
 pub struct SystemAudioDeviceInfo {
@@ -21,12 +37,14 @@ pub struct CpalDeviceInfo {
 
 pub fn list_input_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
     let host = crate::audio_toolkit::get_cpal_host();
-    let default_name = host.default_input_device().map(|device| device.to_string());
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device_display_name(&device));
 
     let mut out = Vec::<CpalDeviceInfo>::new();
 
     for (index, device) in host.input_devices()?.enumerate() {
-        let name = device.to_string();
+        let name = device_display_name(&device).unwrap_or_else(|| "Unknown".to_string());
 
         let is_default = Some(name.clone()) == default_name;
 
@@ -45,12 +63,12 @@ pub fn list_output_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::
     let host = crate::audio_toolkit::get_cpal_host();
     let default_name = host
         .default_output_device()
-        .map(|device| device.to_string());
+        .and_then(|device| device_display_name(&device));
 
     let mut out = Vec::<CpalDeviceInfo>::new();
 
     for (index, device) in host.output_devices()?.enumerate() {
-        let name = device.to_string();
+        let name = device_display_name(&device).unwrap_or_else(|| "Unknown".to_string());
 
         let is_default = Some(name.clone()) == default_name;
 
@@ -96,17 +114,72 @@ pub fn list_system_audio_devices() -> Result<Vec<SystemAudioDeviceInfo>, Box<dyn
 pub fn resolve_linux_system_audio_device(device_id: Option<&str>) -> Option<cpal::Device> {
     use std::str::FromStr;
 
+    // Built once and passed down. Constructing a host performs a real
+    // PulseAudio/PipeWire handshake (CPAL's INIT_TIMEOUT is 2s) and this runs
+    // synchronously on the hotkey path, inside `start_microphone_stream`.
     let host = crate::audio_toolkit::get_system_audio_host()?;
+
     if let Some(device_id) = device_id {
-        let id = cpal::DeviceId::from_str(device_id).ok()?;
-        return host.device_by_id(&id);
+        let id = match cpal::DeviceId::from_str(device_id) {
+            Ok(id) => id,
+            Err(error) => {
+                log::warn!(
+                    "Saved system-audio device '{device_id}' is not a CPAL device id ({error}); continuing microphone-only"
+                );
+                return None;
+            }
+        };
+        // A CPAL device id carries its host ("pulseaudio:<name>") and
+        // `device_by_id` matches the whole id, so a selection saved while
+        // pipewire-pulse was up never resolves on a later boot that only
+        // reaches the native PipeWire host, and vice versa. Say which way it
+        // went instead of failing silently, and leave the saved value alone:
+        // the other server may well be back next boot.
+        if id.host() != host.id() {
+            log::warn!(
+                "Saved system-audio device '{device_id}' belongs to the {} host, but {} is the sound server reachable now; continuing microphone-only",
+                id.host(),
+                host.id()
+            );
+            return None;
+        }
+        let device = host.device_by_id(&id);
+        if device.is_none() {
+            log::warn!(
+                "Saved system-audio device '{device_id}' is not present on the {} host; continuing microphone-only",
+                host.id()
+            );
+        }
+        return device;
     }
 
-    list_linux_system_audio_devices()
-        .ok()?
-        .into_iter()
-        .find(|device| device.is_default)
-        .map(|device| device.device)
+    let mut devices = match list_linux_system_audio_devices_on(host) {
+        Ok(devices) => devices,
+        Err(error) => {
+            log::warn!("Failed to enumerate Linux system-audio devices: {error}");
+            return None;
+        }
+    };
+    if devices.is_empty() {
+        log::warn!("No Linux system-audio device is available; continuing microphone-only");
+        return None;
+    }
+    let index = match devices.iter().position(|device| device.is_default) {
+        Some(index) => index,
+        None => {
+            // `is_default` comes from matching the server's default sink name
+            // against each monitor source's `monitor_of_sink_name`. A default
+            // sink that exposes no monitor, or a server reporting no default
+            // sink at all, leaves a non-empty list with nothing marked default.
+            // The first monitor is a far better answer than no system audio.
+            log::warn!(
+                "No system-audio device matches the default sink; falling back to '{}'",
+                devices[0].label
+            );
+            0
+        }
+    };
+    Some(devices.swap_remove(index).device)
 }
 
 #[cfg(target_os = "linux")]
@@ -114,7 +187,15 @@ fn list_linux_system_audio_devices(
 ) -> Result<Vec<SystemAudioDeviceInfo>, Box<dyn std::error::Error>> {
     let host = crate::audio_toolkit::get_system_audio_host()
         .ok_or("No supported Linux sound server is available")?;
+    list_linux_system_audio_devices_on(host)
+}
 
+/// Takes the host by value so a caller that has already built one does not pay
+/// for a second sound-server handshake.
+#[cfg(target_os = "linux")]
+fn list_linux_system_audio_devices_on(
+    host: cpal::Host,
+) -> Result<Vec<SystemAudioDeviceInfo>, Box<dyn std::error::Error>> {
     match host.id() {
         cpal::HostId::PulseAudio => list_pulseaudio_monitor_devices(host),
         cpal::HostId::PipeWire => list_pipewire_sink_default(host),
@@ -165,7 +246,7 @@ fn list_pulseaudio_monitor_devices(
                 .is_some_and(|(_, is_default)| *is_default);
             Some(SystemAudioDeviceInfo {
                 id: id.to_string(),
-                label: device.to_string(),
+                label: device_display_name(&device).unwrap_or_else(|| "Unknown".to_string()),
                 is_default,
                 device,
             })
@@ -190,7 +271,7 @@ fn list_pipewire_sink_default(
         .ok_or("PipeWire did not expose its default sink")?;
     Ok(vec![SystemAudioDeviceInfo {
         id: id.to_string(),
-        label: device.to_string(),
+        label: device_display_name(&device).unwrap_or_else(|| "Unknown".to_string()),
         is_default: true,
         device,
     }])
