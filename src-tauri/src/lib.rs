@@ -22,6 +22,17 @@ mod settings;
 mod shortcut;
 pub mod shorthand;
 mod signal_handle;
+// Compiled on every platform, not just macOS, so the pure status mapping keeps
+// its unit tests on Windows and Linux — the FFI inside is the part nothing off
+// macOS can check, so the little that can be checked should be. Its callers are
+// all behind both gates, which leaves it dead code on every other target and on
+// macOS with the SPI feature off — the escape-hatch build nobody makes by
+// accident, and so exactly the one that would rot unnoticed.
+#[cfg_attr(
+    not(all(target_os = "macos", feature = "macos-tcc-spi")),
+    allow(dead_code)
+)]
+mod system_audio_permission;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
@@ -773,6 +784,7 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::get_microphone_mode,
             commands::audio::get_windows_microphone_permission_status,
             commands::audio::open_microphone_privacy_settings,
+            commands::audio::open_system_audio_privacy_settings,
             commands::audio::get_available_microphones,
             commands::audio::set_selected_microphone,
             commands::audio::get_selected_microphone,

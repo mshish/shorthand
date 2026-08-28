@@ -13,6 +13,8 @@ use crate::helpers::clamshell;
 use crate::managers::transcription::StreamRouter;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
+#[cfg(target_os = "macos")]
+use cpal::traits::DeviceTrait;
 #[cfg(any(windows, target_os = "macos"))]
 use cpal::traits::HostTrait;
 use log::{debug, error, info, trace, warn};
@@ -550,7 +552,25 @@ impl AudioRecordingManager {
                 crate::audio_toolkit::get_system_audio_host()?.default_output_device()
             };
 
-            device.map(|device| SystemAudioCapture { device })
+            let device = device?;
+            // Mirrors CPAL's own `supports_input()`: it takes the loopback
+            // branch only for a device reporting no input configs, so one that
+            // reports any would silently capture its inputs instead of the
+            // system mix. An enumeration failure is treated as "no inputs",
+            // matching CPAL's `unwrap_or(false)`.
+            if device
+                .supported_input_configs()
+                .map(|mut configs| configs.next().is_some())
+                .unwrap_or(false)
+            {
+                let device_name = crate::audio_toolkit::audio::device_display_name(&device)
+                    .unwrap_or_else(|| "Unknown".to_string());
+                warn!(
+                    "Refusing macOS system-audio device '{device_name}': CPAL would capture its inputs rather than system output; continuing microphone-only"
+                );
+                return None;
+            }
+            Some(SystemAudioCapture { device })
         }
 
         #[cfg(windows)]

@@ -7,6 +7,16 @@ edition = "2021"
 license = "MIT"
 default-run = "shorthand"
 
+[features]
+default = ["macos-tcc-spi"]
+# Reads the system-audio permission through TCC's private preflight SPI. There
+# is no public API for this, and without it a denied tap is indistinguishable
+# from a silent room. Disqualifying for the Mac App Store, which this app
+# cannot target anyway — the flag exists so that decision stays reversible.
+# With the feature off, permission always reads NotGranted and the UI falls
+# back to offering the settings link unconditionally.
+macos-tcc-spi = []
+
 [profile.dev]
 incremental = true # Compile your binary in smaller steps.
 
@@ -163,6 +173,8 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-service-management = "0.3.2"
+libloading = "0.8"
+objc2-core-foundation = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
