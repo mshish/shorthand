@@ -16,6 +16,7 @@ interface UseSettingsReturn {
   outputDevices: AudioDevice[];
   systemAudioDevices: SystemAudioDevice[];
   systemAudioAvailability: SystemAudioAvailability | null;
+  isProbingSystemAudio: boolean;
   audioFeedbackEnabled: boolean;
   postProcessModelOptions: Record<string, string[]>;
 
@@ -70,6 +71,7 @@ export const useSettings = (): UseSettingsReturn => {
     outputDevices: store.outputDevices,
     systemAudioDevices: store.systemAudioDevices,
     systemAudioAvailability: store.systemAudioAvailability,
+    isProbingSystemAudio: store.isProbingSystemAudio,
     audioFeedbackEnabled: store.settings?.audio_feedback || false,
     postProcessModelOptions: store.postProcessModelOptions,
     updateSetting: store.updateSetting,

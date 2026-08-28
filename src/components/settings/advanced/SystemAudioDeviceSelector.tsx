@@ -2,6 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import type { DictationSettings, SystemAudioDevice } from "@/bindings";
 import { useSettings } from "../../../hooks/useSettings";
+import { DEFAULT_SYSTEM_AUDIO_DEVICE } from "../../../stores/settingsStore";
 import { Dropdown } from "../../ui/Dropdown";
 import { SettingContainer } from "../../ui/SettingContainer";
 
@@ -24,6 +25,7 @@ export const SystemAudioDeviceSelector: React.FC<
     systemAudioAvailability,
   } = useSettings();
 
+  // `null` means the probe has never answered, not that the answer was no.
   if (
     systemAudioAvailability === null ||
     systemAudioAvailability === "unavailable_no_sound_server"
@@ -36,7 +38,17 @@ export const SystemAudioDeviceSelector: React.FC<
     (getSetting("system_audio_enabled") ?? false) ||
     (dictation?.system_audio_enabled ?? false);
   const muteEnabled = getSetting("mute_while_recording") ?? false;
-  const selectedDevice = getSetting("system_audio_device") || "Default";
+  const savedDevice = getSetting("system_audio_device");
+  // "Follow the system default" is persisted as null, and the sentinel option
+  // is matched by `id`, so the unset case has to resolve to that id or the
+  // dropdown matches nothing and shows its placeholder instead. Legacy Windows
+  // values are plain device names, which are also the ids the backend reports,
+  // so they resolve as themselves. "Default" is the pre-sentinel spelling the
+  // write path still maps back to null; accept it on the way in for symmetry.
+  const selectedDevice =
+    !savedDevice || savedDevice === "Default"
+      ? DEFAULT_SYSTEM_AUDIO_DEVICE.id
+      : savedDevice;
   const options = systemAudioDevices.map((device: SystemAudioDevice) => ({
     value: device.id,
     label: device.label,
@@ -60,12 +72,10 @@ export const SystemAudioDeviceSelector: React.FC<
             ? t("settings.sound.outputDevice.loading")
             : t("settings.sound.outputDevice.placeholder")
         }
-        disabled={
-          disabled ||
-          isUpdating("system_audio_device") ||
-          isLoading ||
-          systemAudioDevices.length === 0
-        }
+        // Deliberately not disabled on an empty list: opening the dropdown is
+        // what calls onRefresh, so disabling it while empty would leave the
+        // list with no way to fill itself.
+        disabled={disabled || isUpdating("system_audio_device") || isLoading}
         onRefresh={refreshSystemAudioDevices}
       />
     </SettingContainer>

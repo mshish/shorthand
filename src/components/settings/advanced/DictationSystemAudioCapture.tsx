@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { commands, type DictationSettings } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { useModelStore } from "@/stores/modelStore";
@@ -25,10 +26,14 @@ export const DictationSystemAudioCapture: React.FC<
     refreshSettings,
     refreshSystemAudioAvailability,
     systemAudioAvailability,
+    isProbingSystemAudio,
   } = useSettings();
   const models = useModelStore((state) => state.models);
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // `null` means the probe has never answered, not that the answer was no.
+  // A re-probe leaves the last answer in place, so this row stays mounted and
+  // its local isUpdating state survives the refresh it triggered.
   if (
     systemAudioAvailability === null ||
     systemAudioAvailability === "unavailable_no_sound_server"
@@ -52,11 +57,26 @@ export const DictationSystemAudioCapture: React.FC<
       onChange={async (enabled) => {
         setIsUpdating(true);
         try {
+          // tauri-specta returns a backend refusal as a resolved
+          // {status: "error"}, and ToggleSwitch.onChange returns void, so
+          // rethrowing here would only produce an unhandled rejection and a
+          // toggle that silently snaps back. Report it the way the rest of
+          // the settings UI reports a rejected change.
           const result =
             await commands.changeDictationSystemAudioEnabledSetting(enabled);
           if (result.status === "error") {
-            throw new Error(result.error);
+            console.error(
+              "Failed to update dictation system audio capture:",
+              result.error,
+            );
+            toast.error(String(result.error));
           }
+        } catch (error) {
+          console.error(
+            "Failed to update dictation system audio capture:",
+            error,
+          );
+          toast.error(String(error));
         } finally {
           await Promise.all([
             refreshSettings(),
@@ -65,7 +85,7 @@ export const DictationSystemAudioCapture: React.FC<
           setIsUpdating(false);
         }
       }}
-      isUpdating={isUpdating}
+      isUpdating={isUpdating || isProbingSystemAudio}
       disabled={muteEnabled || !supportsStreaming}
       label={t("settings.advanced.systemAudio.label")}
       description={description}

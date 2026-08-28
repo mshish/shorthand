@@ -20,9 +20,12 @@ export const SystemAudioCapture: React.FC<SystemAudioCaptureProps> = ({
     isUpdating,
     systemAudioAvailability,
     refreshSystemAudioAvailability,
+    isProbingSystemAudio,
   } = useSettings();
   const models = useModelStore((state) => state.models);
 
+  // `null` means the probe has never answered, not that the answer was no.
+  // A re-probe leaves the last answer in place, so this row stays mounted.
   if (
     systemAudioAvailability === null ||
     systemAudioAvailability === "unavailable_no_sound_server"
@@ -47,7 +50,7 @@ export const SystemAudioCapture: React.FC<SystemAudioCaptureProps> = ({
         await updateSetting("system_audio_enabled", enabled);
         await refreshSystemAudioAvailability();
       }}
-      isUpdating={isUpdating("system_audio_enabled")}
+      isUpdating={isUpdating("system_audio_enabled") || isProbingSystemAudio}
       disabled={muteEnabled || !supportsStreaming}
       label={t("settings.advanced.systemAudio.label")}
       description={description}
