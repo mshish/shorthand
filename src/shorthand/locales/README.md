@@ -30,7 +30,7 @@ One locale is out of scope for that byte-identity guarantee today:
 `src/i18n/locales/tr/translation.json` carries 8 pre-existing keys whose
 Turkish wording drifted from upstream's after an upstream key rename. That is
 a translation-quality question, not fork content in the wrong place, and
-`check:locale-drift` deliberately checks key *presence* only, so it does not
+`check:locale-drift` deliberately checks key _presence_ only, so it does not
 flag it. See `docs/superpowers/plans/2026-08-26-fork-only-translation-catalogues.md`
 for the full accounting.
 
@@ -58,7 +58,7 @@ complete UI while `check:fork-translations` refuses to let it stay partial.
 That base-then-layer order is also why an unrecognised or missing locale
 file falls back to English rather than to a raw key path.
 
-## Adding a *new* string — read this first
+## Adding a _new_ string — read this first
 
 Before adding a key here, check whether upstream already has it:
 

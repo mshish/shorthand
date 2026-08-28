@@ -58,16 +58,18 @@ const LOCALES_DIR = path.join(
  * consumers — neither is browser code — but it does mean this file must never
  * be imported into the app bundle itself.
  */
-const FORK_CATALOGUES: Record<string, Record<string, string>> =
-  Object.fromEntries(
-    fs
-      .readdirSync(LOCALES_DIR)
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => [
-        file.slice(0, -".json".length),
-        JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, file), "utf8")),
-      ]),
-  );
+const FORK_CATALOGUES: Record<
+  string,
+  Record<string, string>
+> = Object.fromEntries(
+  fs
+    .readdirSync(LOCALES_DIR)
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => [
+      file.slice(0, -".json".length),
+      JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, file), "utf8")),
+    ]),
+);
 
 /**
  * The fork's strings for one locale: English as the base, that locale's own

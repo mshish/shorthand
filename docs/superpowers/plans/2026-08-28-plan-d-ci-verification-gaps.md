@@ -21,16 +21,16 @@ This plan was requested as "add GitHub Actions macOS builds, and Linux if it
 doesn't exist." **Both already exist.** Verified on 2026-08-28 against
 `.github/workflows/`:
 
-| Workflow | Trigger | Platforms |
-| --- | --- | --- |
-| `build-test.yml` | `workflow_dispatch` only | macos-26, macos-latest, ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, windows-latest, windows-11-arm |
-| `main-build.yml` | push to `main` | same seven |
-| `pr-test-build.yml` | `workflow_dispatch` with a PR number | same seven |
-| `build.yml` | `workflow_call` (the shared implementation) | parameterised |
-| `test.yml` | push to `main`, **and pull_request**, paths `src-tauri/**` | **ubuntu-24.04 only** |
-| `code-quality.yml` | paths `src/**` | ubuntu-latest, frontend only |
-| `playwright.yml` | paths `src/**` | ubuntu-latest |
-| `nix-check.yml` | — | ubuntu-24.04 |
+| Workflow            | Trigger                                                    | Platforms                                                                                            |
+| ------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `build-test.yml`    | `workflow_dispatch` only                                   | macos-26, macos-latest, ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, windows-latest, windows-11-arm |
+| `main-build.yml`    | push to `main`                                             | same seven                                                                                           |
+| `pr-test-build.yml` | `workflow_dispatch` with a PR number                       | same seven                                                                                           |
+| `build.yml`         | `workflow_call` (the shared implementation)                | parameterised                                                                                        |
+| `test.yml`          | push to `main`, **and pull_request**, paths `src-tauri/**` | **ubuntu-24.04 only**                                                                                |
+| `code-quality.yml`  | paths `src/**`                                             | ubuntu-latest, frontend only                                                                         |
+| `playwright.yml`    | paths `src/**`                                             | ubuntu-latest                                                                                        |
+| `nix-check.yml`     | —                                                          | ubuntu-24.04                                                                                         |
 
 Do not add a macOS build job. Read the table again and confirm it still holds
 before doing anything — if it has changed since 2026-08-28, re-derive the gap
@@ -41,7 +41,7 @@ rather than trusting this plan's framing.
 **Nothing compiles macOS or Windows code before it reaches `main`.**
 
 - `main-build.yml` builds all seven platforms — but only on **push to `main`**,
-  which is *after* the merge. It catches breakage; it does not prevent it.
+  which is _after_ the merge. It catches breakage; it does not prevent it.
 - `pr-test-build.yml` and `build-test.yml` cover every platform but are
   **`workflow_dispatch`** — a human has to remember, and know to.
 - `test.yml` is the only thing that runs automatically on a pull request, and it
@@ -94,7 +94,7 @@ the agent writing the plan itself. Follow it.
 3. **Review in a separate subagent** — never the one that implemented. Give the
    reviewer the plan, the diff, and an explicit instruction to verify claims
    against primary sources rather than reasoning about them. The highest-value
-   review on this branch built throwaway crates to *compile* its findings instead
+   review on this branch built throwaway crates to _compile_ its findings instead
    of asserting them.
 4. **Verify yourself.** Do not trust an implementer's self-report of a passing
    gate. Run it. On this branch an implementer's verification loop was silently

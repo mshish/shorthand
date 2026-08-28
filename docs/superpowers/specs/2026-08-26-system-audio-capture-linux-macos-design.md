@@ -87,7 +87,7 @@ entitlement is required (the app does not use App Sandbox; verified against
 `Entitlements.plist`, which declares only microphone/audio-input).
 
 **There is no public API to precheck this permission.** It is requested
-implicitly on first capture attempt, so status can only be *observed* from an
+implicitly on first capture attempt, so status can only be _observed_ from an
 attempt's outcome, never queried ahead of time.
 
 The steep cost, confirmed against cpal's own compatibility table:
@@ -98,7 +98,7 @@ That **macOS 14.2 floor applies to the entire CoreAudio backend**, not just
 loopback. cpal 0.17+ references `AudioHardwareCreateProcessTap`
 unconditionally, so on older macOS it fails both at link time and at runtime
 with "Symbol not found" ([cpal#1241](https://github.com/RustAudio/cpal/issues/1241)).
-The follow-up PR only *documented* the requirement; there is no weak-linking
+The follow-up PR only _documented_ the requirement; there is no weak-linking
 mitigation, and nothing in the changelog since restores older support. The app
 currently declares `minimumSystemVersion: "10.15"`.
 
@@ -182,7 +182,7 @@ capture produces a second lane, follow-stream publishes it automatically.
    dropping macOS 10.15–14.5 excludes pre-2018 Macs that cannot run Sonoma,
    including Intel models `BUILD.md` explicitly supports. In exchange, the
    implementation is materially simpler — cpal provides the tap, and because
-   14.6 is *at* the loopback requirement, **no runtime OS-version check is
+   14.6 is _at_ the loopback requirement, **no runtime OS-version check is
    needed anywhere**; `SystemAudioAvailability` never reports a version failure
    on macOS. Users on 14.2–14.5 can reach 14.6 via a free same-major update.
 
@@ -195,7 +195,7 @@ capture produces a second lane, follow-stream publishes it automatically.
 
 4. **Three phases, one branch, shipped together.** The work splits into a
    dependency migration and two platform enablements, kept as separate
-   *documents* so each can be reviewed and executed in sequence — but they are
+   _documents_ so each can be reviewed and executed in sequence — but they are
    not separately shippable, and no intermediate state reaches users. That
    removes a class of otherwise-necessary work: a phase need not leave the
    feature safe or coherent for a platform a later phase completes. Commits
@@ -217,7 +217,7 @@ capture produces a second lane, follow-stream publishes it automatically.
    the flow is: attempt capture → classify a TCC-denial-shaped failure → surface
    a "grant access" affordance opening System Settings. Modelled on the existing
    Windows microphone-permission pattern in `commands/audio.rs`, reused as a
-   *pattern*, not shared code — the underlying mechanisms differ (registry read
+   _pattern_, not shared code — the underlying mechanisms differ (registry read
    vs. observed failure).
 
 7. **Linux needs no permission UX at all** — no consent flow, no deep link, no
@@ -254,7 +254,7 @@ their phases land.
   matrix declaring a macOS deployment target.
 - Delete `#[cfg(windows)]` from the portable system-audio machinery in
   `recorder.rs`, `managers/audio.rs`, `managers/transcription.rs`, so it
-  compiles unconditionally. Device *resolution* remains unimplemented for
+  compiles unconditionally. Device _resolution_ remains unimplemented for
   Linux/macOS at this stage — `get_effective_system_audio_device` returns
   `None` there, so the feature is inert but the code is live.
 - Windows regression pass is the gate: this plan must not change Windows
@@ -281,13 +281,13 @@ their phases land.
 - Implement macOS device resolution in `get_effective_system_audio_device`
   (output device → cpal loopback input stream, as on Windows).
 - Add `NSAudioCaptureUsageDescription` to `Info.plist`. This string is shown
-  verbatim in the OS consent dialog and *is* the permission UX.
+  verbatim in the OS consent dialog and _is_ the permission UX.
 - Observe permission state from capture attempts; expose it via
   `get_system_audio_availability` as `PermissionDenied`, and add an
   "open privacy settings" command. No OS-version check (Decision 2).
 - Frontend: permission-denied CTA reusing the existing settings-link pattern.
 - Establish empirically how cpal reports a denied tap before building the
-  permission classifier on it: an open that *fails* is detectable, an open that
+  permission classifier on it: an open that _fails_ is detectable, an open that
   succeeds and silently delivers zeros is not, and the two demand different
   designs.
 - The upstream "tap degrades to all-zero buffers after long uptime" bug is
@@ -338,13 +338,13 @@ and an independent Codex review of the first-draft plans. Corrections:
 - The first draft claimed Windows used a bare cpal call and that porting was
   mechanical cfg-widening. In fact the call is portable but is wrapped in
   RT-safety plumbing that was gated Windows-only for no intrinsic reason; the
-  right move is gate *removal*, not widening. The draft also under-scoped the
+  right move is gate _removal_, not widening. The draft also under-scoped the
   gate surface (~70 sites in `recorder.rs` alone, including
-  `with_system_vad`/`with_system_audio_callback` whose *definitions* were gated,
+  `with_system_vad`/`with_system_audio_callback` whose _definitions_ were gated,
   so the draft plans would not have compiled).
 - The cpal bump was treated as a one-line change. It is a breaking migration
   that additionally conflicts with the pinned rodio fork's cpal 0.16 and raises
-  the macOS floor from 10.15 to 14.2+ for *all* audio. Now a separate
+  the macOS floor from 10.15 to 14.2+ for _all_ audio. Now a separate
   prerequisite plan, with the floor raised to 14.6 and rodio re-forked, both by
   explicit decision.
 - Follow-stream was listed as an open concern; verified to need no work.
@@ -360,11 +360,11 @@ found six more defects, all confirmed against the code and fixed:
   (`recorder.rs:516`) and was discarded at `recorder.rs:571`; Plan A now
   surfaces it as `AudioRecorder::open() -> Result<bool, _>` and
   `AudioRecordingManager::system_audio_active()`, which Plan C classifies on.
-- **A third `cfg` *pair* was missed** at `recorder.rs:570-582`. Pairs must be
+- **A third `cfg` _pair_ was missed** at `recorder.rs:570-582`. Pairs must be
   merged, not half-deleted; Plan A now enumerates pairs before touching
   anything.
 - **`get_preferred_loopback_config` was assumed portable.** Its own comment
-  states a WASAPI-specific rationale for querying an *output* config, which
+  states a WASAPI-specific rationale for querying an _output_ config, which
   need not hold where the loopback endpoint is an ordinary input device. Now
   falls back to the input config.
 - **Linux device/config resolution was assumed to match Windows' shape.**
@@ -385,7 +385,6 @@ found six more defects, all confirmed against the code and fixed:
   guarded against is unconfirmed on this codebase. Plan C Task 6 now records
   the deferral, why, and the four constraints any real implementation must
   meet.
-
 
 **2026-08-27 (third pass)** — a further review, plus the decision that all three
 phases ship on one branch. Changes:
@@ -412,7 +411,7 @@ phases ship on one branch. Changes:
   migrates display to `description()` and explicitly defers changing the
   persisted key to `id()`, which would invalidate every saved device selection.
 - **Sample-format ranking changed** to `F32 > F64 > integers by bit-depth
-  descending`, so I24/U24/F64 can now be selected where I16 was before. The
+descending`, so I24/U24/F64 can now be selected where I16 was before. The
   recorder's match arms rejected those, which would have meant silent capture
   failure on affected hardware; Phase A adds them.
 - **`libpulse-dev` was dropped** — cpal's PulseAudio backend is a pure-Rust
@@ -431,18 +430,18 @@ whose "What the research established" section carries the evidence.
   the load-bearing error.** A denied tap does not fail:
   `AudioHardwareCreateProcessTap`, the aggregate device and the stream start all
   return `noErr`, the callback fires at normal cadence, and every sample is
-  zero. The author of cpal's macOS loopback backend describes it as *"You
-  silently get denied, and record complete silence."* So an attempt's outcome
+  zero. The author of cpal's macOS loopback backend describes it as _"You
+  silently get denied, and record complete silence."_ So an attempt's outcome
   observes nothing, and everything built on it — the probe, the classifier, the
   observed-state cache — could not have worked. cpal cannot report it either:
   `ErrorKind::PermissionDenied` is reachable only from two AudioUnit/file
   statuses, and `AudioHardwareCreateProcessTap` is a HAL call.
 - **"There is no public API to precheck this permission" is true, but the
-  conclusion drawn from it was wrong.** There is no *public* API; there is a
+  conclusion drawn from it was wrong.** There is no _public_ API; there is a
   private one, TCC's `TCCAccessPreflight`/`TCCAccessRequest`, and it is what
   every shipping consumer of this API uses — AudioCap, vibe, muesly,
   osci-render, and cpal's own unmerged PR #1257. Plan C reads it in a fork-only
-  module behind a Cargo feature, so permission is known *before* any capture is
+  module behind a Cargo feature, so permission is known _before_ any capture is
   attempted. Point 6's "necessarily reactive" framing no longer holds.
 - **The purple/orange claim is inverted.** Orange is the microphone; purple is
   system-audio recording — and ScreenCaptureKit produces purple too, so the
@@ -453,7 +452,7 @@ whose "What the research established" section carries the evidence.
   ordinary input capture solely on whether the device reports no input configs
   (`macos/device.rs:723-735`, `:685-690`). An output device that also has inputs
   — a USB interface, BlackHole, an aggregate device, a Bluetooth headset in HFP
-  — silently records *its inputs* instead of the system mix. Plan C Task 4 adds
+  — silently records _its inputs_ instead of the system mix. Plan C Task 4 adds
   a guard.
 - **Unchanged and still correct:** the consent string, the absence of a
   hardened-runtime entitlement, that this is a lighter permission than Screen

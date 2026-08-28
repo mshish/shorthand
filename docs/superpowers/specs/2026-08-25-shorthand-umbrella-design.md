@@ -71,7 +71,7 @@ must arrive renameable rather than pre-rewritten.
 Verified: `FORK_ONLY_STRINGS` in `src/shorthand/branding.ts:32` is a
 general mechanism for arbitrary new keys, not merely product-name
 substitution. It is a `Record<string, string>` written into the catalogue
-by `setByPath` *after* substitution runs (`branding.ts:289-291`), so
+by `setByPath` _after_ substitution runs (`branding.ts:289-291`), so
 fork-only strings are authoritative and immune to the rename. It already
 carries far more than the product name — whole redesigned sections
 (`settings.modes.*`, `settings.aiCleanup.*`) live there today.
@@ -98,7 +98,7 @@ hundreds later is worse than migrating eighty now.
 
 Proposed: introduce fork-only catalogues at `src/shorthand/locales/<lang>.json`
 and migrate `FORK_ONLY_STRINGS` into `en.json` unchanged. The Vite plugin
-merges them at exactly the point it merges the object today — *after* brand
+merges them at exactly the point it merges the object today — _after_ brand
 substitution, preserving the ordering `branding.ts:15-17` depends on for
 fork-only strings to be immune to the rename. Adding `de.json` later is
 then purely additive, and translators get ordinary i18next catalogue files
@@ -108,7 +108,7 @@ Boundaries that do not change: fork-only catalogues live under
 `src/shorthand/`, never `src/i18n/locales/`, so upstream's 24 files stay
 byte-identical and `check:translations` parity is untouched.
 
-This needs one new gate — a parity check across the *fork-only* catalogues,
+This needs one new gate — a parity check across the _fork-only_ catalogues,
 mirroring what `check:translations` does for upstream's. Without it, a
 `de.json` missing a key fails silently to English.
 
@@ -118,7 +118,7 @@ phases below. It could ship before them, and probably should.
 ### 3. The app bundles core as a sidecar, for the Obsidian-free path
 
 The app's bundled core is not redundant with the plugin's. The plugin
-bundles core at *build* time and runs it in-process; it never spawns a
+bundles core at _build_ time and runs it in-process; it never spawns a
 core binary. The app's sidecar is therefore what enables capture with **no
 vault at all** — Google Docs sink, or plain markdown on disk.
 
@@ -130,9 +130,9 @@ incompatibility** rather than assuming or enforcing.
 ### 4. Reverse the spawn topology (open — see Open questions)
 
 Current topology runs opposite to "app manages core". Core's
-`StreamClient` spawns `shorthand.exe`; the running app is a *server*
+`StreamClient` spawns `shorthand.exe`; the running app is a _server_
 (`hub.rs`/`server.rs`) and `shorthand.exe --follow-stream` is a
-short-lived *client* that connects to it, which is why it supports 8
+short-lived _client_ that connects to it, which is why it supports 8
 concurrent followers.
 
 Correction to an earlier draft of this section: the follower does **not**
@@ -163,7 +163,7 @@ Verified against primary sources:
 - **No install API exists.** Obsidian's URI reference documents only
   `open`, `new`, `daily`, `unique`, `search`, `choose-vault`.
   `obsidian://show-plugin?id=<id>` is real and first-party — Obsidian's own
-  help vault uses it — but undocumented, and it only *opens* the plugin's
+  help vault uses it — but undocumented, and it only _opens_ the plugin's
   entry in the community browser. The user still clicks Install.
 - **Manual placement is officially sanctioned.** help.obsidian.md states
   plugins "can be installed manually at this location"
@@ -211,19 +211,19 @@ put a section in the sidebar and is not the path to use.
 
 Fork-only files — no merge cost:
 
-| File | Change |
-| --- | --- |
-| `src/shorthand/sections.ts` | register the integrations section |
-| `src/shorthand/branding.ts` | add keys to `FORK_ONLY_STRINGS` |
-| `src/shorthand/settings/integrations/` | the settings surface (new) |
-| `src-tauri/src/integrations/` | sidecar, credentials, vault I/O (new) |
+| File                                   | Change                                |
+| -------------------------------------- | ------------------------------------- |
+| `src/shorthand/sections.ts`            | register the integrations section     |
+| `src/shorthand/branding.ts`            | add keys to `FORK_ONLY_STRINGS`       |
+| `src/shorthand/settings/integrations/` | the settings surface (new)            |
+| `src-tauri/src/integrations/`          | sidecar, credentials, vault I/O (new) |
 
 Shared files — keep to exactly this list:
 
-| File | Change |
-| --- | --- |
-| `src-tauri/src/lib.rs` | register the module and its `#[tauri::command]`s |
-| `src-tauri/src/settings.rs` | settings struct fields and defaults |
+| File                        | Change                                            |
+| --------------------------- | ------------------------------------------------- |
+| `src-tauri/src/lib.rs`      | register the module and its `#[tauri::command]`s  |
+| `src-tauri/src/settings.rs` | settings struct fields and defaults               |
 | `src-tauri/tauri.conf.json` | `externalBin` for the sidecar, `resources` if any |
 
 Generated and test surfaces that must be updated, not authored:
@@ -350,7 +350,7 @@ against its Rust writer — is unaffected and can continue regardless.
    destination.
 6. **Sidecar vs. binary discovery.** Core and the plugin locate
    `shorthand.exe` through "Shorthand's install locations". Confirm that
-   bundling core *inside* the app's resources does not move anything those
+   bundling core _inside_ the app's resources does not move anything those
    two rely on finding.
 
 ## Out of scope

@@ -64,8 +64,8 @@ every frontend behaviour below is unverified. Run `bun run tauri dev`.
 4. Trigger meeting mode's shortcut (`ctrl+alt+space`, macOS
    `ctrl+shift+space`): **nothing is pasted**, and the transcript still
    reaches the follower.
-5. **The cross-talk test.** Set the two modes to *different* paste methods and
-   *different* overlay styles. Confirm each mode uses its own. This is the
+5. **The cross-talk test.** Set the two modes to _different_ paste methods and
+   _different_ overlay styles. Confirm each mode uses its own. This is the
    scenario a shared-state bug produces, and it is the single most valuable
    manual check on this list.
 6. Set dictation's overlay to None while meeting's is Live. Confirm no overlay
@@ -74,7 +74,7 @@ every frontend behaviour below is unverified. Run `bun run tauri dev`.
    dictation runs reach History, tagged "Dictation".
 8. Enable dictation post-processing: the Post-Processing section appears in the
    sidebar, and the dictation AI-cleanup shortcut registers.
-9. Bind `ctrl+space` to something else first, *then* enable dictation. The
+9. Bind `ctrl+space` to something else first, _then_ enable dictation. The
    toggle should fail to stick and show the shortcut-conflict message. This
    verifies the error-propagation chain fixed in `8c9ff1c` — it was dead code
    until then, and it is the one path with no automated coverage.

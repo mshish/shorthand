@@ -10,7 +10,7 @@ Shorthand currently persists **both** artifacts of every transcription, uncondit
   (`hm.save_entry(...)`, around line 889, and again on the transcription-error
   path around line 967)
 
-The only existing controls are *retention* — `history_limit` and
+The only existing controls are _retention_ — `history_limit` and
 `recording_retention_period` — which prune after the fact. Note that
 `recording_retention_period: "never"` means "never **delete**", not "never
 save"; it is unrelated to this work, and the new labels must not read as
@@ -23,14 +23,14 @@ Both are added here, defaulting to **disabled**, as privacy controls.
 
 Two independent boolean settings, both defaulting to `false`:
 
-| Setting            | `false` (default)                                | `true`                            |
-| ------------------ | ------------------------------------------------ | --------------------------------- |
-| `save_recordings`  | no WAV file is written to disk                   | WAV written as today              |
-| `save_transcripts` | no transcript text is stored in `history.db`     | transcript stored as today        |
+| Setting            | `false` (default)                            | `true`                     |
+| ------------------ | -------------------------------------------- | -------------------------- |
+| `save_recordings`  | no WAV file is written to disk               | WAV written as today       |
+| `save_transcripts` | no transcript text is stored in `history.db` | transcript stored as today |
 
 They are independent: any of the four combinations is legal. In all four, the
 transcript is still delivered normally (paste / clipboard / follow-stream) —
-these settings govern *persistence only*, never delivery.
+these settings govern _persistence only_, never delivery.
 
 ### The history row is the index for both artifacts
 
@@ -44,7 +44,7 @@ So the row is written iff `wav_saved || save_transcripts`.
 
 This matters for correctness, not tidiness: cleanup
 (`HistoryManager::cleanup_*`) walks DB rows to find files to delete. A WAV with
-no row would be invisible to the UI *and* to every retention policy — it would
+no row would be invisible to the UI _and_ to every retention policy — it would
 accumulate forever, which is the exact failure a privacy control must not have.
 
 ## Global Constraints
@@ -53,7 +53,7 @@ accumulate forever, which is the exact failure a privacy control must not have.
 - Both default to `false` everywhere: the serde default, `get_default_settings()`,
   and the TypeScript bindings.
 - **No settings-schema migration and no `CURRENT_SETTINGS_SCHEMA_VERSION` bump.**
-  An absent key already deserializes to `false`, which *is* the wanted default,
+  An absent key already deserializes to `false`, which _is_ the wanted default,
   for existing stores as well as fresh ones. Bumping the version would put an
   unnecessary rewrite through `apply_settings_migrations` and would break the
   blast-radius assertion in `frozen_v0_9_store_parses_strictly_and_migrates_only_paste_method`.
@@ -209,6 +209,7 @@ change violated the no-migration constraint above.
 
 2. **`src/stores/settingsStore.ts`** — add two entries to the setting-updater
    map, matching the surrounding style:
+
    ```ts
    save_recordings: (value) => commands.changeSaveRecordingsSetting(value as boolean),
    save_transcripts: (value) => commands.changeSaveTranscriptsSetting(value as boolean),
@@ -222,6 +223,7 @@ change violated the no-migration constraint above.
 
 4. **Strings** go in `FORK_ONLY_STRINGS` in `src/shorthand/branding.ts`, not in
    any locale file:
+
    ```ts
    "settings.privacy.title": "Privacy",
    "settings.privacy.saveRecordings.label": "Save recordings",
@@ -232,8 +234,9 @@ change violated the no-migration constraint above.
      "Keep the text of each transcription in your local history. Off by default; transcripts are delivered and then discarded.",
    "settings.history.transcriptNotSaved": "Transcript not saved.",
    ```
+
    Wording must not collide with Recording Retention, which controls how long
-   saved items are *kept*.
+   saved items are _kept_.
 
 5. **Placement.** Both toggles render in a `SettingsGroup` titled
    `t("settings.privacy.title")`:
@@ -247,7 +250,7 @@ change violated the no-migration constraint above.
    - `entry.file_name === ""` → do not render the `AudioPlayer`, and disable the
      re-transcribe button (there is no audio; the backend rejects it too)
    - `entry.transcription_text` empty → the existing copy claims transcription
-     *failed*. When the current `save_transcripts` setting is `false`, show
+     _failed_. When the current `save_transcripts` setting is `false`, show
      `t("settings.history.transcriptNotSaved")` instead. This reads the live
      setting rather than per-entry state, which is right for the common case
      and cannot be made exact without a new DB column — a deliberate trade.

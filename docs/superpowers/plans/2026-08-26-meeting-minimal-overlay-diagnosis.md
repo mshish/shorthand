@@ -23,12 +23,12 @@
 
 The expected warm-path order is:
 
-| Time | Event |
-| --- | --- |
-| 0 ms | Plugin sends `--cancel` |
-| ~50 ms | App schedules native hide for ~350 ms |
-| ~60 ms | Plugin sends `--toggle-transcription` |
-| ~120 ms | New capture shows the overlay |
+| Time    | Event                                    |
+| ------- | ---------------------------------------- |
+| 0 ms    | Plugin sends `--cancel`                  |
+| ~50 ms  | App schedules native hide for ~350 ms    |
+| ~60 ms  | Plugin sends `--toggle-transcription`    |
+| ~120 ms | New capture shows the overlay            |
 | ~350 ms | Old delayed hide hides the reused window |
 
 The shortcut path has no preceding cancel, which explains why Dictation appeared healthy in the report. The race itself is mode- and style-independent.
@@ -147,15 +147,15 @@ Assisted Notes is not required for this plan, but its implementation plan depend
 
 ## Files read during diagnosis
 
-| Path | Relevant behavior |
-| --- | --- |
-| `src-tauri/src/overlay.rs` | Reused window, delayed hide, main-thread show path, event cache |
-| `src-tauri/src/utils.rs` | Idle cancel still requests an overlay hide |
-| `src-tauri/src/lib.rs` | Single-instance cancel/toggle dispatch and startup cache seed |
-| `src-tauri/src/actions.rs` | Per-mode style resolution and capture lifecycle |
-| `src-tauri/src/shortcut/mod.rs` | Meeting-only cache update |
-| `D:/tools/obsidian-shorthand/src/recorder.ts` | Sequential cancel-then-toggle start path |
-| `D:/tools/obsidian-shorthand/main.ts` | Bare-toggle comparison path |
+| Path                                          | Relevant behavior                                               |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| `src-tauri/src/overlay.rs`                    | Reused window, delayed hide, main-thread show path, event cache |
+| `src-tauri/src/utils.rs`                      | Idle cancel still requests an overlay hide                      |
+| `src-tauri/src/lib.rs`                        | Single-instance cancel/toggle dispatch and startup cache seed   |
+| `src-tauri/src/actions.rs`                    | Per-mode style resolution and capture lifecycle                 |
+| `src-tauri/src/shortcut/mod.rs`               | Meeting-only cache update                                       |
+| `D:/tools/obsidian-shorthand/src/recorder.ts` | Sequential cancel-then-toggle start path                        |
+| `D:/tools/obsidian-shorthand/main.ts`         | Bare-toggle comparison path                                     |
 
 ## Deliberately not in this plan
 

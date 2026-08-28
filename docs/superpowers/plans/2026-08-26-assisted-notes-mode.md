@@ -4,11 +4,12 @@
 
 **Goal:** Add a third fixed capture mode, **Assisted Notes** — "Meeting, but solo". It streams to `--follow-stream` followers exactly as Meeting does (so the Obsidian plugin's enhancement pipeline fills the note live), captures **no** system audio, and never pastes into the focused window. The Obsidian plugin gets a command that starts it.
 
-**Architecture:** A third `Mode` variant, a new per-mode settings struct, one new CLI flag, one widened `ControlSignal` member, and one new plugin command. The sink selects an *app-owned mode by name*; it never supplies settings values. System audio and paste delivery are mode invariants, not settings. Follow-stream publication remains per-mode, while one additive lifecycle helper keeps the shared listener running whenever any enabled mode needs it. The follower `hello` advertises the new control capability, and the plugin requires that capability plus a bounded `begin` acknowledgement before it calls the capture started. Three repos are touched in a fixed order after two app prerequisites.
+**Architecture:** A third `Mode` variant, a new per-mode settings struct, one new CLI flag, one widened `ControlSignal` member, and one new plugin command. The sink selects an _app-owned mode by name_; it never supplies settings values. System audio and paste delivery are mode invariants, not settings. Follow-stream publication remains per-mode, while one additive lifecycle helper keeps the shared listener running whenever any enabled mode needs it. The follower `hello` advertises the new control capability, and the plugin requires that capability plus a bounded `begin` acknowledgement before it calls the capture started. Three repos are touched in a fixed order after two app prerequisites.
 
 **Tech Stack:** Rust/Tauri 2 + React/TypeScript (`shorthand-app`), TypeScript + Bun (`shorthand-core`), TypeScript + Bun + esbuild (`obsidian-shorthand`).
 
 **Specs this builds on:**
+
 - `docs/superpowers/specs/2026-08-20-shorthand-dictation-mode-design.md` — the per-mode settings mechanism (`apply_mode`, the mode cell, the five registration guards). Assisted Notes is a second instance of that mechanism; read it before writing any Rust.
 - `docs/superpowers/specs/2026-08-23-shorthand-brand-ux-redesign.md` Part 2 — the Modes pane's membership rule.
 - `shorthand-core/AGENTS.md` § "A change here is not done when it is tagged" — the authority on cross-repo ordering.
@@ -21,8 +22,8 @@
    - the app's own settings UI must always truthfully describe a running capture;
    - consent settings must not be settable from outside the app;
    - the CLI's small, stable flag surface must not become a settings-injection API.
-2. **Information architecture:** the Modes pane gets a **Notetaking** group holding **Meetings** and **Assisted notes**, with **Dictation** as a separate peer. Meetings and Assisted notes are grouped because they share a *destination* (follower processes); Dictation is separate because it delivers to the focused window.
-3. **The sink selects an app-owned mode.** The plugin picks *which* mode to start. It never supplies a settings value.
+2. **Information architecture:** the Modes pane gets a **Notetaking** group holding **Meetings** and **Assisted notes**, with **Dictation** as a separate peer. Meetings and Assisted notes are grouped because they share a _destination_ (follower processes); Dictation is separate because it delivers to the focused window.
+3. **The sink selects an app-owned mode.** The plugin picks _which_ mode to start. It never supplies a settings value.
 4. **`save_recordings` / `save_transcripts` default to `true`** for Assisted Notes, **and Dictation's existing `false` defaults flip to `true` in the same change.** Meeting mode's top-level `AppSettings` defaults are **not** touched. This overrides the "Consent, not preference — stays opt-in" comment currently in `dictation.rs`; that comment is now false and must be replaced (Task 3).
 5. **No system audio means no system-audio setting.** Assisted Notes always resolves `system_audio_enabled` to `false`. A default-off toggle would contradict the mode's promise as soon as a user switched it on.
 6. **A per-mode publication toggle must also participate in listener lifetime.** `follow_stream_enabled` decides whether a capture calls `hub.begin()`. A shared listener runs whenever Meeting, enabled Dictation, or enabled Assisted Notes wants publication. No mode's preference doubles as a global server switch after this change.
@@ -39,11 +40,11 @@ Two reviewed app plans land first:
 
 `shorthand-core/AGENTS.md` § "A change here is not done when it is tagged" governs the core→plugin half. The app feature is sequenced before core for a separate reason, given below.
 
-| # | Repo | What lands | Gate that must be green before moving on |
-| --- | --- | --- | --- |
-| 1 | `shorthand-app` | The mode itself: `Mode::AssistedNotes`, `AssistedNotesSettings`, listener reconciliation, two bindings, the `--toggle-assisted-notes` flag, the advertised follower capability, the Modes UI, docs. Tasks 1–11. | `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test`, `bun run test:unit`, `bun run lint`, `bun run build`, `bun run check:translations`, `bun run check:fork-translations`, `bun run check:branding`, `bun run check:settings` |
-| 2 | `shorthand-core` | `ControlSignal` gains `"toggle-assisted-notes"`; `WireEvent.hello` preserves advertised capabilities; the app-parser comment and tests cover both. Task 12. Then **commit, push, `git tag -a 0.12.0`, push the tag.** | `bun test`, `bun run typecheck`, `bun run build`, `bun run test:e2e` — all four, per `AGENTS.md` ("`bun test` transpiles without typechecking") |
-| 3 | `obsidian-shorthand` | **First step: bump the core pin to `0.12.0` and prove the install actually moved.** Then the new command and the recorder wiring. Tasks 13–15. | `npm run build` (tsc --noEmit + esbuild), `npm test` (unit + bundle-load smoke) |
+| #   | Repo                 | What lands                                                                                                                                                                                                            | Gate that must be green before moving on                                                                                                                                                                                                       |
+| --- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `shorthand-app`      | The mode itself: `Mode::AssistedNotes`, `AssistedNotesSettings`, listener reconciliation, two bindings, the `--toggle-assisted-notes` flag, the advertised follower capability, the Modes UI, docs. Tasks 1–11.       | `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test`, `bun run test:unit`, `bun run lint`, `bun run build`, `bun run check:translations`, `bun run check:fork-translations`, `bun run check:branding`, `bun run check:settings` |
+| 2   | `shorthand-core`     | `ControlSignal` gains `"toggle-assisted-notes"`; `WireEvent.hello` preserves advertised capabilities; the app-parser comment and tests cover both. Task 12. Then **commit, push, `git tag -a 0.12.0`, push the tag.** | `bun test`, `bun run typecheck`, `bun run build`, `bun run test:e2e` — all four, per `AGENTS.md` ("`bun test` transpiles without typechecking")                                                                                                |
+| 3   | `obsidian-shorthand` | **First step: bump the core pin to `0.12.0` and prove the install actually moved.** Then the new command and the recorder wiring. Tasks 13–15.                                                                        | `npm run build` (tsc --noEmit + esbuild), `npm test` (unit + bundle-load smoke)                                                                                                                                                                |
 
 **Why the app source goes first, ahead of core.** Core's new `ControlSignal` member is a promise that a compatible `shorthand --toggle-assisted-notes` parses. Landing the app commit first makes the source-level promise true before core publishes the type. It does **not** prove the user installed that binary: against an older installed app the control child exits non-zero on clap's `unexpected argument`, and `ShorthandControl.send()` maps that close at `shorthand-core/src/stream/control.ts:109-116` to `{status: "error", message: stderr}`.
 
@@ -51,7 +52,7 @@ Two reviewed app plans land first:
 
 **Why the tag is not the end.** Widening `ControlSignal` is exactly the shape of change `shorthand-core/AGENTS.md` names as breaking-by-construction (an exhaustive switch elsewhere that quietly stops being exhaustive). Step 3 is part of this unit of work, not a follow-up. If it cannot be reached, say so plainly and name what is left undone.
 
-**Version choice for core: `0.12.0`, the minor slot.** On the `0.x` line minor is the breaking slot, and although adding a union member is additive for *producers* (which is all the plugin is), it is breaking for any consumer that switches on it. Taking the minor costs nothing and keeps the rule mechanical. Do not reach for `0.11.3`.
+**Version choice for core: `0.12.0`, the minor slot.** On the `0.x` line minor is the breaking slot, and although adding a union member is additive for _producers_ (which is all the plugin is), it is breaking for any consumer that switches on it. Taking the minor costs nothing and keeps the rule mechanical. Do not reach for `0.11.3`.
 
 ---
 
@@ -64,7 +65,7 @@ Two reviewed app plans land first:
 - **`apply_mode` stays pure** and unit-tested. Every new behaviour that can be expressed there rather than at an `AppHandle`-holding call site, should be.
 - **The mode cell's doc comments are load-bearing.** `mode.rs` explains precisely why the cell is process-wide and why it is never cleared. Both reasons survive the `AtomicBool` → `AtomicU8` change unchanged; carry the comments across, do not rewrite them into something vaguer.
 - **Comments record the real reason and name the failure they prevent.** Never restate the code.
-- Conventional commit prefixes; the message explains *why*.
+- Conventional commit prefixes; the message explains _why_.
 
 ---
 
@@ -74,16 +75,16 @@ Read `src-tauri/src/shorthand/mode.rs::mode_for_binding`, `src-tauri/src/transcr
 
 **New ids: `assisted_notes` and `assisted_notes_with_post_process`.**
 
-**Is the `_with_post_process` variant needed? Yes — it is the only way the mode can ever run AI cleanup.** `TranscribeAction` carries `post_process: bool` as a field of the action, set at `ACTION_MAP` construction from *which binding fired* (`actions.rs:1173-1188`). `process_transcription_output` reads that flag and nothing else — it never consults `settings.post_process_enabled`, which gates only *registration* of the `_with_post_process` binding and the UI rows. So without a second binding, `assisted_notes.post_process_enabled` and `assisted_notes.post_process_selected_prompt_id` would be permanently dead fields: settings the UI offers that cannot affect any capture. That is precisely the untruthfulness decision 1 exists to prevent.
+**Is the `_with_post_process` variant needed? Yes — it is the only way the mode can ever run AI cleanup.** `TranscribeAction` carries `post_process: bool` as a field of the action, set at `ACTION_MAP` construction from _which binding fired_ (`actions.rs:1173-1188`). `process_transcription_output` reads that flag and nothing else — it never consults `settings.post_process_enabled`, which gates only _registration_ of the `_with_post_process` binding and the UI rows. So without a second binding, `assisted_notes.post_process_enabled` and `assisted_notes.post_process_selected_prompt_id` would be permanently dead fields: settings the UI offers that cannot affect any capture. That is precisely the untruthfulness decision 1 exists to prevent.
 
 Default combos (all must remain pairwise distinct on each platform — `default_bindings_have_distinct_shortcuts_on_this_platform` in `settings.rs` covers only the host platform, so the other two are a review-time reading of the `cfg` branches):
 
 | Platform | `assisted_notes` | `assisted_notes_with_post_process` |
-| --- | --- | --- |
-| Windows | `ctrl+alt+n` | `ctrl+alt+shift+n` |
-| macOS | `ctrl+option+n` | `ctrl+shift+option+n` |
-| Linux | `ctrl+alt+n` | `ctrl+alt+shift+n` |
-| other | `alt+n` | `alt+shift+n` |
+| -------- | ---------------- | ---------------------------------- |
+| Windows  | `ctrl+alt+n`     | `ctrl+alt+shift+n`                 |
+| macOS    | `ctrl+option+n`  | `ctrl+shift+option+n`              |
+| Linux    | `ctrl+alt+n`     | `ctrl+alt+shift+n`                 |
+| other    | `alt+n`          | `alt+shift+n`                      |
 
 `space` is exhausted: the four existing transcribe/dictate combos use every ctrl/alt/shift permutation of it on Windows and Linux, and `alt+space`/`shift+space`/`win+space` all belong to the OS. `n` for "notes" is the first free letter that reads as a mnemonic. `change_binding` rejects an empty binding (`shortcut/mod.rs:118`), so "ship it unbound" is not available.
 
@@ -104,7 +105,7 @@ There are **24** directories under `src/i18n/locales/` (`ar bg cs da de en es fr
 Why, given that the dictation branch did add binding keys to all 24 files:
 
 - The prerequisite fork-catalogue plan keeps upstream catalogues byte-identical and gives translatable fork content its own locale-aware catalogue. Assisted Notes strings are genuinely fork-only, so they belong in that catalogue rather than `english-copy.json`.
-- `check:translations` compares key parity between `en` and the other 23 catalogues **on disk**. Fork-only strings never reach disk, so it cannot fail on them. Adding keys to `en/translation.json` alone *would* fail it; adding them to all 24 is 24 files of churn in the files upstream touches most.
+- `check:translations` compares key parity between `en` and the other 23 catalogues **on disk**. Fork-only strings never reach disk, so it cannot fail on them. Adding keys to `en/translation.json` alone _would_ fail it; adding them to all 24 is 24 files of churn in the files upstream touches most.
 - `check:branding` still sees the exported union and asserts each deliberate fork key survives the merge. `check:fork-translations` checks raw fork catalogues when translated files are added.
 
 Only `en.json` exists today, so other locales fall back to English until contributors add matching fork catalogues.
@@ -115,29 +116,29 @@ Only `en.json` exists today, so other locales fall back to English until contrib
 
 Included fields, and how each default is justified against Meeting's (`AppSettings`) and Dictation's:
 
-| Field | Assisted Notes | Meeting | Dictation | Justification |
-| --- | --- | --- | --- | --- |
-| `enabled` | `false` | n/a — Meeting cannot be switched off | `false` | Enabling registers two global shortcuts, which can collide with another app. Fork-only features ship off (`AGENTS.md` § "Give fork-only features a boundary"). |
-| `push_to_talk` | `false` | `false` | `true` | Meeting's reasoning applies unchanged: a note-taking session runs as long as the thinking does, and nobody holds a key for that. Only Dictation, which is seconds long, is held. |
-| `clipboard_handling` | `ClipboardHandling::default()` | user's value | `ClipboardHandling::default()` | **Per-mode despite the mode never pasting.** `clipboard::paste()` runs its tail regardless of paste method: the `CopyToClipboard` branch at `clipboard.rs:808` writes the transcript to the clipboard even under `PasteMethod::None`. Omitting this field would let Meeting's value silently govern an Assisted Notes capture. |
-| `append_trailing_space` | `false` | `false` | `false` | Live for the same reason: the appended text is what `write_text_to_clipboard` receives (`clipboard.rs:730` then `:808`). Off, matching both modes. |
-| `overlay_style` | `OverlayStyle::Minimal` | `Minimal` | `Minimal` | The compact pill. The Live panel would sit on top of the note being filled in — the exact window the user is watching. Same reasoning as Meeting's `default_overlay_style_is_minimal`, and stronger here, because the enhanced note *is* the live view. |
-| `save_recordings` | **`true`** | `false` | **`true`** (flipped by this plan) | Decided by the owner. See Task 3 for the comment that must replace the current one. |
-| `save_transcripts` | **`true`** | `false` | **`true`** (flipped by this plan) | Same. |
-| `post_process_enabled` | `false` | `false` (`default_post_process_enabled()`) | `false` | Cleanup needs a configured provider and API key. Nothing that calls a remote endpoint can ship on. |
-| `post_process_selected_prompt_id` | `None` | `None` | `None` | Falls through to the shared prompt library's default. |
-| `follow_stream_enabled` | **`true`** | `true` | `false` | **The defining similarity to Meeting.** A follower filling the note is the entire reason this mode exists. Dictation's text has already arrived where it was wanted. |
-| `post_process_provider_id` | `default_post_process_provider_id()` | same | same | Same provider until someone chooses otherwise, so behaviour is unchanged for anyone who never sets one. |
-| `post_process_model` | `None` | n/a (the shared `post_process_models` map) | `None` | `None` leaves the shared provider→model map exactly as it was. |
+| Field                             | Assisted Notes                       | Meeting                                    | Dictation                         | Justification                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------- | ------------------------------------ | ------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`                         | `false`                              | n/a — Meeting cannot be switched off       | `false`                           | Enabling registers two global shortcuts, which can collide with another app. Fork-only features ship off (`AGENTS.md` § "Give fork-only features a boundary").                                                                                                                                                                 |
+| `push_to_talk`                    | `false`                              | `false`                                    | `true`                            | Meeting's reasoning applies unchanged: a note-taking session runs as long as the thinking does, and nobody holds a key for that. Only Dictation, which is seconds long, is held.                                                                                                                                               |
+| `clipboard_handling`              | `ClipboardHandling::default()`       | user's value                               | `ClipboardHandling::default()`    | **Per-mode despite the mode never pasting.** `clipboard::paste()` runs its tail regardless of paste method: the `CopyToClipboard` branch at `clipboard.rs:808` writes the transcript to the clipboard even under `PasteMethod::None`. Omitting this field would let Meeting's value silently govern an Assisted Notes capture. |
+| `append_trailing_space`           | `false`                              | `false`                                    | `false`                           | Live for the same reason: the appended text is what `write_text_to_clipboard` receives (`clipboard.rs:730` then `:808`). Off, matching both modes.                                                                                                                                                                             |
+| `overlay_style`                   | `OverlayStyle::Minimal`              | `Minimal`                                  | `Minimal`                         | The compact pill. The Live panel would sit on top of the note being filled in — the exact window the user is watching. Same reasoning as Meeting's `default_overlay_style_is_minimal`, and stronger here, because the enhanced note _is_ the live view.                                                                        |
+| `save_recordings`                 | **`true`**                           | `false`                                    | **`true`** (flipped by this plan) | Decided by the owner. See Task 3 for the comment that must replace the current one.                                                                                                                                                                                                                                            |
+| `save_transcripts`                | **`true`**                           | `false`                                    | **`true`** (flipped by this plan) | Same.                                                                                                                                                                                                                                                                                                                          |
+| `post_process_enabled`            | `false`                              | `false` (`default_post_process_enabled()`) | `false`                           | Cleanup needs a configured provider and API key. Nothing that calls a remote endpoint can ship on.                                                                                                                                                                                                                             |
+| `post_process_selected_prompt_id` | `None`                               | `None`                                     | `None`                            | Falls through to the shared prompt library's default.                                                                                                                                                                                                                                                                          |
+| `follow_stream_enabled`           | **`true`**                           | `true`                                     | `false`                           | **The defining similarity to Meeting.** A follower filling the note is the entire reason this mode exists. Dictation's text has already arrived where it was wanted.                                                                                                                                                           |
+| `post_process_provider_id`        | `default_post_process_provider_id()` | same                                       | same                              | Same provider until someone chooses otherwise, so behaviour is unchanged for anyone who never sets one.                                                                                                                                                                                                                        |
+| `post_process_model`              | `None`                               | n/a (the shared `post_process_models` map) | `None`                            | `None` leaves the shared provider→model map exactly as it was.                                                                                                                                                                                                                                                                 |
 
 **Deliberately absent from the struct**, with what governs them instead:
 
-| Not a field | What happens instead | Why |
-| --- | --- | --- |
-| `paste_method` | `apply_mode` hardcodes `PasteMethod::None` for `Mode::AssistedNotes` | "Never types into the focused window" is the mode's *definition*, not a preference inside it. The top-level value is Meeting's Advanced escape hatch; a user who flipped it there must not thereby make Assisted Notes paste. Making it a field would also make it settable through `change_assisted_notes_settings` — a settings surface for a mode invariant. |
-| `system_audio_enabled` | `apply_mode` hardcodes `false` for `Mode::AssistedNotes` | "Records only your microphone" is also part of the mode's definition. A default-off field and a Windows toggle would let the UI break that promise. The selected loopback device remains shared but unreachable in this mode. |
-| `typing_tool` | inherits Meeting's; unreachable | Only read inside `paste_direct` on Linux, which `PasteMethod::None` never reaches. |
-| `auto_submit`, `auto_submit_key` | inherit Meeting's; unreachable | `should_send_auto_submit(auto_submit, PasteMethod::None)` returns `false` unconditionally (`clipboard.rs:721`, pinned by `clipboard.rs:905`). |
+| Not a field                      | What happens instead                                                 | Why                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `paste_method`                   | `apply_mode` hardcodes `PasteMethod::None` for `Mode::AssistedNotes` | "Never types into the focused window" is the mode's _definition_, not a preference inside it. The top-level value is Meeting's Advanced escape hatch; a user who flipped it there must not thereby make Assisted Notes paste. Making it a field would also make it settable through `change_assisted_notes_settings` — a settings surface for a mode invariant. |
+| `system_audio_enabled`           | `apply_mode` hardcodes `false` for `Mode::AssistedNotes`             | "Records only your microphone" is also part of the mode's definition. A default-off field and a Windows toggle would let the UI break that promise. The selected loopback device remains shared but unreachable in this mode.                                                                                                                                   |
+| `typing_tool`                    | inherits Meeting's; unreachable                                      | Only read inside `paste_direct` on Linux, which `PasteMethod::None` never reaches.                                                                                                                                                                                                                                                                              |
+| `auto_submit`, `auto_submit_key` | inherit Meeting's; unreachable                                       | `should_send_auto_submit(auto_submit, PasteMethod::None)` returns `false` unconditionally (`clipboard.rs:721`, pinned by `clipboard.rs:905`).                                                                                                                                                                                                                   |
 
 Placing four fields on a struct that provably cannot affect anything would be four settings the UI would then have to either show (untruthfully) or hide (unreachably). Both are worse than the asymmetry.
 
@@ -226,9 +227,9 @@ Add `mode_repr_round_trips_every_variant`: for each of the three variants, `asse
 
 **Interfaces:** produces `pub struct AssistedNotesSettings` and `AppSettings::assisted_notes`, consumed by Tasks 3–11.
 
-- [ ] **Step 1: the new module.** Its own file, mirroring the boundary `dictation.rs` has. Header comment: what the mode is, and that the per-mode *resolver* deliberately stays in `dictation.rs` (see Task 3) so the seven upstream call sites of `dictation::resolve_settings` are not touched.
+- [ ] **Step 1: the new module.** Its own file, mirroring the boundary `dictation.rs` has. Header comment: what the mode is, and that the per-mode _resolver_ deliberately stays in `dictation.rs` (see Task 3) so the seven upstream call sites of `dictation::resolve_settings` are not touched.
 
-Fields in the order given in the default table above, each with `pub`, the struct deriving `Serialize, Deserialize, Debug, Clone, Type` and carrying `#[serde(default)]`. Write a hand-rolled `impl Default` (not a derive) so each default can carry the comment that justifies it; copy the *shape* of `DictationSettings::default()`.
+Fields in the order given in the default table above, each with `pub`, the struct deriving `Serialize, Deserialize, Debug, Clone, Type` and carrying `#[serde(default)]`. Write a hand-rolled `impl Default` (not a derive) so each default can carry the comment that justifies it; copy the _shape_ of `DictationSettings::default()`.
 
 The two comments that must be present, because they are the mode's definition:
 
@@ -359,18 +360,18 @@ Mode::AssistedNotes => {
 
 - [ ] **Step 3: tests.** How the three existing tests change, and what is added:
 
-| Existing test | Change |
-| --- | --- |
-| `default_paste_method_is_not_none` | Unchanged. Add a sibling, `assisted_notes_never_pastes` (below), rather than extending it — the two assert opposite things for opposite reasons. |
-| `resolve_push_to_talk_reads_the_matching_mode_field` | Extend: set `settings.assisted_notes.push_to_talk = false` while `settings.push_to_talk = true`, and assert `!resolve_push_to_talk(&settings, "assisted_notes")` and the same for `assisted_notes_with_post_process`. Keep the existing four assertions. |
-| `apply_mode_leaves_every_field_unchanged_for_meeting` | Extend: give every `settings.assisted_notes.*` field a value that differs from the matching top-level field, exactly as the test already does for `settings.dictation.*`, and add assertions that none of them reached the result. Without this the test would silently stop covering the new struct. |
-| `apply_mode_overrides_every_per_mode_field_for_dictation` | Extend by one line: also populate `settings.assisted_notes` with distinct values and assert they did **not** leak into the dictation result. |
-| `apply_mode_leaves_settings_unchanged_for_dictation_when_disabled` | Unchanged. |
+| Existing test                                                      | Change                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default_paste_method_is_not_none`                                 | Unchanged. Add a sibling, `assisted_notes_never_pastes` (below), rather than extending it — the two assert opposite things for opposite reasons.                                                                                                                                                      |
+| `resolve_push_to_talk_reads_the_matching_mode_field`               | Extend: set `settings.assisted_notes.push_to_talk = false` while `settings.push_to_talk = true`, and assert `!resolve_push_to_talk(&settings, "assisted_notes")` and the same for `assisted_notes_with_post_process`. Keep the existing four assertions.                                              |
+| `apply_mode_leaves_every_field_unchanged_for_meeting`              | Extend: give every `settings.assisted_notes.*` field a value that differs from the matching top-level field, exactly as the test already does for `settings.dictation.*`, and add assertions that none of them reached the result. Without this the test would silently stop covering the new struct. |
+| `apply_mode_overrides_every_per_mode_field_for_dictation`          | Extend by one line: also populate `settings.assisted_notes` with distinct values and assert they did **not** leak into the dictation result.                                                                                                                                                          |
+| `apply_mode_leaves_settings_unchanged_for_dictation_when_disabled` | Unchanged.                                                                                                                                                                                                                                                                                            |
 
 New tests:
 
 - `apply_mode_overrides_every_per_mode_field_for_assisted_notes` — mirrors the dictation version field for field: set `assisted_notes.enabled = true`, give every per-mode field a value distinct from the top-level one, assert each one landed, assert the per-mode model override reached `post_process_models`, and assert a field `apply_mode` does not own (`selected_model`) survived.
-- `assisted_notes_never_pastes` — set `settings.paste_method = PasteMethod::CtrlV` (the Advanced escape hatch) *and* `assisted_notes.enabled = true`, then assert `apply_mode(settings, Mode::AssistedNotes).paste_method == PasteMethod::None`. This is the invariant; it must fail if someone turns `paste_method` into a field.
+- `assisted_notes_never_pastes` — set `settings.paste_method = PasteMethod::CtrlV` (the Advanced escape hatch) _and_ `assisted_notes.enabled = true`, then assert `apply_mode(settings, Mode::AssistedNotes).paste_method == PasteMethod::None`. This is the invariant; it must fail if someone turns `paste_method` into a field.
 - `assisted_notes_never_captures_system_audio` — set the top-level Meeting field to `true`, enable Assisted Notes, and assert the resolved `system_audio_enabled` is `false`. This must fail if someone later turns the invariant into a setting.
 - `apply_mode_leaves_settings_unchanged_for_assisted_notes_when_disabled` — the serialization-comparison shape of the dictation equivalent (`AppSettings` has no `PartialEq`, and adding one would ripple into upstream types).
 
@@ -419,15 +420,15 @@ if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
   Meeting has no enable switch, so its term is the top-level field. Disabled optional modes do not keep the listener alive. Unit-test the full truth table, not three spot checks. Derive the three effective inputs — Meeting publication, `dictation.enabled && dictation.follow_stream_enabled`, and `assisted_notes.enabled && assisted_notes.follow_stream_enabled` — and cover all eight combinations:
 
   | Meeting | Dictation | Assisted Notes | Required |
-  | --- | --- | --- | --- |
-  | off | off | off | no |
-  | on | off | off | yes |
-  | off | on | off | yes |
-  | off | off | on | yes |
-  | on | on | off | yes |
-  | on | off | on | yes |
-  | off | on | on | yes |
-  | on | on | on | yes |
+  | ------- | --------- | -------------- | -------- |
+  | off     | off       | off            | no       |
+  | on      | off       | off            | yes      |
+  | off     | on        | off            | yes      |
+  | off     | off       | on             | yes      |
+  | on      | on        | off            | yes      |
+  | on      | off       | on             | yes      |
+  | off     | on        | on             | yes      |
+  | on      | on        | on             | yes      |
 
   Add separate cases proving an optional mode with publication on but `enabled: false` contributes `false`. Those cases guard the difference between a stored preference and a mode that can actually publish.
 
@@ -487,13 +488,13 @@ if id == "assisted_notes_with_post_process"
 
 The five sites and the local name of the settings binding at each:
 
-| File | Function | Local |
-| --- | --- | --- |
-| `shortcut/mod.rs` ~261 | `resume_all_shortcuts` | `settings` |
-| `shortcut/mod.rs` ~461 | the validate/reset loop | `current_settings` |
-| `shortcut/tauri_impl.rs` ~30 | init registration | `user_settings` |
-| `shortcut/handy_keys.rs` ~440 | init registration | `user_settings` |
-| `secure_input.rs` ~530 | `reconcile_fallback` | `settings` |
+| File                          | Function                | Local              |
+| ----------------------------- | ----------------------- | ------------------ |
+| `shortcut/mod.rs` ~261        | `resume_all_shortcuts`  | `settings`         |
+| `shortcut/mod.rs` ~461        | the validate/reset loop | `current_settings` |
+| `shortcut/tauri_impl.rs` ~30  | init registration       | `user_settings`    |
+| `shortcut/handy_keys.rs` ~440 | init registration       | `user_settings`    |
+| `secure_input.rs` ~530        | `reconcile_fallback`    | `settings`         |
 
 This is what makes "off by default" true rather than merely hidden: without these guards every init/resume/reconcile path would register both ids.
 
@@ -625,11 +626,13 @@ Also **update** the existing `settings.modes.description`, which describes two m
 - [ ] **Step 6: history badge.** `src/components/settings/history/HistorySettings.tsx:373-375` is a two-way ternary on `entry.source`. Widen it to three, keeping the change to those three lines:
 
 ```tsx
-{entry.source === "dictation"
-  ? t("settings.history.source.dictation")
-  : entry.source === "assisted_notes"
-    ? t("settings.history.source.assistedNotes")
-    : t("settings.history.source.meeting")}
+{
+  entry.source === "dictation"
+    ? t("settings.history.source.dictation")
+    : entry.source === "assisted_notes"
+      ? t("settings.history.source.assistedNotes")
+      : t("settings.history.source.meeting");
+}
 ```
 
 **Verify:** `bun run test:unit && bun run lint && bun run build && bun run check:translations && bun run check:fork-translations && bun run check:branding`
@@ -650,7 +653,6 @@ type NotetakingTab = "meetings" | "assisted";
 ```
 
 - [ ] **Step 2: the Assisted notes panel.** Mirror the Dictation panel's structure — enable toggle first, everything else hidden (not greyed) while the mode is off, for the reason the file already records: a "disabled" `ShortcutInput` still registers a live global hotkey. Rows, in order:
-
   - `<ShortcutInput shortcutId="assisted_notes" descriptionMode="inline" grouped />`
   - `AssistedNotesToggleField field="push_to_talk"` (reusing `settings.general.pushToTalk.*`)
   - `AssistedNotesOverlayStyleRow descriptionMode="tooltip"` — tooltip, matching both other tabs, because that description outweighs every control around it when inline
@@ -663,11 +665,12 @@ type NotetakingTab = "meetings" | "assisted";
 
   **No system-audio, paste-method, typing-tool, or auto-submit rows.** System audio and paste are fixed mode invariants; the other fields are unreachable because paste is `None`.
 
-- [ ] **Step 3: update the file header.** Its membership rule currently reads "*a row is per-mode iff it has a `DictationSettings` counterpart or a mode-specific binding id*", and it names two modes. Restate it for three: *a row is per-mode iff it has a counterpart on the mode's own settings struct, or a mode-specific binding id* — and add a fourth entry to the list of stated exceptions: `paste_method` is per-mode for Dictation and a fixed invariant for Assisted Notes, so it appears in the Dictation tab and nowhere else.
+- [ ] **Step 3: update the file header.** Its membership rule currently reads "_a row is per-mode iff it has a `DictationSettings` counterpart or a mode-specific binding id_", and it names two modes. Restate it for three: _a row is per-mode iff it has a counterpart on the mode's own settings struct, or a mode-specific binding id_ — and add a fourth entry to the list of stated exceptions: `paste_method` is per-mode for Dictation and a fixed invariant for Assisted Notes, so it appears in the Dictation tab and nowhere else.
 
-- [ ] **Step 4: `anyPushToTalk`.** The Cancel row's predicate hides it while *any* mode has push-to-talk on. Extend it with the assisted-notes term, keeping the existing `enabled &&` guard shape — without it, a mode the user never switched on would suppress the row (that exact bug is recorded in the file).
+- [ ] **Step 4: `anyPushToTalk`.** The Cancel row's predicate hides it while _any_ mode has push-to-talk on. Extend it with the assisted-notes term, keeping the existing `enabled &&` guard shape — without it, a mode the user never switched on would suppress the row (that exact bug is recorded in the file).
 
 **Verify:** `bun run lint && bun run build && bun run check:settings`, then a manual pass in `bun run tauri dev`:
+
 1. Modes opens on Notetaking → Meetings, visually unchanged from before.
 2. Enabling Assisted notes registers the shortcut and does not spring back.
 3. An assisted-notes capture with `shorthand --follow-stream` attached emits `begin`/`partial`/`final`, does **not** paste into the focused window, and captures no system audio. There is no control that can enable system audio for this mode.
@@ -740,7 +743,7 @@ git ls-remote --tags origin '0.12.0^{}'   # annotated tags: compare the peeled r
 This is the **first** step in this repo, so everything after it compiles against the real dependency and `main` stays buildable from a clean checkout at every commit.
 
 - [ ] **Step 1:** change the pin to `github:mshish/shorthand-core#0.12.0` and run `npm install`.
-- [ ] **Step 2: prove it.** `README.md` § "Bumping core" records the trap: npm can reuse a cached git resolution and leave `package-lock.json` naming the previous commit and `node_modules` holding the previous version, after which a green `tsc --noEmit` proves nothing — the old type still has three members and the new signal is a plain string literal that would fail to typecheck only against the *new* type.
+- [ ] **Step 2: prove it.** `README.md` § "Bumping core" records the trap: npm can reuse a cached git resolution and leave `package-lock.json` naming the previous commit and `node_modules` holding the previous version, after which a green `tsc --noEmit` proves nothing — the old type still has three members and the new signal is a plain string literal that would fail to typecheck only against the _new_ type.
   - `git diff package-lock.json` must show the `resolved` commit actually change.
   - If it did not, re-run naming the tag explicitly: `npm install "shorthand-core@github:mshish/shorthand-core#0.12.0"`.
   - Confirm the installed copy, not the lockfile: `node -p "require('./node_modules/shorthand-core/package.json').version"`, and `grep toggle-assisted-notes node_modules/shorthand-core/src/stream/control.ts`.
@@ -808,7 +811,7 @@ Command names carry no plugin prefix and are sentence case, per the note already
 
   Never send another toggle on timeout: if the app started slowly, a toggle could turn that late recording off or on ambiguously; cancel has only the safe direction. Keep Meeting's existing start semantics unless it opts into the acknowledgement option, so this change does not silently redesign the shipped command.
 
-  In `main.ts`, retain the start promise and handle the outcome. On `not-started`, stop live enhancement, force-stop the follower, await its settled record, close the sidecar, call the existing runtime cleanup, and clear `#capture`/the status state. The notice must say: *"Assisted Notes did not start. In Shorthand, open Settings → Modes → Notetaking → Assisted notes, enable it, and try again."* `show_main_window` may have raised the app, but it does not navigate there and is not a substitute for this notice. Emit the ordinary "capture started" notice for Assisted Notes only after acknowledgement.
+  In `main.ts`, retain the start promise and handle the outcome. On `not-started`, stop live enhancement, force-stop the follower, await its settled record, close the sidecar, call the existing runtime cleanup, and clear `#capture`/the status state. The notice must say: _"Assisted Notes did not start. In Shorthand, open Settings → Modes → Notetaking → Assisted notes, enable it, and try again."_ `show_main_window` may have raised the app, but it does not navigate there and is not a substitute for this notice. Emit the ordinary "capture started" notice for Assisted Notes only after acknowledgement.
 
 - [ ] **Step 5: test the start contract** in `test/plugin-recorder.test.ts` with the existing fake clock/control:
   - required capability present → sequential `cancel`, assisted toggle, then `begin` resolves `started`;
@@ -827,11 +830,13 @@ Command names carry no plugin prefix and are sentence case, per the note already
 this.addCommand({
   id: "toggle-shorthand-assisted-notes",
   name: "Toggle Shorthand assisted notes",
-  callback: () => { this.fireControl("toggle-assisted-notes"); },
+  callback: () => {
+    this.fireControl("toggle-assisted-notes");
+  },
 });
 ```
 
-This is not decoration. A manual recovery that names `"Toggle Shorthand recording"` would start a *Meeting*. The Assisted Notes recovery path has to select the same mode.
+This is not decoration. A manual recovery that names `"Toggle Shorthand recording"` would start a _Meeting_. The Assisted Notes recovery path has to select the same mode.
 
 - [ ] **Step 7: make the not-running notice mode-aware.** Turn the `start` entry into a function of the signal, leaving the other four entries as they are:
 
@@ -857,7 +862,7 @@ There is no CI in this repo; this gate is yours to run.
 - [ ] Repeat with **Assisted Notes disabled in the app**: confirm Shorthand's window comes to the front, no recording starts, the bounded acknowledgement expires, Obsidian names Settings → Modes → Notetaking → Assisted notes, and the plugin returns to non-capturing state automatically. Do not invoke Stop capture to make this pass.
 - [ ] Repeat against an older installed Shorthand whose hello lacks the capability: confirm no `toggle-assisted-notes` child is spawned, the update notice is user-facing, and the plugin returns to non-capturing state.
 - [ ] Simulate/observe a control error carrying clap stderr and confirm it is shown and the capture state is cleared rather than left waiting for `begin`.
-- [ ] Repeat with **Shorthand not running**: confirm the not-running notice names *Toggle Shorthand assisted notes*, not *Toggle Shorthand recording*.
+- [ ] Repeat with **Shorthand not running**: confirm the not-running notice names _Toggle Shorthand assisted notes_, not _Toggle Shorthand recording_.
 
 ---
 
@@ -865,35 +870,35 @@ There is no CI in this repo; this gate is yours to run.
 
 ### Existing tests that change
 
-| Test | File | Change |
-| --- | --- | --- |
-| `mode_for_binding_maps_dictation_ids_and_defaults_everything_else_to_meeting` | `shorthand/mode.rs` | Renamed and extended with the two new ids |
-| `resolve_push_to_talk_reads_the_matching_mode_field` | `shorthand/dictation.rs` | Extended with the two assisted-notes ids |
-| `apply_mode_leaves_every_field_unchanged_for_meeting` | `shorthand/dictation.rs` | Extended so `assisted_notes.*` values are set and asserted not to leak |
-| `apply_mode_overrides_every_per_mode_field_for_dictation` | `shorthand/dictation.rs` | Extended so `assisted_notes.*` values are asserted not to leak |
-| `empty_store_parses_with_defaults` | `settings.rs` | New assertions for the assisted-notes defaults |
-| `per_mode_defaults_differ_where_the_modes_differ` | `settings.rs` | Third column |
-| `default_overlay_style_is_minimal` | `settings.rs` | Third assertion |
-| `default_bindings_have_distinct_shortcuts_on_this_platform` | `settings.rs` | Five ids → seven; doc comment updated |
-| `is_transcribe_binding` test | `transcription_coordinator.rs` | Two new ids |
-| `source_for_mode_maps_meeting_and_dictation` | `managers/history.rs` | Renamed, third arm |
-| `follow_stream_argument_shapes_parse_as_documented` | `cli.rs` | New conflict case |
-| `signals` array | `shorthand-core/test/control.test.ts` | Fourth signal |
+| Test                                                                          | File                                  | Change                                                                 |
+| ----------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- |
+| `mode_for_binding_maps_dictation_ids_and_defaults_everything_else_to_meeting` | `shorthand/mode.rs`                   | Renamed and extended with the two new ids                              |
+| `resolve_push_to_talk_reads_the_matching_mode_field`                          | `shorthand/dictation.rs`              | Extended with the two assisted-notes ids                               |
+| `apply_mode_leaves_every_field_unchanged_for_meeting`                         | `shorthand/dictation.rs`              | Extended so `assisted_notes.*` values are set and asserted not to leak |
+| `apply_mode_overrides_every_per_mode_field_for_dictation`                     | `shorthand/dictation.rs`              | Extended so `assisted_notes.*` values are asserted not to leak         |
+| `empty_store_parses_with_defaults`                                            | `settings.rs`                         | New assertions for the assisted-notes defaults                         |
+| `per_mode_defaults_differ_where_the_modes_differ`                             | `settings.rs`                         | Third column                                                           |
+| `default_overlay_style_is_minimal`                                            | `settings.rs`                         | Third assertion                                                        |
+| `default_bindings_have_distinct_shortcuts_on_this_platform`                   | `settings.rs`                         | Five ids → seven; doc comment updated                                  |
+| `is_transcribe_binding` test                                                  | `transcription_coordinator.rs`        | Two new ids                                                            |
+| `source_for_mode_maps_meeting_and_dictation`                                  | `managers/history.rs`                 | Renamed, third arm                                                     |
+| `follow_stream_argument_shapes_parse_as_documented`                           | `cli.rs`                              | New conflict case                                                      |
+| `signals` array                                                               | `shorthand-core/test/control.test.ts` | Fourth signal                                                          |
 
 Tests that must pass **unedited**, and whose failure means a constraint was violated:
 `frozen_v0_9_store_parses_strictly_and_migrates_only_paste_method`, `migration_preserves_explicitly_enabled_saving_recordings_and_transcripts`, `default_settings_disable_saving_recordings_and_transcripts`, `default_paste_method_is_not_none`, `apply_mode_leaves_settings_unchanged_for_dictation_when_disabled`, and every salvage test.
 
 ### New tests
 
-| Test | File | What it pins |
-| --- | --- | --- |
-| `mode_repr_round_trips_every_variant` | `shorthand/mode.rs` | The `AtomicU8` encoding, including the unknown-value fallback |
-| `apply_mode_overrides_every_per_mode_field_for_assisted_notes` | `shorthand/dictation.rs` | Every per-mode field lands |
-| `apply_mode_leaves_settings_unchanged_for_assisted_notes_when_disabled` | `shorthand/dictation.rs` | The defence-in-depth guard |
-| `assisted_notes_never_pastes` | `shorthand/dictation.rs` | The `PasteMethod::None` invariant survives Meeting's escape hatch |
-| `assisted_notes_never_captures_system_audio` | `shorthand/dictation.rs` | The solo-capture invariant survives Meeting's system-audio setting |
-| `note_producing_modes_save_by_default` | `shorthand/dictation.rs` | The new defaults, and that Meeting's are unchanged |
-| listener-policy matrix | `follow_stream/lifecycle.rs` | Meeting and enabled optional modes independently keep the shared listener alive |
+| Test                                                                    | File                         | What it pins                                                                    |
+| ----------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------- |
+| `mode_repr_round_trips_every_variant`                                   | `shorthand/mode.rs`          | The `AtomicU8` encoding, including the unknown-value fallback                   |
+| `apply_mode_overrides_every_per_mode_field_for_assisted_notes`          | `shorthand/dictation.rs`     | Every per-mode field lands                                                      |
+| `apply_mode_leaves_settings_unchanged_for_assisted_notes_when_disabled` | `shorthand/dictation.rs`     | The defence-in-depth guard                                                      |
+| `assisted_notes_never_pastes`                                           | `shorthand/dictation.rs`     | The `PasteMethod::None` invariant survives Meeting's escape hatch               |
+| `assisted_notes_never_captures_system_audio`                            | `shorthand/dictation.rs`     | The solo-capture invariant survives Meeting's system-audio setting              |
+| `note_producing_modes_save_by_default`                                  | `shorthand/dictation.rs`     | The new defaults, and that Meeting's are unchanged                              |
+| listener-policy matrix                                                  | `follow_stream/lifecycle.rs` | Meeting and enabled optional modes independently keep the shared listener alive |
 
 ### Commands, per repo
 
@@ -927,7 +932,7 @@ npm test           # unit tests plus the bundle-load smoke
 
 1. **`dictation.follow_stream_enabled` is currently inert, and Task 5 makes it live.** That is a fix, not a feature: the Advanced row promises to publish dictation to followers and today does nothing, because `actions.rs` gates on the mode rather than the setting. If that is unwanted, the alternative is to keep a mode-based gate and add a pure `Mode::publishes_to_followers()` predicate returning true for `Meeting | AssistedNotes` — same amount of code, but it leaves the untruthful row in place, which is the thing decision 1 exists to prevent.
 
-2. **The registration-guard stack is now five call sites × five conditions, all copy-pasted, none unit-tested.** Extracting a pure `binding_is_registrable(&AppSettings, &str) -> bool` would collapse it into one testable function, and this change is the moment the duplication starts to hurt. It is deliberately *not* done here, because three of the five conditions are upstream-owned lines and rewriting them turns a clean merge into a manual one. Worth doing as a separate, reviewable refactor.
+2. **The registration-guard stack is now five call sites × five conditions, all copy-pasted, none unit-tested.** Extracting a pure `binding_is_registrable(&AppSettings, &str) -> bool` would collapse it into one testable function, and this change is the moment the duplication starts to hurt. It is deliberately _not_ done here, because three of the five conditions are upstream-owned lines and rewriting them turns a clean merge into a manual one. Worth doing as a separate, reviewable refactor.
 
 3. **Four near-duplicate React components** (`AssistedNotes{EnableToggle,ToggleField,PostProcessPrompt,ClipboardHandling}`) mirror the dictation four. A generic `ModeToggleField<M>` keyed on the settings key would be strictly better and is all fork-only code, but it rewrites every existing `DictationToggleField` call site in `ModesSettings.tsx` while a working mode is being changed underneath it. Named as the follow-up rather than done here.
 
@@ -939,4 +944,4 @@ npm test           # unit tests plus the bundle-load smoke
 
 7. **A `--toggle-assisted-notes` sent while the mode is disabled reports success to the plugin.** The forwarding process exits 0 before the running instance decides to refuse, so `ShorthandControl.send()` returns `{status: "sent"}` and `ShorthandRecorder` believes a recording started. It then waits `beginGraceMs`, sees no `begin`, and runs its normal backstop — the same path as a user who never pressed the hotkey, which is already handled. Showing the settings window is the only feedback the architecture allows. If that proves confusing in practice, the honest fix is a status query on the follow-stream socket, not a change to the exit-code contract.
 
-8. **Nothing in this plan gives the plugin a way to *discover* that Assisted Notes exists or is enabled.** It sends a flag and hopes. That is the intended trade — decisions 1 and 3 rule out the app answering questions about its own settings over the CLI — but it is the reason failure modes here are all soft and late rather than immediate.
+8. **Nothing in this plan gives the plugin a way to _discover_ that Assisted Notes exists or is enabled.** It sends a flag and hopes. That is the intended trade — decisions 1 and 3 rule out the app answering questions about its own settings over the CLI — but it is the reason failure modes here are all soft and late rather than immediate.

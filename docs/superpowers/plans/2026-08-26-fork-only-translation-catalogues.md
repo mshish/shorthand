@@ -14,7 +14,7 @@ exists to prevent. Restoring byte-identity with upstream is now Task 2 of this
 plan, ahead of the original split.
 
 **Architecture:** `FORK_ONLY_STRINGS` in `src/shorthand/branding.ts` is one
-flat `Record<string, string>` merged into *every* locale. Two audits motivate
+flat `Record<string, string>` merged into _every_ locale. Two audits motivate
 this plan, run in opposite directions. The first, against upstream's English
 catalogue, classifies the keys already inside `FORK_ONLY_STRINGS` and shows
 they hold two unrelated things: strings genuinely fork-only, and strings that
@@ -44,11 +44,11 @@ its own tasks only. A separate Codex review agent then receives the resulting
 diff and the task text — never the implementer's reasoning or transcript — so
 the review is a genuine second read rather than a confirmation of the first.
 
-| Batch | Tasks | Why grouped |
-| --- | --- | --- |
-| 1 | Tasks 1–3 | Baseline, then two pure reorganisations — restoring byte-identity with upstream, then splitting the strings into two files. Neither may change a rendered string, with one named, temporary exception in Task 2 that Task 4 closes out. |
-| 2 | Task 4 | The only lasting behaviour change in the plan: 23 locales get their translations back, and one shortcut description gets its fork wording back, in English only this time. Reviewed alone. |
-| 3 | Tasks 5–7 | Locale-aware lookup, its parity gate, and the docs that direct contributors to it. |
+| Batch | Tasks     | Why grouped                                                                                                                                                                                                                             |
+| ----- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Tasks 1–3 | Baseline, then two pure reorganisations — restoring byte-identity with upstream, then splitting the strings into two files. Neither may change a rendered string, with one named, temporary exception in Task 2 that Task 4 closes out. |
+| 2     | Task 4    | The only lasting behaviour change in the plan: 23 locales get their translations back, and one shortcut description gets its fork wording back, in English only this time. Reviewed alone.                                              |
+| 3     | Tasks 5–7 | Locale-aware lookup, its parity gate, and the docs that direct contributors to it.                                                                                                                                                      |
 
 ## Global Constraints
 
@@ -86,7 +86,7 @@ the review is a genuine second read rather than a confirmation of the first.
 - **`applyBranding()` must stay pure** — its input is never mutated, so the
   same function backs the Vite plugin and `scripts/check-branding.ts`.
 - Run before every commit: `bun run lint`, `bun run format`, `bun run
-  check:branding`, `bun run check:locale-drift`, `bun run check:translations`,
+check:branding`, `bun run check:locale-drift`, `bun run check:translations`,
   `bun run check:fork-translations` (the last two gates come from this plan;
   add them to your local habit as each lands).
 
@@ -100,12 +100,12 @@ missed a defect the review of this plan caught.
 Run against `upstream/main`'s `src/i18n/locales/en/translation.json`,
 classifying all 81 keys currently in `FORK_ONLY_STRINGS`:
 
-| Category | Count | Disposition |
-| --- | --- | --- |
-| Key absent upstream — genuinely fork-only | 35 | → `locales/en.json`, translatable |
-| Differs only by English capitalisation | 43 | → `english-copy.json`, `en` only |
-| Deliberate semantic rename | 3 | → `locales/en.json`, translatable |
-| Differs only by brand name | 0 | — |
+| Category                                  | Count | Disposition                       |
+| ----------------------------------------- | ----- | --------------------------------- |
+| Key absent upstream — genuinely fork-only | 35    | → `locales/en.json`, translatable |
+| Differs only by English capitalisation    | 43    | → `english-copy.json`, `en` only  |
+| Deliberate semantic rename                | 3     | → `locales/en.json`, translatable |
+| Differs only by brand name                | 0     | —                                 |
 
 The 3 semantic renames are `settings.debug.postProcessingToggle.label` ("Post
 Processing" → "AI cleanup"), `settings.general.shortcut.bindings.transcribe.name`
@@ -122,7 +122,7 @@ the name the mechanism exists to remove. Upstream's "Handy Shortcuts" would
 have been substituted correctly had it been left alone. Task 4 fixes it to
 "Shorthand shortcuts".
 
-Direction A only asks whether the 81 keys *already inside* `FORK_ONLY_STRINGS`
+Direction A only asks whether the 81 keys _already inside_ `FORK_ONLY_STRINGS`
 are genuinely ours. It cannot see fork content that never entered the
 mechanism in the first place.
 
@@ -145,13 +145,13 @@ comparing all 24 locale files against each other, not just against upstream —
 because nothing translated them: they were never reachable by the fork-string
 mechanism, so no translation process ever saw them.
 
-| Subtree | Count |
-| --- | --- |
-| `settings.dictation.*` | 13 |
-| `settings.advanced.*` (`followStream`, `systemAudio`, `systemAudioDevice`) | 9 |
-| `settings.general.shortcut.bindings.dictate*` | 4 |
-| `settings.history.source.*` | 2 |
-| `transcript.*` / `sidebar.dictation` | 4 |
+| Subtree                                                                    | Count |
+| -------------------------------------------------------------------------- | ----- |
+| `settings.dictation.*`                                                     | 13    |
+| `settings.advanced.*` (`followStream`, `systemAudio`, `systemAudioDevice`) | 9     |
+| `settings.general.shortcut.bindings.dictate*`                              | 4     |
+| `settings.history.source.*`                                                | 2     |
+| `transcript.*` / `sidebar.dictation`                                       | 4     |
 
 5 of the 32 already have a live entry in `FORK_ONLY_STRINGS`
 (`settings.advanced.systemAudio.label`, `settings.advanced.systemAudioDevice.title`,
@@ -205,12 +205,14 @@ without exception. Task 4 changes it deliberately, for 23 locales plus that
 one `en` field, and regenerates it with a reviewed diff.
 
 **Files:**
+
 - Create: `src/shorthand/branding.golden.json`
 - Create: `src/shorthand/branding.test.ts`
 - Create: `scripts/write-branding-golden.ts`
 - Modify: `package.json` (add `test:unit` and `golden:branding` scripts)
 
 **Interfaces:**
+
 - Consumes: `applyBranding(translation, locale)` from `src/shorthand/branding.ts` — existing, unchanged.
 - Produces: `hashLocale(locale: string): string` and `localeNames(): string[]`, both exported from `scripts/write-branding-golden.ts` and imported by the test. `src/shorthand/branding.golden.json` is a `Record<string, string>` of locale → SHA-256 hex.
 
@@ -394,6 +396,7 @@ make, and making it here would hide a real rendered-output change inside a
 task whose entire point is to have none.
 
 **Files:**
+
 - Create: `scripts/check-locale-drift.ts`
 - Modify: `src/shorthand/branding.ts` (add 27 entries to `FORK_ONLY_STRINGS`; see Step 3)
 - Modify: all 24 `src/i18n/locales/<lang>/translation.json` (delete the 32 fork-only keys and the dead `transcribe.name` duplicate; fix `transcribe.description` — see Step 5)
@@ -402,11 +405,12 @@ task whose entire point is to have none.
 - Modify: `src/shorthand/branding.test.ts` (note the temporary exception so Task 4 knows to remove it)
 
 **Interfaces:**
+
 - Consumes: `upstream/main` via `git show`, the same pattern `scripts/audit-fork-strings.ts` (Task 3) already uses.
 - Produces: `bun run check:locale-drift`, exiting non-zero on any key present
   in a locale file but absent from `upstream/main`'s matching file. `--fix`
   removes exactly those keys and nothing else — it does not touch keys that
-  exist in both fork and upstream with differing *values* (see Step 7 for why
+  exist in both fork and upstream with differing _values_ (see Step 7 for why
   that is a separate, non-blocking check).
 
 - [ ] **Step 1: Write the drift checker**
@@ -453,7 +457,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCALES_DIR = path.join(__dirname, "..", "src", "i18n", "locales");
 const FIX = process.argv.includes("--fix");
 
-function flatten(node: unknown, prefix: string, out: Map<string, unknown>): void {
+function flatten(
+  node: unknown,
+  prefix: string,
+  out: Map<string, unknown>,
+): void {
   if (Array.isArray(node)) {
     node.forEach((item, i) => flatten(item, `${prefix}[${i}]`, out));
     return;
@@ -569,7 +577,7 @@ process.exit(0);
 Run: `bun scripts/check-locale-drift.ts`
 Expected: FAIL. All 24 locales report the same 32 keys from Direction B1,
 plus `settings.general.shortcut.bindings.transcribe.name` (present in all 24,
-absent upstream by value — wait, it *is* present upstream, just with a
+absent upstream by value — wait, it _is_ present upstream, just with a
 different value, so this key-presence-only script will **not** report it).
 That is expected and correct given this script's scope (Step 7 explains why
 value drift is a separate, non-blocking check) — do not widen this script to
@@ -660,7 +668,7 @@ transcribe a meeting or note," upstream says "...your voice," and nothing in
 `FORK_ONLY_STRINGS` covers it. It cannot be fixed inside this task without
 breaking this task's own hash-neutrality promise:
 
-- Adding it to `FORK_ONLY_STRINGS` now would apply it to *every* locale — the
+- Adding it to `FORK_ONLY_STRINGS` now would apply it to _every_ locale — the
   locale-independent merge this whole plan exists to stop doesn't get gated to
   `en` until Task 4. Doing it here would recreate, for a 34th key, the exact
   defect Task 4 exists to fix for the other 43.
@@ -815,12 +823,14 @@ own golden-hash regeneration in its Step 8 covers it). Task 4 is what changes
 behaviour.
 
 **Files:**
+
 - Create: `src/shorthand/locales/en.json` (65 translatable fork strings)
 - Create: `src/shorthand/english-copy.json` (43 English casing preferences)
 - Create: `scripts/audit-fork-strings.ts`
 - Modify: `src/shorthand/branding.ts` (the `FORK_ONLY_STRINGS` object literal — 108 entries after Task 2, so do not rely on a specific line range; find it by name)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `FORK_ONLY_STRINGS` remains exported as `Record<string, string>`
   and remains the union of both files, so `scripts/check-branding.ts` keeps
@@ -970,7 +980,7 @@ Expected: `identical`, `overlapping keys (must be 0): 0`.
 - [ ] **Step 4: Replace the inline object with imports**
 
 In `src/shorthand/branding.ts`, delete the `FORK_ONLY_STRINGS` object literal
-and put this in its place. The policy comments explaining *why* stay in this
+and put this in its place. The policy comments explaining _why_ stay in this
 file — JSON cannot hold them.
 
 ```ts
@@ -1063,12 +1073,14 @@ shortcut description gets its fork wording back — in English only this time,
 which is the fix, not a regression.
 
 **Files:**
+
 - Modify: `src/shorthand/branding.ts` (merge `ENGLISH_COPY` only for `en`)
 - Modify: `src/shorthand/english-copy.json` (fix the "Handy shortcuts" bug; add `transcribe.description`)
 - Modify: `src/shorthand/branding.test.ts` (assert the restoration; remove Task 2's temporary-exception note)
 - Modify: `src/shorthand/branding.golden.json` (regenerate deliberately)
 
 **Interfaces:**
+
 - Consumes: `FORK_STRINGS` and `ENGLISH_COPY` from Task 3.
 - Produces: no new export. `applyBranding` behaviour changes: for `locale !== "en"`, only `FORK_STRINGS` is merged.
 
@@ -1151,7 +1163,9 @@ describe("English copy rules", () => {
     const de = applyBranding(read("de"), "de").translation;
     expect(
       get(de, "settings.general.shortcut.bindings.transcribe.description"),
-    ).not.toBe("The keyboard shortcut to record and transcribe a meeting or note.");
+    ).not.toBe(
+      "The keyboard shortcut to record and transcribe a meeting or note.",
+    );
   });
 });
 ```
@@ -1207,25 +1221,25 @@ requires, even though its existing entries are all casing preferences.
 In `src/shorthand/branding.ts`, change the merge loop at the end of `applyBranding` from:
 
 ```ts
-  for (const [path, value] of Object.entries(FORK_ONLY_STRINGS)) {
-    setByPath(rebranded, path, value);
-  }
+for (const [path, value] of Object.entries(FORK_ONLY_STRINGS)) {
+  setByPath(rebranded, path, value);
+}
 ```
 
 to:
 
 ```ts
-  // Fork strings are content and belong in every locale; English copy rules
-  // are an English typographic convention (or, in one case, a wording choice
-  // not yet ported to other locales) and belong only in English. Merging
-  // the latter everywhere is what replaced 23 locales' translations with
-  // English strings.
-  const overlay =
-    locale === "en" ? { ...FORK_STRINGS, ...ENGLISH_COPY } : FORK_STRINGS;
+// Fork strings are content and belong in every locale; English copy rules
+// are an English typographic convention (or, in one case, a wording choice
+// not yet ported to other locales) and belong only in English. Merging
+// the latter everywhere is what replaced 23 locales' translations with
+// English strings.
+const overlay =
+  locale === "en" ? { ...FORK_STRINGS, ...ENGLISH_COPY } : FORK_STRINGS;
 
-  for (const [path, value] of Object.entries(overlay)) {
-    setByPath(rebranded, path, value);
-  }
+for (const [path, value] of Object.entries(overlay)) {
+  setByPath(rebranded, path, value);
+}
 ```
 
 - [ ] **Step 5: Run the tests**
@@ -1247,8 +1261,8 @@ Run: `bun run golden:branding && git diff src/shorthand/branding.golden.json`
 Expected: 24 hashes change — the 23 non-English locales (the intended fix)
 and `en`'s (reverting Task 2's Step 5 temporary regression on
 `transcribe.description` back to the fork's wording; every other `en` key is
-unchanged, so this is `en`'s hash returning to what it was *before Task 2
-ever ran*, not a new departure).
+unchanged, so this is `en`'s hash returning to what it was _before Task 2
+ever ran_, not a new departure).
 
 Confirm the change is the intended one by spot-checking a locale:
 
@@ -1299,10 +1313,12 @@ Lets a contributor add `de.json` and have it used. Behaviour is unchanged
 until one exists.
 
 **Files:**
+
 - Modify: `src/shorthand/branding.ts` (add `forkStringsFor`)
 - Modify: `src/shorthand/branding.test.ts`
 
 **Interfaces:**
+
 - Consumes: `src/shorthand/locales/en.json`.
 - Produces: `forkStringsFor(locale: string): Record<string, string>` — the
   English catalogue with any same-named locale catalogue layered on top. Task
@@ -1362,16 +1378,18 @@ const LOCALES_DIR = path.join(
  * consumers — neither is browser code — but it does mean this file must never
  * be imported into the app bundle itself.
  */
-const FORK_CATALOGUES: Record<string, Record<string, string>> =
-  Object.fromEntries(
-    fs
-      .readdirSync(LOCALES_DIR)
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => [
-        file.slice(0, -".json".length),
-        JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, file), "utf8")),
-      ]),
-  );
+const FORK_CATALOGUES: Record<
+  string,
+  Record<string, string>
+> = Object.fromEntries(
+  fs
+    .readdirSync(LOCALES_DIR)
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => [
+      file.slice(0, -".json".length),
+      JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, file), "utf8")),
+    ]),
+);
 
 /**
  * The fork's strings for one locale: English as the base, that locale's own
@@ -1395,9 +1413,9 @@ Remove the now-unused `import forkEn from "./locales/en.json";`, and update the 
 - in `applyBranding`'s overlay, use `forkStringsFor(locale)`:
 
 ```ts
-  const forkStrings = forkStringsFor(locale);
-  const overlay =
-    locale === "en" ? { ...forkStrings, ...ENGLISH_COPY } : forkStrings;
+const forkStrings = forkStringsFor(locale);
+const overlay =
+  locale === "en" ? { ...forkStrings, ...ENGLISH_COPY } : forkStrings;
 ```
 
 - [ ] **Step 4: Run every gate**
@@ -1425,10 +1443,12 @@ instead of a raw key path."
 Without it, a `de.json` missing a key falls back to English silently and nobody finds out.
 
 **Files:**
+
 - Create: `scripts/check-fork-translations.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: raw files in `src/shorthand/locales/`. Deliberately **not** `forkStringsFor`, which merges English in and would report every catalogue as complete.
 - Produces: `bun run check:fork-translations`, exiting non-zero on any mismatch.
 
@@ -1591,10 +1611,11 @@ rather than warns."
 ### Task 7: Document the process for contributors
 
 Translation stays upstream's process — fork, copy, translate, PR. The docs
-have to say where the fork's files are, when *not* to add one, and — new in
+have to say where the fork's files are, when _not_ to add one, and — new in
 this plan — that the byte-identity guarantee is real now, not aspirational.
 
 **Files:**
+
 - Create: `src/shorthand/locales/README.md`
 - Modify: `AGENTS.md` (§ Internationalization)
 - Modify: `CONTRIBUTING_TRANSLATIONS.md`
@@ -1605,7 +1626,7 @@ this plan — that the byte-identity guarantee is real now, not aspirational.
 
 Create `src/shorthand/locales/README.md`:
 
-```markdown
+````markdown
 # Fork-only translation catalogues
 
 Strings that exist only in Shorthand, not in upstream Handy.
@@ -1638,13 +1659,14 @@ Every key in `en.json` must be present. An untranslated key renders in English
 rather than failing, but the gate still requires it: silent English in an
 otherwise translated UI is a bug nobody reports.
 
-## Adding a *new* string — read this first
+## Adding a _new_ string — read this first
 
 Before adding a key here, check whether upstream already has it:
 
 ```bash
 bun scripts/audit-fork-strings.ts
 ```
+````
 
 If upstream has the same string and you only dislike its wording or
 capitalisation, **do not add it here.** A fork string overrides that key in
@@ -1663,7 +1685,8 @@ once, for 32 keys across all 24 locales, before the check existed.
 
 Keys are flat and dotted (`"settings.modes.heading"`), unlike upstream's
 nested catalogues. Both are valid i18next.
-```
+
+````
 
 - [ ] **Step 2: Correct the i18n section in AGENTS.md**
 
@@ -1694,7 +1717,7 @@ Gates: `bun run check:translations` (upstream's catalogues),
 `bun run check:locale-drift` (fork content must not be among them),
 `bun run check:fork-translations` (the fork's own catalogues),
 `bun run check:branding` (the rename).
-```
+````
 
 - [ ] **Step 3: Point translators at both files**
 
@@ -1741,7 +1764,7 @@ In `docs/superpowers/specs/2026-08-25-shorthand-umbrella-design.md`, update the 
 the `t()` call for `settings.advanced.systemAudioDevice.default` on the
 reasoning that the key renders as the literal string `"Default"` in all 24
 locales today, so routing it through translation would be a no-op. That
-reasoning holds only *because* the key is presently untranslatable drift —
+reasoning holds only _because_ the key is presently untranslatable drift —
 after this plan's Task 2, `settings.advanced.systemAudioDevice.default` lives
 in `src/shorthand/locales/en.json` and genuinely can be translated per
 locale. Do not edit that plan from here; leave a note in this plan's own

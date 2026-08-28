@@ -111,7 +111,9 @@ describe("English copy rules", () => {
     const de = applyBranding(read("de"), "de").translation;
     expect(
       get(de, "settings.general.shortcut.bindings.transcribe.description"),
-    ).not.toBe("The keyboard shortcut to record and transcribe a meeting or note.");
+    ).not.toBe(
+      "The keyboard shortcut to record and transcribe a meeting or note.",
+    );
   });
 });
 

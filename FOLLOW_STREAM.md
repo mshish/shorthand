@@ -5,13 +5,13 @@ The fork-only `handy --follow-stream` feature lets another process follow live t
 Two separate things decide whether a follower sees anything, and they must not be confused:
 
 - **Per-mode publication** — whether a given capture's transcript reaches the hub at all. This is each mode's own `follow_stream_enabled` (Meeting's top-level **Follow Live Transcript Output**, Dictation's and Assisted Notes' own Advanced toggles). Meeting and Assisted Notes ship this on; Dictation ships it off, because dictated text has already been delivered where it was wanted.
-- **Listener lifetime** — whether the local socket exists at all. The listener is process-wide, not per-mode, and stays up whenever *any* mode that can currently publish wants it: Meeting's toggle, or an *enabled* Dictation/Assisted Notes mode with its own publication toggle on. Turning Meeting's toggle off does not tear the socket down while another enabled mode still needs it, and a mode's publication preference does nothing while that mode itself is switched off.
+- **Listener lifetime** — whether the local socket exists at all. The listener is process-wide, not per-mode, and stays up whenever _any_ mode that can currently publish wants it: Meeting's toggle, or an _enabled_ Dictation/Assisted Notes mode with its own publication toggle on. Turning Meeting's toggle off does not tear the socket down while another enabled mode still needs it, and a mode's publication preference does nothing while that mode itself is switched off.
 
-| Mode | Output |
-| --- | --- |
-| `json` (default, also the bare flag) | The full protocol as newline-delimited JSON |
-| `delta` | JSONL, one record per newly-committed suffix |
-| `text` | The plain `me: `/`them: ` rendering of that same committed text |
+| Mode                                 | Output                                                          |
+| ------------------------------------ | --------------------------------------------------------------- |
+| `json` (default, also the bare flag) | The full protocol as newline-delimited JSON                     |
+| `delta`                              | JSONL, one record per newly-committed suffix                    |
+| `text`                               | The plain `me: `/`them: ` rendering of that same committed text |
 
 ## NDJSON protocol
 

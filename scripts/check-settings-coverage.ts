@@ -249,7 +249,8 @@ function reachableFrom(entries: string[]): Set<string> {
 
 const reachable = reachableFrom(ENTRY_POINTS);
 
-const required = SETTINGS_COMPONENT_DIRS.flatMap(walkDir).filter(isComponentFile);
+const required =
+  SETTINGS_COMPONENT_DIRS.flatMap(walkDir).filter(isComponentFile);
 
 const missing: string[] = [];
 const staleAllowances: string[] = [];

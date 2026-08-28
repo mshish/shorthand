@@ -4,7 +4,7 @@
 
 **Goal:** Make system-audio capture actually work on macOS, and — because macOS gives no error when it refuses — make the app able to tell the user that it was refused.
 
-**Architecture:** cpal 0.18 already captures system audio on macOS via the Core Audio Process Tap; Phase A made that machinery compile everywhere and Phase B proved the shape on Linux. Almost nothing is left to do for *capture*. What is left is *permission*, and macOS provides no supported way to observe it. This phase adds a small fork-only module that reads the permission through TCC's private preflight SPI, behind a Cargo feature, and wires that answer into the availability enum Phase A already plumbed to the UI.
+**Architecture:** cpal 0.18 already captures system audio on macOS via the Core Audio Process Tap; Phase A made that machinery compile everywhere and Phase B proved the shape on Linux. Almost nothing is left to do for _capture_. What is left is _permission_, and macOS provides no supported way to observe it. This phase adds a small fork-only module that reads the permission through TCC's private preflight SPI, behind a Cargo feature, and wires that answer into the availability enum Phase A already plumbed to the UI.
 
 **Tech Stack:** Rust, `cpal` 0.18.x, Core Audio Process Tap, TCC private SPI (`dlopen`/`dlsym`), Tauri 2.x.
 
@@ -24,9 +24,9 @@ assumption is false.** Everything downstream of it — the old Task 1b spike, th
 `MacosSystemAudioCaptureState` observation — has been deleted rather than
 adapted, because the signal they were built to read does not exist.
 
-The old draft anticipated this. Its Task 1b said: *"Open succeeds, samples are
+The old draft anticipated this. Its Task 1b said: _"Open succeeds, samples are
 silent → an open-time flag cannot classify… the design must drop automatic
-detection and always offer the 'grant access' affordance."* The research
+detection and always offer the 'grant access' affordance."_ The research
 confirms that branch, and also found a better option than the fallback that task
 proposed: a real permission read, via the same private SPI every shipping app in
 this space uses.
@@ -45,13 +45,13 @@ zero. Sources, strongest first:
 
 - **SuperKenVery**, author of cpal's macOS loopback backend, on
   [cpal PR #894](https://github.com/RustAudio/cpal/pull/894#issuecomment-3823323664):
-  *"You silently get denied, and record complete silence."* — describing an
+  _"You silently get denied, and record complete silence."_ — describing an
   explicitly not-granted state, not a missing-Info.plist state.
 - **roderickvd**, cpal maintainer, on [PR #1124](https://github.com/RustAudio/cpal/pull/1124),
-  designing a non-blocking preflight because it *"catches the silent-silence
-  bug"* — i.e. because the OS raises no error.
+  designing a non-blocking preflight because it _"catches the silent-silence
+  bug"_ — i.e. because the OS raises no error.
 - **Chromium** creates tap, aggregate device and IOProcID successfully without
-  permission, then runs a *separate* probe before reporting
+  permission, then runs a _separate_ probe before reporting
   `kFailedSystemPermissions` (`media/audio/mac/catap_audio_input_stream.mm`). If
   creation failed on denial, that probe would not exist.
 
@@ -70,13 +70,13 @@ coreaudio backend only ever emits `Xrun`, `DeviceNotAvailable`,
 
 **There is no public API to read the permission.** From
 [insidegui/AudioCap](https://github.com/insidegui/AudioCap)'s README, the
-reference implementation for this API: *"There's no public API to request audio
-recording permission or to check if the app has that permission."* There is no
+reference implementation for this API: _"There's no public API to request audio
+recording permission or to check if the app has that permission."_ There is no
 `AVCaptureDevice.authorizationStatus(for:)` analogue and no
 `CGPreflightScreenCaptureAccess` analogue for audio capture.
 
 **So every shipping consumer uses TCC's private preflight SPI**, and gates
-*before* opening rather than classifying afterwards: `thewh1teagle/vibe` (Tauri +
+_before_ opening rather than classifying afterwards: `thewh1teagle/vibe` (Tauri +
 cpal, the closest analogue to this app), `afonsojramos/muesly`,
 `insidegui/AudioCap`, `jameshball/osci-render`, plus the 115 files GitHub code
 search returns for `check_system_audio_permission language:rust`. cpal's own
@@ -100,10 +100,10 @@ stays reversible, not because a store build is planned.
 **Two findings that shape the implementation, from reading the reference
 projects' actual FFI code.**
 
-*Bind `TCCAccessPreflight` only; do not bind `TCCAccessRequest`.* The consent
+_Bind `TCCAccessPreflight` only; do not bind `TCCAccessRequest`._ The consent
 dialog is raised by starting the tap, not by any permission API — confirmed
-independently: *"`AudioDeviceStart` is the call that triggers the TCC prompt.
-Not creating the tap, aggregate device, or IOProc."* `afonsojramos/muesly`
+independently: _"`AudioDeviceStart` is the call that triggers the TCC prompt.
+Not creating the tap, aggregate device, or IOProc."_ `afonsojramos/muesly`
 therefore never binds `TCCAccessRequest` at all: it attempts capture and polls
 the preflight for the answer. Skipping it removes the only genuinely dangerous
 part of this work. `TCCAccessPreflight` is a plain
@@ -111,15 +111,15 @@ part of this work. `TCCAccessPreflight` is a plain
 an **Objective-C block**, which is not a C function pointer but a struct with a
 layout and copy semantics, and getting it wrong is undefined behaviour rather
 than a compile error. cpal PR #1257's binding has to launder a channel sender
-through a raw `usize` *"so TCC's internal block memcpy doesn't double-drop the
-sender"* — a trap we simply do not need to walk into. Not binding it also means
+through a raw `usize` _"so TCC's internal block memcpy doesn't double-drop the
+sender"_ — a trap we simply do not need to walk into. Not binding it also means
 we need no `block2` dependency.
 
-*The preflight tells us granted-or-not, not why.* Sources disagree on the
+_The preflight tells us granted-or-not, not why._ Sources disagree on the
 finer mapping. AudioCap and muesly read `0 => granted, 1 => denied, _ =>
 undetermined`; cpal checks only `== 0`; and `jameshball/osci-render` warns in a
-comment that *"on some OS builds, preflight may return the same code for both
-'not determined' and 'denied'."* Nobody cites a stable contract for `1` versus
+comment that _"on some OS builds, preflight may return the same code for both
+'not determined' and 'denied'."_ Nobody cites a stable contract for `1` versus
 `2`. So treat the result as **granted / not-granted** and do not branch on the
 difference. This is a UI constraint as much as a code one: we cannot tell a
 user who declined from a user who was never asked, so the denied-state copy
@@ -128,7 +128,7 @@ must read correctly for both.
 **Correction to the spec.** The spec's Task 7 premise about the menu-bar
 indicator is inverted. Per Apple Support: **orange** is the microphone,
 **green** the camera, **purple** system-audio recording. ScreenCaptureKit also
-produces purple, so the dot does *not* prove we are off the ScreenCaptureKit
+produces purple, so the dot does _not_ prove we are off the ScreenCaptureKit
 path. The real tell is that the app appears under **Privacy & Security → Screen
 & System Audio Recording → System Audio Recording Only**.
 
@@ -157,7 +157,7 @@ path. The real tell is that the app appears under **Privacy & Security → Scree
   which degrades to exactly the behaviour we would have had without the SPI at
   all. A missing private symbol must never break dictation.
 - All `cargo` commands run from `src-tauri/` or use `--manifest-path
-  src-tauri/Cargo.toml` — there is no `Cargo.toml` at the repo root.
+src-tauri/Cargo.toml` — there is no `Cargo.toml` at the repo root.
 - **On this Windows dev machine**, MSBuild's FileTracker is broken; prefix cargo
   commands that build native deps with `TrackFileAccess=false`. Irrelevant on
   macOS.
@@ -183,11 +183,13 @@ app bundle's** Info.plist, not merely the source file. TCC reads the bundle.
 ### Task 2: The TCC preflight module
 
 **Files:**
+
 - Create: `src-tauri/src/system_audio_permission.rs`
 - Modify: `src-tauri/src/lib.rs` (`mod` declaration)
 - Modify: `src-tauri/Cargo.toml` (the feature and the macOS-only dependency)
 
 **Interfaces:**
+
 - Produces:
   - `pub enum SystemAudioPermission { Granted, NotGranted }` —
     `Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type`,
@@ -368,9 +370,11 @@ git commit -m "feat(macos): read the system audio permission via TCC preflight"
 ### Task 3: Fold permission into availability, and request it on enable
 
 **Files:**
+
 - Modify: `src-tauri/src/commands/audio.rs`
 
 **Interfaces:**
+
 - Consumes: `system_audio_permission::{preflight, request}` (Task 2).
 - Modifies: `get_system_audio_availability` gains its macOS branch;
   `change_system_audio_enabled_setting` and
@@ -522,6 +526,7 @@ git commit -m "feat(macos): prompt for system audio permission when it is enable
 ### Task 4: Guard against the silent loopback downgrade
 
 **Files:**
+
 - Modify: `src-tauri/src/managers/audio.rs` (`get_effective_system_audio_device`,
   macOS arm)
 
@@ -539,7 +544,7 @@ let mut audio_unit = if self.supports_input() {
 ```
 
 and `supports_input()` is simply "does this device report any input config"
-(`:685-690`). So an output device that *also* has inputs — a USB interface, an
+(`:685-690`). So an output device that _also_ has inputs — a USB interface, an
 existing aggregate device, BlackHole, a Bluetooth headset in HFP mode — takes the
 **ordinary input** branch and records that device's microphone inputs instead of
 the system mix. Silently: no error, and nothing in the cpal API distinguishes the
@@ -551,9 +556,9 @@ reachable. Note `thewh1teagle/vibe` sidesteps it entirely by hardcoding
 if the guard proves insufficient, but it silently discards a setting the UI
 still shows, so prefer the guard.
 
-*This trap is inferred from reading cpal's source; no project bug report of it
+_This trap is inferred from reading cpal's source; no project bug report of it
 was found. Verify the behaviour in Task 6 before relying on the guard's
-diagnosis.*
+diagnosis._
 
 - [ ] **Step 1: Refuse a device that would not loop back**
 
@@ -584,6 +589,7 @@ git commit -m "fix(macos): refuse a system-audio device that would capture its i
 ### Task 5: The denied-state UI and the settings link
 
 **Files:**
+
 - Modify: `src-tauri/src/commands/audio.rs`
 - Modify: `src-tauri/src/lib.rs` (`collect_commands![...]`)
 - Modify: `src/components/settings/advanced/SystemAudioCapture.tsx`
@@ -591,6 +597,7 @@ git commit -m "fix(macos): refuse a system-audio device that would capture its i
 - Modify: `src/shorthand/locales/en.json`
 
 **Interfaces:**
+
 - Produces: `pub fn open_system_audio_privacy_settings() -> Result<(), String>`
 
 - [ ] **Step 1: Add the settings-link command**
@@ -633,7 +640,7 @@ Fork-only keys go in `src/shorthand/locales/en.json`, never `src/i18n/locales/` 
 "settings.advanced.systemAudio.tryAgain": "Try again"
 ```
 
-Note what that copy does *not* say. An earlier draft of this step read "so if
+Note what that copy does _not_ say. An earlier draft of this step read "so if
 you declined, you can grant it" — which contradicts this plan's own constraint
 never to accuse the user of declining something they were not asked. The same
 state is reached by refusing the dialog, by ignoring it until our timeout, and
@@ -694,23 +701,25 @@ git commit -m "feat(macos): offer a way back when system audio is denied"
 No files change. None of this can run in CI. Run on a real Mac at macOS 14.6+.
 
 **Read this before you start.** TCC keys its permission record to a stable
-signing identity, and the *responsible* process must carry
+signing identity, and the _responsible_ process must carry
 `NSAudioCaptureUsageDescription`. A `cargo run` or ad-hoc-signed dev build can
 silently inherit the grant of whatever launched it — one project's reference
-probe was run from Terminal and inherited *Terminal's* grant, hiding the bug from
+probe was run from Terminal and inherited _Terminal's_ grant, hiding the bug from
 the first commit. **Test a signed `bun run tauri build` bundle launched from
 Finder**, not a dev build launched from a terminal.
 
-- [ ] **The consent string reaches the bundle**: `plutil -p
-      "path/to/Shorthand.app/Contents/Info.plist" | grep NSAudioCapture` shows
-      the Task 1 string. If it is absent, TCC hard-denies with no prompt, and
-      every test below is invalid.
-- [ ] **First-run consent fires at the toggle**: with `tccutil reset AudioCapture
-      <bundle-id>` and the app in its default on-demand microphone mode, enable
-      system audio **without recording anything**. The dialog must appear
-      immediately, showing the Task 1 string verbatim.
+- [ ] **The consent string reaches the bundle.** Run
+      `plutil -p Shorthand.app/Contents/Info.plist | grep NSAudioCapture` against
+      the built bundle and confirm it prints the Task 1 string. If the key is
+      absent, TCC hard-denies with no prompt at all, and every test below it is
+      measuring nothing.
+- [ ] **First-run consent fires at the toggle.** Reset with
+      `tccutil reset AudioCapture <bundle-id>`, leave the app in its default
+      on-demand microphone mode, and enable system audio **without recording
+      anything**. The dialog must appear immediately, showing the Task 1 string
+      verbatim.
 - [ ] **A never-asked state does not render the denied CTA**: after the reset and
-      *before* touching the toggle, confirm the ordinary toggle renders, not the
+      _before_ touching the toggle, confirm the ordinary toggle renders, not the
       "you declined" branch.
 - [ ] **Deny path**: decline the prompt. Confirm the CTA renders, and that the
       toggle did **not** persist as enabled.
@@ -749,12 +758,11 @@ Finder**, not a dev build launched from a terminal.
       (or with `macos-tcc-spi` disabled) and confirm permission reads
       undetermined, the toggle still prompts on first use via the capture
       attempt, and nothing crashes. This is the escape hatch; it must not rot.
-- [ ] **Long-session check (decides Task 7)**: leave capture enabled and idle for
-      >15 minutes with nothing playing, then play audio and record. If it still
+- [ ] **Long-session check (decides Task 7)**: leave capture enabled and idle for >15 minutes with nothing playing, then play audio and record. If it still
       captures, write that result into Task 7 so nobody re-litigates it.
 - [ ] **Lints**: `cargo fmt --manifest-path src-tauri/Cargo.toml --check &&
-      cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings &&
-      bun run lint`.
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings &&
+bun run lint`.
 
 ---
 
@@ -766,7 +774,7 @@ working around a report that Process Taps can degrade to all-zero buffers after
 long uptime. Review showed that design was actively harmful:
 
 - **It measured the wrong signal** — `with_system_audio_callback` is fed
-  *post-VAD* and returns early while not recording (`recorder.rs:1289`), so an
+  _post-VAD_ and returns early while not recording (`recorder.rs:1289`), so an
   enabled-but-idle app looks permanently silent and the watchdog fires on healthy
   systems as a matter of course.
 - **Firing is destructive** — recovery called `start_microphone_stream()`,
@@ -777,14 +785,14 @@ long uptime. Review showed that design was actively harmful:
 The research adds two further reasons to leave it cut, and a correction:
 
 - **Zeros are not a fault signal.** screenpipe encodes this as policy —
-  *"Zero-filled callbacks are healthy delivery of legitimate silence"* — and does
+  _"Zero-filled callbacks are healthy delivery of legitimate silence"_ — and does
   not rebuild on zeros, only on a complete callback stall. An Apple Developer
   Forums thread reaches the same conclusion: all-zero buffers from a broken tap
   are indistinguishable from a muted participant or a paused video.
 - **With Task 2 in place, the main motivation is gone.** The watchdog was the
   only way to notice a denial; a preflight notices it up front and cheaply.
 - **But the degradation report is real and separate.** Apple Developer Forums
-  thread 825780 reports a *granted* tap going all-zero for minutes mid-session on
+  thread 825780 reports a _granted_ tap going all-zero for minutes mid-session on
   macOS 26.5, recovered only by full teardown. Do not attribute that to
   permissions — it is a distinct bug.
 

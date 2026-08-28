@@ -17,11 +17,11 @@
 
 ## Independence
 
-| Fix | Files | Depends on |
-| --- | --- | --- |
-| 1 — duplicate "Default" | `SystemAudioDeviceSelector.tsx` | nothing |
+| Fix                        | Files                                                                              | Depends on                          |
+| -------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------- |
+| 1 — duplicate "Default"    | `SystemAudioDeviceSelector.tsx`                                                    | nothing                             |
 | 2 — streaming-only default | `ModelsSettings.tsx`, `modelVisibility.ts`, new `streamingModelFilter.ts` and test | fork-catalogue plan for `test:unit` |
-| 3 — AI-cleanup note | `AICleanupSettings.tsx`, `locales/en.json` | fork-catalogue plan |
+| 3 — AI-cleanup note        | `AICleanupSettings.tsx`, `locales/en.json`                                         | fork-catalogue plan                 |
 
 After the prerequisite lands, all three fixes are independent and can be committed separately. None touches the same file.
 
@@ -97,15 +97,15 @@ Manual, on Windows with **Capture system audio** on and **Mute while recording**
 
 Two mechanisms answer the same visibility question and can disagree.
 
-`src/shorthand/modelVisibility.ts:43-57` (`isModelVisible`, applied at `ModelsSettings.tsx:61` via `useVisibleModels`) already hides non-streaming models **unless** they are downloaded, downloading, or custom whenever `show_all_settings` is false — and `show_all_settings` defaults to `false` (`src-tauri/src/settings.rs:1002`). Separately, `ModelsSettings.tsx:38,187` owns a `filterStreaming` chip which starts false and filters the already-shortened list. The bundled catalog has **67 models, 8 of which stream** (`src-tauri/src/catalog/catalog.json`), so the default *Available to Download* section is streaming-only while the chip says filtering is off.
+`src/shorthand/modelVisibility.ts:43-57` (`isModelVisible`, applied at `ModelsSettings.tsx:61` via `useVisibleModels`) already hides non-streaming models **unless** they are downloaded, downloading, or custom whenever `show_all_settings` is false — and `show_all_settings` defaults to `false` (`src-tauri/src/settings.rs:1002`). Separately, `ModelsSettings.tsx:38,187` owns a `filterStreaming` chip which starts false and filters the already-shortened list. The bundled catalog has **67 models, 8 of which stream** (`src-tauri/src/catalog/catalog.json`), so the default _Available to Download_ section is streaming-only while the chip says filtering is off.
 
-What is **not** filtered by `modelVisibility.ts` is the *Downloaded Models* section, because downloaded/custom/in-progress models are exemptions there. The chip can filter that section, but turning it off cannot reveal non-streaming models in *Available to Download*: the earlier hatch-owned predicate already removed them. The same page therefore has two visibility decisions, and the visible chip does not control one of them.
+What is **not** filtered by `modelVisibility.ts` is the _Downloaded Models_ section, because downloaded/custom/in-progress models are exemptions there. The chip can filter that section, but turning it off cannot reveal non-streaming models in _Available to Download_: the earlier hatch-owned predicate already removed them. The same page therefore has two visibility decisions, and the visible chip does not control one of them.
 
-The fix is one decision for the whole page: the chip governs both sections. `show_all_settings` determines only the chip's untouched initial state; it is no longer an independent model predicate. Turning the chip off must reveal non-streaming models in *Available to Download* as well as *Downloaded Models*.
+The fix is one decision for the whole page: the chip governs both sections. `show_all_settings` determines only the chip's untouched initial state; it is no longer an independent model predicate. Turning the chip off must reveal non-streaming models in _Available to Download_ as well as _Downloaded Models_.
 
 ### Answers to the four questions the brief poses
 
-1. **Should `filterStreaming` simply default to `true`?** No. `show_all_settings` is documented to the user as *"Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides"* (`src/shorthand/locales/en.json` after the prerequisite). The untouched chip starts off when that hatch is on.
+1. **Should `filterStreaming` simply default to `true`?** No. `show_all_settings` is documented to the user as _"Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides"_ (`src/shorthand/locales/en.json` after the prerequisite). The untouched chip starts off when that hatch is on.
 2. **Should it default to `!show_all_settings`?** Yes, but **only as the chip's default**. Once the chip state is resolved, that one boolean governs every model on the page. `ModelsSettings.tsx` must stop passing its models through the hatch-driven `useVisibleModels`; the hook itself stays intact for onboarding.
 3. **Should the toggle stay visible?** Yes. It becomes the un-filter, and it is the only in-context way to see a non-streaming model you have not downloaded without leaving for the About pane. Keep it as ephemeral component state, like `searchQuery`, `filterTranslation` and `languageFilter` beside it — persisting a view filter would mean a new Rust settings field for something that is a scroll position, not a preference.
 4. **Does defaulting it on risk hiding a model the user is using?** **Yes, and this is the part that must not be skipped.** Catalog entries do not get their streaming flag from the uncertain probe path: `handy-computer/parakeet-unified-en-0.6b-gguf` declares `capabilities.streaming: true` in `catalog.json`, alternate-quant `ModelInfo` entries are built by `render_model_info` / `to_model_info_for_file` from `self.caps.supports_streaming` (`managers/model.rs:249`), and local discovery explicitly skips the header probe for catalog-listed quants because the catalog is authoritative (`model.rs:1765-1768`). The genuine unprobed case is the **other**, non-catalog GGUF branch in the local HF cache (`model.rs:1787-1828`): `local_caps` reads `probe.supports_streaming.unwrap_or(false)` (`model.rs:360-364`), so an absent header key reads as non-streaming until a load reconciles it through `set_runtime_capabilities`. The filter must therefore never hide the current model. In-flight downloads and `is_custom` models retain the same protection; custom models are exempt because the app cannot know a user-supplied model's streaming capability from a catalog it is not in.
@@ -114,12 +114,12 @@ The fix is one decision for the whole page: the chip governs both sections. `sho
 
 The hatch sets the chip only while `filterStreamingOverride` is `null`. An explicit chip click wins until this page unmounts. After resolution, the hatch has no second say over model visibility:
 
-| Chip state | `show_all_settings` | Downloaded | Available to Download |
-| --- | --- | --- | --- |
-| on (untouched default, or explicit) | off | Streaming models, plus current/in-progress/custom exemptions | Streaming catalog models |
-| off (explicit) | off | All downloaded, in-progress, and custom models | All otherwise-eligible catalog models, including non-streaming models |
-| on (explicit) | on | Streaming models, plus current/in-progress/custom exemptions | Streaming catalog models |
-| off (untouched default, or explicit) | on | All downloaded, in-progress, and custom models | All otherwise-eligible catalog models, including non-streaming models |
+| Chip state                           | `show_all_settings` | Downloaded                                                   | Available to Download                                                 |
+| ------------------------------------ | ------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| on (untouched default, or explicit)  | off                 | Streaming models, plus current/in-progress/custom exemptions | Streaming catalog models                                              |
+| off (explicit)                       | off                 | All downloaded, in-progress, and custom models               | All otherwise-eligible catalog models, including non-streaming models |
+| on (explicit)                        | on                  | Streaming models, plus current/in-progress/custom exemptions | Streaming catalog models                                              |
+| off (untouched default, or explicit) | on                  | All downloaded, in-progress, and custom models               | All otherwise-eligible catalog models, including non-streaming models |
 
 Changing the hatch while the page remains mounted updates the chip only when the user has not touched it. This preserves the existing reactive hatch behavior without letting two predicates disagree.
 
@@ -231,7 +231,7 @@ Changing the hatch while the page remains mounted updates the chip only when the
 ### What is deliberately not done
 
 - **Not** deleting `isModelVisible` / `useVisibleModels` or making them chip-driven. They remain the hatch-driven onboarding guard, where there is no chip with which to recover a hidden on-disk, in-progress, or custom model. The model page deliberately stops calling the hook so the chip can own both sections.
-- **Not** treating `is_downloaded` as a chip exemption. A blanket exemption would make every card in *Downloaded Models* immune to the chip and recreate the split decision D2 removes. Reachability remains intact: the model page begins with the full store list and chip off reveals ordinary downloaded models; the current, downloading, and custom cases remain visible while chip on; and onboarding keeps `isModelVisible`'s broader on-disk exemption.
+- **Not** treating `is_downloaded` as a chip exemption. A blanket exemption would make every card in _Downloaded Models_ immune to the chip and recreate the split decision D2 removes. Reachability remains intact: the model page begins with the full store list and chip off reveals ordinary downloaded models; the current, downloading, and custom cases remain visible while chip on; and onboarding keeps `isModelVisible`'s broader on-disk exemption.
 - **Not** persisting the filter as a setting. It is a view filter; three siblings in the same toolbar are ephemeral.
 
 ### Verify
@@ -246,12 +246,12 @@ bun run tauri dev
 
 Manual, in order:
 
-1. Fresh profile, `show_all_settings` off, Settings → Model. The streaming chip is **pressed** (highlighted). *Available to Download* lists the 8 streaming catalog entries.
-2. Click the chip off. *Available to Download* now reveals the non-streaming catalog models; click it on again and they disappear. This is the primary regression guard that the chip governs that section.
-3. With the hatch on, download and select a genuinely non-catalog GGUF whose probe reports no streaming capability. Return with the hatch off and the chip untouched. The chip is pressed, but the model remains in *Downloaded Models*, marked active, with working controls. **Do not use catalogued Parakeet Unified for this test; its descriptor says streaming is true.**
-4. Select a streaming model instead. With the chip on, the ordinary downloaded non-streaming model from step 3 disappears; turn the chip off and it returns with working Select and Delete. This proves the chip also governs *Downloaded Models* and that `is_downloaded` alone is not an exemption.
+1. Fresh profile, `show_all_settings` off, Settings → Model. The streaming chip is **pressed** (highlighted). _Available to Download_ lists the 8 streaming catalog entries.
+2. Click the chip off. _Available to Download_ now reveals the non-streaming catalog models; click it on again and they disappear. This is the primary regression guard that the chip governs that section.
+3. With the hatch on, download and select a genuinely non-catalog GGUF whose probe reports no streaming capability. Return with the hatch off and the chip untouched. The chip is pressed, but the model remains in _Downloaded Models_, marked active, with working controls. **Do not use catalogued Parakeet Unified for this test; its descriptor says streaming is true.**
+4. Select a streaming model instead. With the chip on, the ordinary downloaded non-streaming model from step 3 disappears; turn the chip off and it returns with working Select and Delete. This proves the chip also governs _Downloaded Models_ and that `is_downloaded` alone is not an exemption.
 5. Start a download of a non-streaming model with the chip off, then turn the chip on mid-download. Its card stays visible with its progress bar.
-6. Add and rescan a custom model whose `supports_streaming` value is false. It stays visible in *Downloaded Models* while the chip is on and can be selected or deleted. This is the regression guard for the `is_custom` exemption the earlier proposal dropped.
+6. Add and rescan a custom model whose `supports_streaming` value is false. It stays visible in _Downloaded Models_ while the chip is on and can be selected or deleted. This is the regression guard for the `is_custom` exemption the earlier proposal dropped.
 7. With no chip click on a fresh mount, hatch off yields chip on and hatch on yields chip off without an app restart. In each hatch state, explicitly choose the opposite chip state and confirm both section results match the four-row table above; after that click, changing the hatch does not overwrite the chip for the rest of that mounted session.
 
 ---
@@ -285,7 +285,7 @@ Why this wording:
 - **Voice.** Two short declaratives; sentence case; states the intent then the exception, in the shape of `settings.advanced.switch.description` ("Show every setting, not just the ones most people need. Nothing moves — …"). No exclamation, no second person imperative, no "please".
 - **It matches shipped behaviour.** `ModesSettings.tsx` already puts the AI-cleanup rows behind `<AdvancedOnly>` on the Meetings tab and in the default view on Dictation, with a comment saying the asymmetry is deliberate. The note tells the user what the UI is already doing.
 
-Alternative if a reason is wanted (longer, and asserts something about the downstream enhancer that the note itself cannot verify): *"AI cleanup is intended for Dictation. Notetaking transcripts are enhanced further down the line, so cleaning them up first is an advanced setting, and not recommended."* Preferred only if the owner wants the why in the UI.
+Alternative if a reason is wanted (longer, and asserts something about the downstream enhancer that the note itself cannot verify): _"AI cleanup is intended for Dictation. Notetaking transcripts are enhanced further down the line, so cleaning them up first is an advanced setting, and not recommended."_ Preferred only if the owner wants the why in the UI.
 
 ### Locale files: definitively **no**
 
@@ -340,7 +340,7 @@ Manual:
 
 ## Concerns
 
-**C1 — Reusing `useVisibleModels` on the model page would reintroduce the bug.** The hook remains correct for onboarding, where the hatch is the only escape route. On the model page, it would pre-filter *Available to Download* and prevent chip off from revealing non-streaming models. Keep the boundary explicit: `useVisibleModels` owns onboarding; the chip owns both model-page sections.
+**C1 — Reusing `useVisibleModels` on the model page would reintroduce the bug.** The hook remains correct for onboarding, where the hatch is the only escape route. On the model page, it would pre-filter _Available to Download_ and prevent chip off from revealing non-streaming models. Keep the boundary explicit: `useVisibleModels` owns onboarding; the chip owns both model-page sections.
 
 **C2 — `supports_streaming` can still be unknown or stale, but catalog-listed Parakeet Unified is not the unprobed case.** Its catalog descriptor says `streaming: true`; alternate quants use that descriptor (`model.rs:249`), and both local-discovery paths skip the header probe for catalog matches (`:1595-1615`, `:1765-1785`). The genuine `unwrap_or(false)` uncertainty is a non-catalog custom model or non-catalog GGUF in the local HF cache (`local_caps`, `:360-364`). Custom and current models are exempt; an unselected non-catalog HF-cache model remains recoverable by turning the chip off. Separately, a catalog flag could be stale relative to runtime behavior — for example, the catalog currently distinguishes non-streaming `parakeet-tdt-0.6b-v3` from streaming `parakeet-unified-en-0.6b`. Auditing catalog flags against post-load runtime reports is worthwhile, but it is not part of this UI fix.
 

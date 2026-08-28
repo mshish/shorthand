@@ -115,7 +115,8 @@ for (const locale of locales) {
     if (value === undefined) {
       failures.push({
         where: `${locale}:${key}`,
-        detail: "exempt key no longer exists — remove it from BRAND_EXEMPT_KEYS",
+        detail:
+          "exempt key no longer exists — remove it from BRAND_EXEMPT_KEYS",
       });
     } else if (!/\bHandy\b/.test(value)) {
       failures.push({

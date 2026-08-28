@@ -37,7 +37,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCALES_DIR = path.join(__dirname, "..", "src", "i18n", "locales");
 const FIX = process.argv.includes("--fix");
 
-function flatten(node: unknown, prefix: string, out: Map<string, unknown>): void {
+function flatten(
+  node: unknown,
+  prefix: string,
+  out: Map<string, unknown>,
+): void {
   if (Array.isArray(node)) {
     node.forEach((item, i) => flatten(item, `${prefix}[${i}]`, out));
     return;

@@ -4,7 +4,7 @@
 
 **Goal:** Add an opt-in dictation mode to Shorthand — Handy's transcribe-and-paste-into-the-focused-window behaviour — running alongside meeting transcription with its own shortcuts and its own settings, without changing meeting mode's defaults or its settings screens.
 
-**Architecture:** A fork-only *active-mode cell* records which mode the in-flight capture belongs to; a pure `apply_mode(settings, mode)` returns an `AppSettings` with the dictation overrides applied. Because it returns a full `AppSettings`, every consumer in upstream code changes exactly one line — `get_settings(x)` becomes `resolve_settings(x)` — so no upstream function signature changes. Two new shortcut bindings (`dictate`, `dictate_with_post_process`) reuse the existing `TranscribeAction`; mode is derived from the binding id. Settings live in one nested `dictation` field, so the frontend store needs one updater entry rather than thirteen.
+**Architecture:** A fork-only _active-mode cell_ records which mode the in-flight capture belongs to; a pure `apply_mode(settings, mode)` returns an `AppSettings` with the dictation overrides applied. Because it returns a full `AppSettings`, every consumer in upstream code changes exactly one line — `get_settings(x)` becomes `resolve_settings(x)` — so no upstream function signature changes. Two new shortcut bindings (`dictate`, `dictate_with_post_process`) reuse the existing `TranscribeAction`; mode is derived from the binding id. Settings live in one nested `dictation` field, so the frontend store needs one updater entry rather than thirteen.
 
 **Tech Stack:** Rust + Tauri 2.x (`tauri-plugin-store`, `tauri-specta`), React 18 + TypeScript, Zustand, Tailwind, i18next, Bun.
 
@@ -31,13 +31,13 @@ Every task's requirements implicitly include this section.
 
 **Shortcut defaults — exact values:**
 
-| Binding | Windows / Linux | macOS |
-| --- | --- | --- |
-| `transcribe` | `ctrl+alt+space` | `ctrl+shift+space` |
+| Binding                        | Windows / Linux        | macOS                     |
+| ------------------------------ | ---------------------- | ------------------------- |
+| `transcribe`                   | `ctrl+alt+space`       | `ctrl+shift+space`        |
 | `transcribe_with_post_process` | `ctrl+alt+shift+space` | `ctrl+shift+option+space` |
-| `dictate` | `ctrl+space` | `option+space` |
-| `dictate_with_post_process` | `ctrl+shift+space` | `option+shift+space` |
-| `cancel` | `escape` | `escape` |
+| `dictate`                      | `ctrl+space`           | `option+space`            |
+| `dictate_with_post_process`    | `ctrl+shift+space`     | `option+shift+space`      |
+| `cancel`                       | `escape`               | `escape`                  |
 
 No settings migration and no `CURRENT_SETTINGS_SCHEMA_VERSION` bump: the bindings merge fills vacant keys only, so existing installs keep their shortcuts and the frozen v0.9.0 fixture keeps its `f13`.
 
@@ -51,7 +51,7 @@ No settings migration and no `CURRENT_SETTINGS_SCHEMA_VERSION` bump: the binding
 
 **Generated code:** `src/bindings.ts` is emitted by tauri-specta under `#[cfg(debug_assertions)]` and carries a do-not-edit header. Regenerate it with a debug build. Never hand-edit it.
 
-**Commits:** conventional prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`). Focus the message on *why*, not *what*.
+**Commits:** conventional prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`). Focus the message on _why_, not _what_.
 
 ---
 
@@ -1422,7 +1422,7 @@ flashing the other's style mid-capture."
 
 - Consumes: `crate::shorthand::dictation::resolve_settings` (Task 3) — unchanged, given one more call site.
 
-`apply_mode` already covers `save_recordings` and `save_transcripts` (Task 3). `HistoryManager::save_entry` reading the mode cell for the `source` column is Task 10 (History work, out of this plan's scope) — this task only makes the persistence *toggles* per-mode; History rows stay unlabeled until Task 10 lands.
+`apply_mode` already covers `save_recordings` and `save_transcripts` (Task 3). `HistoryManager::save_entry` reading the mode cell for the `source` column is Task 10 (History work, out of this plan's scope) — this task only makes the persistence _toggles_ per-mode; History rows stay unlabeled until Task 10 lands.
 
 - [ ] **Step 1: Swap the persistence-settings read**
 
@@ -1726,6 +1726,7 @@ post-processing settings already read a sub-struct, spread it, override one
 key, and write the whole object back. Also keeps the two dictation shortcuts'
 registration in sync immediately, rather than only at next launch."
 ```
+
 ### Task 8: UI — Dictation section skeleton (enable toggle, both shortcut rows, Accessibility row)
 
 **Component-reuse decision (applies to Tasks 8–9):** every upstream setting-row
@@ -1782,8 +1783,8 @@ near-identical sibling files.
   self-hides off-macOS or once granted); `SettingsGroup`, `ToggleSwitch`
   (`src/components/ui/*`).
 - Produces: `DictationToggleField` — props `field: "enabled" | "push_to_talk"
-  | "append_trailing_space" | "save_recordings" | "save_transcripts" |
-  "post_process_enabled"`, `label: string`, `description: string`,
+| "append_trailing_space" | "save_recordings" | "save_transcripts" |
+"post_process_enabled"`, `label: string`, `description: string`,
   `descriptionMode?`, `grouped?`, `disabled?` — consumed by Task 9.
   `DictationSettings` React component registered in `SECTIONS_CONFIG` under
   id `"dictation"`, consumed by `App.tsx`/`Sidebar.tsx` through the existing
@@ -1791,7 +1792,7 @@ near-identical sibling files.
   settings-UI plan's Task 4/5 groundwork).
 
 **Deviation from the spec's exact row grouping, flagged here:** the spec's
-detailed "Settings UI" section lists group 2 (Shortcut) as *only*
+detailed "Settings UI" section lists group 2 (Shortcut) as _only_
 `ShortcutInput shortcutId="dictate"` + `PushToTalk` + the Accessibility row,
 and puts `ShortcutInput shortcutId="dictate_with_post_process"` inside group 4
 (AI cleanup). But the spec's own Increments list says Task 8 delivers "enable
@@ -2152,12 +2153,12 @@ EOF
   `AutoSubmitKey`, `TypingTool`, `OverlayStyle`, `OverlayPosition`, `LLMPrompt`
   types from `@/bindings` (all already exported today — confirmed in
   `src/bindings.ts`: `PasteMethod = "ctrl_v" | "direct" | "none" |
-  "shift_insert" | "ctrl_shift_v" | "external_script"`, `ClipboardHandling =
-  "dont_modify" | "copy_to_clipboard"`, `AutoSubmitKey = "enter" |
-  "ctrl_enter" | "cmd_enter"`, `TypingTool = "auto" | "wtype" | "kwtype" |
-  "dotool" | "ydotool" | "xdotool"`, `OverlayStyle = "none" | "minimal" |
-  "live"`, `OverlayPosition = "top" | "bottom"`, `LLMPrompt = { id: string;
-  name: string; prompt: string }`); `commands.getAvailableTypingTools()`;
+"shift_insert" | "ctrl_shift_v" | "external_script"`, `ClipboardHandling =
+"dont_modify" | "copy_to_clipboard"`, `AutoSubmitKey = "enter" |
+"ctrl_enter" | "cmd_enter"`, `TypingTool = "auto" | "wtype" | "kwtype" |
+"dotool" | "ydotool" | "xdotool"`, `OverlayStyle = "none" | "minimal" |
+"live"`, `OverlayPosition = "top" | "bottom"`, `LLMPrompt = { id: string;
+name: string; prompt: string }`); `commands.getAvailableTypingTools()`;
   top-level shared settings `overlay_position` and `post_process_prompts`
   (unchanged, read via ordinary `getSetting`).
 - Produces: six new row components (`DictationPasteMethod`,
@@ -2248,9 +2249,7 @@ export const DictationPasteMethod: React.FC<DictationPasteMethodProps> = ({
       },
       {
         value: "shift_insert",
-        label: t(
-          "settings.advanced.pasteMethod.options.clipboardShiftInsert",
-        ),
+        label: t("settings.advanced.pasteMethod.options.clipboardShiftInsert"),
       },
     );
   }
@@ -2313,9 +2312,7 @@ export const DictationClipboardHandling: React.FC<
     },
     {
       value: "copy_to_clipboard",
-      label: t(
-        "settings.advanced.clipboardHandling.options.copyToClipboard",
-      ),
+      label: t("settings.advanced.clipboardHandling.options.copyToClipboard"),
     },
   ];
 
@@ -2573,7 +2570,10 @@ export const DictationShowOverlay: React.FC<DictationShowOverlayProps> = ({
       value: "bottom",
       label: t("settings.advanced.overlay.position.options.bottom"),
     },
-    { value: "top", label: t("settings.advanced.overlay.position.options.top") },
+    {
+      value: "top",
+      label: t("settings.advanced.overlay.position.options.top"),
+    },
   ];
 
   const selectedStyle = (dictation?.overlay_style || "minimal") as OverlayStyle;
@@ -2605,7 +2605,9 @@ export const DictationShowOverlay: React.FC<DictationShowOverlayProps> = ({
       {selectedStyle !== "none" && (
         <SettingContainer
           title={t("settings.advanced.overlay.position.title")}
-          description={t("settings.dictation.overlayPosition.sharedDescription")}
+          description={t(
+            "settings.dictation.overlayPosition.sharedDescription",
+          )}
           descriptionMode={descriptionMode}
           grouped={grouped}
           disabled={disabled}
@@ -2848,7 +2850,7 @@ Change to:
 
 This is the one-line upstream edit the spec calls out: "[the postprocessing
 section's] `enabled` predicate reads `post_process_enabled` alone. It must
-also become visible when *dictation's* post-processing is on."
+also become visible when _dictation's_ post-processing is on."
 
 - [ ] **Step 9: Verify**
 
@@ -2936,7 +2938,7 @@ Tasks 8, 9 and 11 — it is verified with `cargo test`, not manual clicking.
 
 - Consumes: `crate::shorthand::mode::{active, Mode}` — the locked mode-cell
   contract from Task 1 (`pub enum Mode { Meeting, Dictation }`, `pub fn
-  active(app: &AppHandle) -> Mode`). `HistoryManager::save_entry`'s existing
+active(app: &AppHandle) -> Mode`). `HistoryManager::save_entry`'s existing
   signature is unchanged; it already holds `self.app_handle: AppHandle`
   (confirmed in the struct definition), so no caller in `actions.rs` needs to
   change — that file is Task 5's territory, not this one's, and per the spec
@@ -3675,7 +3677,7 @@ dictation's own UI is unaffected by the gap. Worth a follow-up outside this
 plan.
 
 **Note on the `transcribe` relabel:** Step 1 changes the value of an
-*existing* key, `settings.general.shortcut.bindings.transcribe.name`, across
+_existing_ key, `settings.general.shortcut.bindings.transcribe.name`, across
 all 24 locales. `check:translations` only checks that every key is present in
 every locale — it cannot tell you that one locale still says "Transcribe
 Shortcut". Change all 24 by hand and check the diff shows 24 files.
@@ -3694,28 +3696,28 @@ Shortcut". Change all 24 by hand and check the diff shows 24 files.
 written into all 24 locale files per the "English text as the value in every
 locale" convention):
 
-| Key | Value |
-| --- | --- |
-| `sidebar.dictation` | `Dictation` |
-| `settings.dictation.enable.label` | `Enable Dictation` |
-| `settings.dictation.enable.description` | `Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.` |
-| `settings.dictation.enable.shortcutConflict` | `Could not enable dictation: another application is already using one of its shortcuts. Choose a different shortcut below and try again.` |
-| `settings.dictation.groups.shortcut` | `Shortcut` |
-| `settings.dictation.groups.aiCleanup` | `AI Cleanup` |
-| `settings.dictation.groups.privacy` | `Privacy` |
-| `settings.dictation.postProcessing.hint` | `Configure providers, API keys and models in the Post-Processing section.` |
-| `settings.dictation.privacy.saveRecordings.label` | `Save Recordings` |
-| `settings.dictation.privacy.saveRecordings.description` | `Keep the audio recording for each dictation.` |
-| `settings.dictation.privacy.saveTranscripts.label` | `Save Transcripts` |
-| `settings.dictation.privacy.saveTranscripts.description` | `Keep the transcript text for each dictation.` |
-| `settings.dictation.overlayPosition.sharedDescription` | `Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting.` |
-| `settings.dictation.footer` | `Microphone, model and language come from the Capture and Transcription sections.` |
-| `settings.general.shortcut.bindings.dictate.name` | `Dictation Shortcut` |
-| `settings.general.shortcut.bindings.dictate.description` | `The keyboard shortcut to start and stop dictation.` |
-| `settings.general.shortcut.bindings.dictate_with_post_process.name` | `Dictation AI Cleanup Hotkey` |
-| `settings.general.shortcut.bindings.dictate_with_post_process.description` | `Optional: a dedicated hotkey that always applies AI cleanup to your dictation.` |
-| `settings.history.source.meeting` | `Meeting` |
-| `settings.history.source.dictation` | `Dictation` |
+| Key                                                                        | Value                                                                                                                                     |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `sidebar.dictation`                                                        | `Dictation`                                                                                                                               |
+| `settings.dictation.enable.label`                                          | `Enable Dictation`                                                                                                                        |
+| `settings.dictation.enable.description`                                    | `Turn on a separate dictation mode, with its own shortcut, that pastes text into whatever window has focus.`                              |
+| `settings.dictation.enable.shortcutConflict`                               | `Could not enable dictation: another application is already using one of its shortcuts. Choose a different shortcut below and try again.` |
+| `settings.dictation.groups.shortcut`                                       | `Shortcut`                                                                                                                                |
+| `settings.dictation.groups.aiCleanup`                                      | `AI Cleanup`                                                                                                                              |
+| `settings.dictation.groups.privacy`                                        | `Privacy`                                                                                                                                 |
+| `settings.dictation.postProcessing.hint`                                   | `Configure providers, API keys and models in the Post-Processing section.`                                                                |
+| `settings.dictation.privacy.saveRecordings.label`                          | `Save Recordings`                                                                                                                         |
+| `settings.dictation.privacy.saveRecordings.description`                    | `Keep the audio recording for each dictation.`                                                                                            |
+| `settings.dictation.privacy.saveTranscripts.label`                         | `Save Transcripts`                                                                                                                        |
+| `settings.dictation.privacy.saveTranscripts.description`                   | `Keep the transcript text for each dictation.`                                                                                            |
+| `settings.dictation.overlayPosition.sharedDescription`                     | `Where the overlay appears on screen. Shared with meeting mode — this isn't a per-mode setting.`                                          |
+| `settings.dictation.footer`                                                | `Microphone, model and language come from the Capture and Transcription sections.`                                                        |
+| `settings.general.shortcut.bindings.dictate.name`                          | `Dictation Shortcut`                                                                                                                      |
+| `settings.general.shortcut.bindings.dictate.description`                   | `The keyboard shortcut to start and stop dictation.`                                                                                      |
+| `settings.general.shortcut.bindings.dictate_with_post_process.name`        | `Dictation AI Cleanup Hotkey`                                                                                                             |
+| `settings.general.shortcut.bindings.dictate_with_post_process.description` | `Optional: a dedicated hotkey that always applies AI cleanup to your dictation.`                                                          |
+| `settings.history.source.meeting`                                          | `Meeting`                                                                                                                                 |
+| `settings.history.source.dictation`                                        | `Dictation`                                                                                                                               |
 
 - [ ] **Step 1: Add the sidebar and shortcut-binding keys to `en/translation.json`**
 

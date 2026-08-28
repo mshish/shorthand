@@ -29,7 +29,7 @@ task's own text mentions it.
    a key exists in `en` and not in the other 23. New keys are added to all 24
    files with the English string as the value in every one. The locales are:
    `ar bg cs da de en es fr he hi it ja ko ne nl pl pt ru sv tr uk vi zh
-   zh-TW`.
+zh-TW`.
 6. **Fork-only code lives under `src/shorthand/`.** The `@/` alias already
    resolves `src/*`; no build config change is needed.
 7. **Rust changes must pass `cargo fmt --check` and add no new

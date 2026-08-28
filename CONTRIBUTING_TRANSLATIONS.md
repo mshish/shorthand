@@ -165,32 +165,32 @@ enforces key parity across all of them for upstream's catalogues, and
 `bun run check:fork-translations` does the same for the fork-only catalogues
 above — so "supported" means both files, not just this one.
 
-| Language              | Code    | Status            |
-| --------------------- | ------- | ----------------- |
-| English                | `en`    | Complete (source) |
-| Simplified Chinese     | `zh`    | Complete          |
-| Traditional Chinese    | `zh-TW` | Complete          |
-| Spanish                | `es`    | Complete          |
-| French                 | `fr`    | Complete          |
-| German                 | `de`    | Complete          |
-| Japanese               | `ja`    | Complete          |
-| Korean                 | `ko`    | Complete          |
-| Vietnamese             | `vi`    | Complete          |
-| Polish                 | `pl`    | Complete          |
-| Italian                | `it`    | Complete          |
-| Russian                | `ru`    | Complete          |
-| Ukrainian              | `uk`    | Complete          |
-| Portuguese             | `pt`    | Complete          |
-| Czech                  | `cs`    | Complete          |
-| Turkish                | `tr`    | Complete (8 keys under `settings.advanced.acceleration.transcribe.*`, `overlay.style.*`, `overlay.position.*` and `about.acknowledgments.ggml.*` predate an upstream rewording and haven't been revisited — a translation-quality follow-up, not a missing key) |
-| Arabic                 | `ar`    | Complete          |
-| Hebrew                 | `he`    | Complete          |
-| Swedish                | `sv`    | Complete          |
-| Bulgarian              | `bg`    | Complete          |
-| Dutch                  | `nl`    | Complete          |
-| Nepali                 | `ne`    | Complete          |
-| Hindi                  | `hi`    | Complete          |
-| Danish                 | `da`    | Complete          |
+| Language            | Code    | Status                                                                                                                                                                                                                                                          |
+| ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| English             | `en`    | Complete (source)                                                                                                                                                                                                                                               |
+| Simplified Chinese  | `zh`    | Complete                                                                                                                                                                                                                                                        |
+| Traditional Chinese | `zh-TW` | Complete                                                                                                                                                                                                                                                        |
+| Spanish             | `es`    | Complete                                                                                                                                                                                                                                                        |
+| French              | `fr`    | Complete                                                                                                                                                                                                                                                        |
+| German              | `de`    | Complete                                                                                                                                                                                                                                                        |
+| Japanese            | `ja`    | Complete                                                                                                                                                                                                                                                        |
+| Korean              | `ko`    | Complete                                                                                                                                                                                                                                                        |
+| Vietnamese          | `vi`    | Complete                                                                                                                                                                                                                                                        |
+| Polish              | `pl`    | Complete                                                                                                                                                                                                                                                        |
+| Italian             | `it`    | Complete                                                                                                                                                                                                                                                        |
+| Russian             | `ru`    | Complete                                                                                                                                                                                                                                                        |
+| Ukrainian           | `uk`    | Complete                                                                                                                                                                                                                                                        |
+| Portuguese          | `pt`    | Complete                                                                                                                                                                                                                                                        |
+| Czech               | `cs`    | Complete                                                                                                                                                                                                                                                        |
+| Turkish             | `tr`    | Complete (8 keys under `settings.advanced.acceleration.transcribe.*`, `overlay.style.*`, `overlay.position.*` and `about.acknowledgments.ggml.*` predate an upstream rewording and haven't been revisited — a translation-quality follow-up, not a missing key) |
+| Arabic              | `ar`    | Complete                                                                                                                                                                                                                                                        |
+| Hebrew              | `he`    | Complete                                                                                                                                                                                                                                                        |
+| Swedish             | `sv`    | Complete                                                                                                                                                                                                                                                        |
+| Bulgarian           | `bg`    | Complete                                                                                                                                                                                                                                                        |
+| Dutch               | `nl`    | Complete                                                                                                                                                                                                                                                        |
+| Nepali              | `ne`    | Complete                                                                                                                                                                                                                                                        |
+| Hindi               | `hi`    | Complete                                                                                                                                                                                                                                                        |
+| Danish              | `da`    | Complete                                                                                                                                                                                                                                                        |
 
 This table used to list 7 languages as complete and ask for help with Korean
 and Portuguese — both had already shipped by the time anyone re-read it.

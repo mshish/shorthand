@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-26-system-audio-capture-linux-macos-design.md`
 
-**Phase 1 of 3, all on one branch.** Plans A, B and C are sequential phases of a single piece of work that ships together — nothing here is released on its own. So this phase may leave Linux and macOS system audio *inert* (compiled but resolving no device); Phases B and C fill that in. Do not add guards, fallbacks or UI states whose only purpose is to make an intermediate phase safe for users — no intermediate phase reaches users. Each **commit** should still build, so the tree stays bisectable.
+**Phase 1 of 3, all on one branch.** Plans A, B and C are sequential phases of a single piece of work that ships together — nothing here is released on its own. So this phase may leave Linux and macOS system audio _inert_ (compiled but resolving no device); Phases B and C fill that in. Do not add guards, fallbacks or UI states whose only purpose is to make an intermediate phase safe for users — no intermediate phase reaches users. Each **commit** should still build, so the tree stays bisectable.
 
 ## Global Constraints
 
@@ -27,10 +27,12 @@
 ### Task 1: Fork rodio and bump its cpal
 
 **Files:**
+
 - Create: a new fork of `cjpais/rodio` under your own account (e.g. `mshish/rodio`), branch `update-cpal-018`
 - Modify: `src-tauri/Cargo.toml:61` (the `rodio` git dependency)
 
 **Interfaces:**
+
 - Produces: a rodio git revision whose `cpal` dependency is `0.18`, so the app and rodio resolve to a single shared cpal and `cpal::Device` remains one type across the `audio_feedback.rs` boundary.
 
 Context you need: the current dependency is `rodio = { git = "https://github.com/cjpais/rodio.git" }`, resolving to rev `fed3029`. That fork is upstream rodio **0.20.1 plus exactly one commit** ("update cpal to 0.16.0"). There is no other fork-specific change, so this task repeats that same one-line move for 0.18.
@@ -105,10 +107,12 @@ git commit -m "build: point rodio at fork with cpal 0.18"
 ### Task 2: Bump the app's cpal and fix the breaking changes
 
 **Files:**
+
 - Modify: `src-tauri/Cargo.toml:51` (`cpal = "0.16.0"`)
 - Modify (as compile errors dictate): `src-tauri/src/audio_toolkit/audio/recorder.rs`, `src-tauri/src/audio_toolkit/audio/device.rs`, `src-tauri/src/audio_feedback.rs`, `src-tauri/src/commands/audio.rs`, `src-tauri/src/managers/audio.rs`
 
 **Interfaces:**
+
 - Produces: the whole app compiling against cpal 0.18 with unchanged behaviour.
 
 cpal 0.16 → 0.18 carries breaking changes to device naming, stream configuration and error types. Rather than guess which, this task is driven by the compiler plus the upstream upgrade guide.
@@ -159,7 +163,7 @@ fn id(&self) -> Result<DeviceId, Error>
 
 `DeviceDescription` is a struct carrying name, manufacturer, device type and other metadata. For the plain display string cpal's docs direct you to `device.to_string()` (its `Display` impl). So `device.name().unwrap_or_else(|_| "Unknown".into())` becomes `device.to_string()`, and a `Some(name) == default_name` comparison compares those strings. Confirm the exact accessor against cpal 0.18's `DeviceDescription` before writing it — assuming `.name()` returns a `String` is how this gets miscompiled.
 
-`device.rs`'s `list_input_devices`/`list_output_devices` populate `CpalDeviceInfo.name`, and that value is both displayed *and* persisted (`selected_microphone`, `system_audio_device`, `clamshell_microphone` each store a device name and match on it later). Keep this mechanical — preserve the same string so behaviour is unchanged — and do **not** switch the persisted key to `id()` in this phase: that would silently invalidate every existing user's saved device selection. Note it as a follow-up.
+`device.rs`'s `list_input_devices`/`list_output_devices` populate `CpalDeviceInfo.name`, and that value is both displayed _and_ persisted (`selected_microphone`, `system_audio_device`, `clamshell_microphone` each store a device name and match on it later). Keep this mechanical — preserve the same string so behaviour is unchanged — and do **not** switch the persisted key to `id()` in this phase: that would silently invalidate every existing user's saved device selection. Note it as a follow-up.
 
 **Sample-format selection was re-ranked** to `F32 > F64 > integers by bit-depth descending > DSD`. cpal 0.18's `SampleFormat` has 15 variants (I8/I16/I24/I32/I64, U8/U16/U24/U32/U64, F32/F64, DsdU8/DsdU16/DsdU32); `build_stream` (`recorder.rs:360-409`) and `build_loopback_stream` (`recorder.rs:856-898`) handle **five** — U8/I8/I16/I32/F32 — and return "Unsupported sample format" for the rest. Under the old ranking that was fine. Under the new one, hardware that used to negotiate I16 can now land on I24, U24, I64, U32 or F64, and capture fails.
 
@@ -180,6 +184,7 @@ Do **not** fix this by enumerating fifteen match arms. Select a format you suppo
 ```
 
 If the default's `sample_format()` is not in that list, search `supported_input_configs()` (or `supported_output_configs()` for loopback) for one that is, preferring the list's order, and use its `with_max_sample_rate()`. If nothing matches, keep today's error. Widening the generic path to more formats is a reasonable alternative — both `build_stream` and `build_loopback_stream_typed` are bounded `T: Sample + SizedSample + Send + 'static, f32: cpal::FromSample<T>`, which every PCM variant satisfies — but selection is the smaller, more durable change.
+
 - If a change looks like it alters runtime behaviour rather than just types (e.g. a changed default buffer size or a renamed method with different semantics), stop and note it — that is a finding for the human, not something to absorb silently.
 
 - [ ] **Step 5: Verify a clean build and clean lints**
@@ -212,6 +217,7 @@ git commit -m "build: migrate to cpal 0.18"
 ### Task 3: Raise the macOS deployment floor to 14.6
 
 **Files:**
+
 - Modify: `src-tauri/tauri.conf.json:42` (`"minimumSystemVersion": "10.15"`)
 - Modify: `BUILD.md` (macOS prerequisites section)
 
@@ -267,6 +273,7 @@ git commit -m "build(macos): raise minimum macOS to 14.6 for cpal 0.18"
 ### Task 4: Remove the platform gates from the system-audio machinery
 
 **Files:**
+
 - Modify: `src-tauri/src/audio_toolkit/audio/recorder.rs` (~70 `#[cfg(windows)]` sites)
 - Modify: `src-tauri/src/audio_toolkit/audio/mod.rs:9-10`
 - Modify: `src-tauri/src/managers/audio.rs`
@@ -275,13 +282,14 @@ git commit -m "build(macos): raise minimum macOS to 14.6 for cpal 0.18"
 - Modify: `src-tauri/src/lib.rs` (the `SystemAudioTranscription` state registration)
 
 **Interfaces:**
+
 - Produces: `SystemAudioCapture`, `AudioRecorder::open(device, system_audio)`, `with_system_vad`, `with_system_audio_callback`, `SystemAudioTranscription` and `StreamSource::System` all available unconditionally on every target. `AudioRecordingManager::update_system_audio_capture(&self, enabled: bool, device_name: Option<String>, stream_router: Option<Arc<StreamRouter>>) -> Result<(), anyhow::Error>` compiles everywhere.
 
 The gates being deleted fall into two groups. **Delete** the ones on portable machinery. **Keep** any gate on genuinely platform-specific code (the Windows registry permission reads in `commands/audio.rs`, the `wpctl`/`pactl`/`amixer` mute helpers in `managers/audio.rs`) — those are not part of this task.
 
 - [ ] **Step 1: Inventory the gates — and find every PAIR first**
 
-A lone `#[cfg(windows)]` can simply be deleted. A **pair** — `#[cfg(windows)] X` followed by `#[cfg(not(windows))] Y` — cannot: deleting one half leaves two conflicting definitions or a missing binding, and deleting both loses `Y`'s logic. Every pair must be *merged* by hand, keeping the Windows form.
+A lone `#[cfg(windows)]` can simply be deleted. A **pair** — `#[cfg(windows)] X` followed by `#[cfg(not(windows))] Y` — cannot: deleting one half leaves two conflicting definitions or a missing binding, and deleting both loses `Y`'s logic. Every pair must be _merged_ by hand, keeping the Windows form.
 
 Find the pairs before touching anything, because they are the only sites that need thought:
 
@@ -444,11 +452,13 @@ git commit -m "refactor(audio): make system-audio machinery platform-neutral"
 ### Task 5: Surface whether the loopback stream actually opened
 
 **Files:**
+
 - Modify: `src-tauri/src/audio_toolkit/audio/recorder.rs` (`open()`, `get_preferred_loopback_config`)
 - Modify: `src-tauri/src/managers/audio.rs` (`start_microphone_stream`, `update_system_audio_capture`)
 - Modify: `src-tauri/src/audio_toolkit/utils.rs` and `src-tauri/src/audio_toolkit/mod.rs`
 
 **Interfaces:**
+
 - Produces:
   - `AudioRecorder::open(...) -> Result<bool, Box<dyn std::error::Error>>` — the `bool` is "the system-audio loopback stream opened successfully", already computed internally today and currently thrown away.
   - `AudioRecordingManager::system_audio_active(&self) -> bool` — the last open's loopback outcome.
@@ -606,6 +616,7 @@ git commit -m "feat(audio): report whether the loopback stream opened"
 ### Task 6: Shared availability plumbing
 
 **Files:**
+
 - Modify: `src-tauri/src/commands/audio.rs`
 - Modify: `src-tauri/src/lib.rs` (`collect_commands![...]`, near line 770)
 - Modify: `src/components/settings/advanced/SystemAudioCapture.tsx:22-24`
@@ -614,6 +625,7 @@ git commit -m "feat(audio): report whether the loopback stream opened"
 - Test: `src-tauri/src/commands/audio.rs` (inline `#[cfg(test)]` module)
 
 **Interfaces:**
+
 - Produces:
   - `SystemAudioAvailability` — `Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type`, `#[serde(rename_all = "snake_case")]`, variants `Available`, `UnavailableNoSoundServer`, `PermissionDenied`.
   - `pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability`
@@ -705,7 +717,7 @@ Add `commands::audio::get_system_audio_availability,` to `collect_commands![...]
 
 - [ ] **Step 6: Enforce availability in the commands too**
 
-Step 3 makes availability *readable*; it must also be *binding*. The UI can be stale, and a Tauri command can be invoked directly, so neither is a place to rely on. In `change_system_audio_enabled_setting`, alongside the existing mute and streaming-model guards:
+Step 3 makes availability _readable_; it must also be _binding_. The UI can be stale, and a Tauri command can be invoked directly, so neither is a place to rely on. In `change_system_audio_enabled_setting`, alongside the existing mute and streaming-model guards:
 
 ```rust
     if enabled && get_system_audio_availability(app.clone()).await != SystemAudioAvailability::Available {
@@ -726,15 +738,15 @@ Put availability in the **Zustand settings store**, not a per-component hook. Th
 Then in each of `SystemAudioCapture.tsx`, `SystemAudioDeviceSelector.tsx` and `ModesSettings.tsx`, replace the `osType` early-return with:
 
 ```tsx
-  const { systemAudioAvailability, refreshSystemAudioAvailability } =
-    useSettings();
+const { systemAudioAvailability, refreshSystemAudioAvailability } =
+  useSettings();
 
-  if (
-    systemAudioAvailability === null ||
-    systemAudioAvailability === "unavailable_no_sound_server"
-  ) {
-    return null;
-  }
+if (
+  systemAudioAvailability === null ||
+  systemAudioAvailability === "unavailable_no_sound_server"
+) {
+  return null;
+}
 ```
 
 Remove the now-unused `useOsType` import where nothing else needs it. In `ModesSettings.tsx`, read the surrounding code first — if its `osType` check guards more than system audio, change only the system-audio part.

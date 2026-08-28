@@ -15,7 +15,7 @@ pasted into whatever window has focus. The fork turned that off
 (`PasteMethod::None` on every platform) and hid the settings that control it —
 see [2026-08-17-shorthand-settings-ui-design.md](2026-08-17-shorthand-settings-ui-design.md).
 
-Some users want both: Shorthand for meetings *and* plain dictation, without
+Some users want both: Shorthand for meetings _and_ plain dictation, without
 installing and running Handy alongside it. Everything dictation needs is already
 in the binary; only the settings and the wiring are absent.
 
@@ -45,12 +45,12 @@ and give the feature a boundary — `follow_stream/` is the model.
 Four per-mode concerns need to know which mode a capture belongs to, and they
 are resolved in four different places:
 
-| Concern | Resolved in |
-| --- | --- |
-| Paste method, clipboard, auto-submit, trailing space | `clipboard::paste()` |
-| Overlay style | `overlay::show_overlay_state()` and `actions.rs` |
-| Save recordings / save transcripts | `actions.rs`, `HistoryManager::save_entry()` |
-| Post-processing prompt | `actions.rs::process_transcription_output()` |
+| Concern                                              | Resolved in                                      |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| Paste method, clipboard, auto-submit, trailing space | `clipboard::paste()`                             |
+| Overlay style                                        | `overlay::show_overlay_state()` and `actions.rs` |
+| Save recordings / save transcripts                   | `actions.rs`, `HistoryManager::save_entry()`     |
+| Post-processing prompt                               | `actions.rs::process_transcription_output()`     |
 
 Threading a `binding_id` parameter into all four means four upstream signature
 changes plus their call sites. Instead, one fork-only cell records the mode of
@@ -155,14 +155,14 @@ asks for it.
 
 Per-mode, in `DictationSettings`:
 
-| Setting | Dictation default | Why not shared |
-| --- | --- | --- |
-| `paste_method` | `CtrlV` / `Direct` | The entire point. Meeting mode stays `None`. |
-| `push_to_talk` | `true` | Meetings run an hour and are toggled; dictation is seconds and is held. |
-| `clipboard_handling`, `auto_submit`, `auto_submit_key`, `append_trailing_space`, `typing_tool` | Handy's defaults | Subordinate to `paste_method`; they follow it. |
-| `overlay_style` | `Minimal` | Dictation wants the compact pill, not a live-transcript panel over the text field. |
-| `save_recordings`, `save_transcripts` | `false` | Consent, not preference. Meeting captures contain other people's voices; dictation contains only the user's. One checkbox for both conflates two different decisions. |
-| `post_process_enabled`, `post_process_selected_prompt_id` | `false`, `None` | Dictation wants a cleanup prompt; a meeting wants a summary prompt, if anything. |
+| Setting                                                                                        | Dictation default  | Why not shared                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `paste_method`                                                                                 | `CtrlV` / `Direct` | The entire point. Meeting mode stays `None`.                                                                                                                          |
+| `push_to_talk`                                                                                 | `true`             | Meetings run an hour and are toggled; dictation is seconds and is held.                                                                                               |
+| `clipboard_handling`, `auto_submit`, `auto_submit_key`, `append_trailing_space`, `typing_tool` | Handy's defaults   | Subordinate to `paste_method`; they follow it.                                                                                                                        |
+| `overlay_style`                                                                                | `Minimal`          | Dictation wants the compact pill, not a live-transcript panel over the text field.                                                                                    |
+| `save_recordings`, `save_transcripts`                                                          | `false`            | Consent, not preference. Meeting captures contain other people's voices; dictation contains only the user's. One checkbox for both conflates two different decisions. |
+| `post_process_enabled`, `post_process_selected_prompt_id`                                      | `false`, `None`    | Dictation wants a cleanup prompt; a meeting wants a summary prompt, if anything.                                                                                      |
 
 Shared with meeting mode, deliberately:
 
@@ -177,7 +177,7 @@ Shared with meeting mode, deliberately:
   credentials. Duplicating the provider and key UI would be worse than sharing
   it.
 - Microphone, channel, VAD, mute-while-recording, audio feedback, sound theme,
-  overlay *position*, custom words, filler-word removal, language, translation,
+  overlay _position_, custom words, filler-word removal, language, translation,
   acceleration, model unload timeout.
 
 Not offered in dictation settings at all, because they are meeting concepts:
@@ -242,13 +242,13 @@ binding — fixing that generally is upstream-facing work.
 Meeting mode moves off Handy's defaults so both apps can run side by side.
 Dictation takes Handy's exact combos, so muscle memory transfers.
 
-| Binding | Windows / Linux | macOS |
-| --- | --- | --- |
-| `transcribe` (meeting) | `ctrl+alt+space` | `ctrl+shift+space` |
+| Binding                        | Windows / Linux        | macOS                     |
+| ------------------------------ | ---------------------- | ------------------------- |
+| `transcribe` (meeting)         | `ctrl+alt+space`       | `ctrl+shift+space`        |
 | `transcribe_with_post_process` | `ctrl+alt+shift+space` | `ctrl+shift+option+space` |
-| `dictate` | `ctrl+space` | `option+space` |
-| `dictate_with_post_process` | `ctrl+shift+space` | `option+shift+space` |
-| `cancel` | `escape` | `escape` |
+| `dictate`                      | `ctrl+space`           | `option+space`            |
+| `dictate_with_post_process`    | `ctrl+shift+space`     | `option+shift+space`      |
+| `cancel`                       | `escape`               | `escape`                  |
 
 macOS `ctrl+space` and `ctrl+option+space` are both bound by the OS to the
 input-source switcher, and `cmd+space` is Spotlight. `ctrl+shift+space` avoids
@@ -271,7 +271,7 @@ privacy regression. A shortcut has no equivalent argument: resetting it breaks
 muscle memory and buys no safety. The frozen v0.9.0 fixture keeps its `f13`
 binding and needs no edit.
 
-The two new bindings *do* reach existing stores through the vacant-key merge,
+The two new bindings _do_ reach existing stores through the vacant-key merge,
 but stay unregistered until dictation is enabled.
 
 ### Follow-stream stays silent for dictation
@@ -298,11 +298,11 @@ Resolved through the mode cell, not through `actions.rs` alone.
 
 `actions.rs` has two `overlay_style` reads where the binding is in scope. But
 `overlay::show_overlay_state` reads `overlay_style` from global settings on
-*every* state transition, purely to early-return on `None`. Without the cell,
+_every_ state transition, purely to early-return on `None`. Without the cell,
 setting dictation's overlay to `None` while meeting's is `Live` would still
 flash a processing overlay mid-dictation. All three reads consult the resolver.
 
-Overlay *position* stays shared: top-versus-bottom is a screen-layout
+Overlay _position_ stays shared: top-versus-bottom is a screen-layout
 preference, not a mode one.
 
 ### History
@@ -337,7 +337,7 @@ global settings; it resolves through the cell instead.
 
 The provider/key/model configuration lives in upstream's `postprocessing`
 sidebar section, which simplified mode hides and whose `enabled` predicate reads
-`post_process_enabled` alone. It must also become visible when *dictation's*
+`post_process_enabled` alone. It must also become visible when _dictation's_
 post-processing is on — a one-line change to that predicate in `Sidebar.tsx`.
 
 The Dictation section itself carries only the enable toggle and the prompt
@@ -382,15 +382,15 @@ New file `src/shorthand/DictationSettings.tsx`, rows in order:
 1. **Enable Dictation** — new fork-only toggle. Everything below is rendered but
    disabled when off, not hidden: an empty section reads as broken, and a
    disabled one previews what enabling buys.
-2. *Shortcut* — `ShortcutInput shortcutId="dictate"`, `PushToTalk` (per-mode),
+2. _Shortcut_ — `ShortcutInput shortcutId="dictate"`, `PushToTalk` (per-mode),
    `ShortcutInput shortcutId="dictate_with_post_process"`, macOS Accessibility
    status row. Both shortcuts sit together so the two keys can be read and
    compared at a glance.
-3. *Output* — `PasteMethod`, `TypingTool` (Linux), `ClipboardHandling`,
+3. _Output_ — `PasteMethod`, `TypingTool` (Linux), `ClipboardHandling`,
    `AutoSubmit`, `AppendTrailingSpace`, `ShowOverlay`.
-4. *AI cleanup* — enable toggle, prompt picker, and a link to the
+4. _AI cleanup_ — enable toggle, prompt picker, and a link to the
    Post-processing section for provider and key setup.
-5. *Privacy* — `SaveRecordings`, `SaveTranscripts`.
+5. _Privacy_ — `SaveRecordings`, `SaveTranscripts`.
 6. A footer line stating that microphone, model and language come from Capture
    and Transcription.
 
@@ -423,26 +423,26 @@ keys.
 This is the full permanent conflict surface. Everything else is a new file under
 `src-tauri/src/shorthand/` or `src/shorthand/`.
 
-| File | Edit |
-| --- | --- |
-| `src-tauri/src/settings.rs` | one struct field; two `bindings.insert` entries; new shortcut default strings |
-| `src-tauri/src/lib.rs` | `pub mod shorthand;`; one `collect_commands!` entry |
-| `src-tauri/src/transcription_coordinator.rs` | `is_transcribe_binding` learns two ids |
-| `src-tauri/src/actions.rs` | two `ACTION_MAP` inserts; `set_active` call; `hub.begin()` guard; three resolver swaps (overlay ×2, save toggles) |
-| `src-tauri/src/clipboard.rs` | one line: `get_settings` → resolver |
-| `src-tauri/src/overlay.rs` | one line: `get_settings` → resolver |
-| `src-tauri/src/managers/history.rs` | one migration; one struct field; `save_entry` reads the cell |
-| `src-tauri/src/tray.rs` | one line in a test-only `HistoryEntry` builder, forced by the new `source` field |
-| `src-tauri/src/shortcut/mod.rs` | one command; two skip-guard sites |
-| `src-tauri/src/shortcut/tauri_impl.rs` | one skip-guard site |
-| `src-tauri/src/shortcut/handy_keys.rs` | one skip-guard site |
-| `src-tauri/src/secure_input.rs` | one skip-guard site |
-| `src-tauri/src/shortcut/handler.rs` | `push_to_talk` resolves per binding |
-| `src/components/Sidebar.tsx` | `postprocessing.enabled` also honours dictation |
-| `src/stores/settingsStore.ts` | one updater entry |
-| `src/components/settings/history/*` | render the source tag |
-| `src/bindings.ts` | regenerated by a debug build, not edited |
-| 24 × `src/i18n/locales/*/translation.json` | new keys |
+| File                                         | Edit                                                                                                              |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `src-tauri/src/settings.rs`                  | one struct field; two `bindings.insert` entries; new shortcut default strings                                     |
+| `src-tauri/src/lib.rs`                       | `pub mod shorthand;`; one `collect_commands!` entry                                                               |
+| `src-tauri/src/transcription_coordinator.rs` | `is_transcribe_binding` learns two ids                                                                            |
+| `src-tauri/src/actions.rs`                   | two `ACTION_MAP` inserts; `set_active` call; `hub.begin()` guard; three resolver swaps (overlay ×2, save toggles) |
+| `src-tauri/src/clipboard.rs`                 | one line: `get_settings` → resolver                                                                               |
+| `src-tauri/src/overlay.rs`                   | one line: `get_settings` → resolver                                                                               |
+| `src-tauri/src/managers/history.rs`          | one migration; one struct field; `save_entry` reads the cell                                                      |
+| `src-tauri/src/tray.rs`                      | one line in a test-only `HistoryEntry` builder, forced by the new `source` field                                  |
+| `src-tauri/src/shortcut/mod.rs`              | one command; two skip-guard sites                                                                                 |
+| `src-tauri/src/shortcut/tauri_impl.rs`       | one skip-guard site                                                                                               |
+| `src-tauri/src/shortcut/handy_keys.rs`       | one skip-guard site                                                                                               |
+| `src-tauri/src/secure_input.rs`              | one skip-guard site                                                                                               |
+| `src-tauri/src/shortcut/handler.rs`          | `push_to_talk` resolves per binding                                                                               |
+| `src/components/Sidebar.tsx`                 | `postprocessing.enabled` also honours dictation                                                                   |
+| `src/stores/settingsStore.ts`                | one updater entry                                                                                                 |
+| `src/components/settings/history/*`          | render the source tag                                                                                             |
+| `src/bindings.ts`                            | regenerated by a debug build, not edited                                                                          |
+| 24 × `src/i18n/locales/*/translation.json`   | new keys                                                                                                          |
 
 ## Verification
 
@@ -471,7 +471,7 @@ Manual, against a debug build:
    log shows no registration for `dictate`.
 8. Enable dictation, dictate into a text editor: text is pasted. Meeting mode's
    shortcut still pastes nothing.
-9. Set the two modes to *different* paste methods and different overlay styles.
+9. Set the two modes to _different_ paste methods and different overlay styles.
    Confirm each mode uses its own. This is the scenario a shared-state bug
    produces.
 10. Enable dictation post-processing: the Post-processing section appears, and

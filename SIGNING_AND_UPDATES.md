@@ -5,14 +5,14 @@ that does it.
 
 ## Where things stand
 
-| Thing | State | Consequence |
-| --- | --- | --- |
-| `plugins.updater.endpoints` | points at `cjpais/Handy`'s `latest.json` | Shorthand offers to install upstream Handy over itself |
-| `plugins.updater.pubkey` | upstream's minisign public key | only upstream can produce updates this build will accept |
-| `update_checks_enabled` | defaults `true` | the offer appears unprompted |
+| Thing                        | State                                               | Consequence                                                   |
+| ---------------------------- | --------------------------------------------------- | ------------------------------------------------------------- |
+| `plugins.updater.endpoints`  | points at `cjpais/Handy`'s `latest.json`            | Shorthand offers to install upstream Handy over itself        |
+| `plugins.updater.pubkey`     | upstream's minisign public key                      | only upstream can produce updates this build will accept      |
+| `update_checks_enabled`      | defaults `true`                                     | the offer appears unprompted                                  |
 | `bundle.windows.signCommand` | `trusted-signing-cli … -a CJ-Signing -c cjpais-dev` | bundling fails; this fork cannot authenticate to that account |
-| macOS `signingIdentity` | `"-"` (ad-hoc) | fine locally, not distributable |
-| GitHub Actions | disabled at the repository level | nothing runs, nothing fails, no minutes burned |
+| macOS `signingIdentity`      | `"-"` (ad-hoc)                                      | fine locally, not distributable                               |
+| GitHub Actions               | disabled at the repository level                    | nothing runs, nothing fails, no minutes burned                |
 
 **The live risk is the first row.** Until it changes, decline any update prompt.
 Accepting one replaces Shorthand with Handy.
@@ -88,12 +88,12 @@ have after losing this machine.
 `bundle.windows.signCommand` must be removed or replaced before a bundled build
 will succeed. Replacing it is optional; removing it is not.
 
-| Option | Rough cost | Notes |
-| --- | --- | --- |
-| Unsigned | free | SmartScreen warns on first run; "More info → Run anyway" works. Perfectly fine for personal use. |
-| Azure Trusted Signing | ~$10/month | What upstream uses. Needs an identity check; individuals were eligible at launch but availability has moved around — verify current terms before planning on it. |
-| OV certificate | ~$200–400/year | Since the 2023 CA/Browser Forum rules the key must live on a hardware token or cloud HSM, which makes CI signing genuinely awkward. |
-| EV certificate | ~$400+/year | Same hardware constraint, but carries SmartScreen reputation immediately rather than earning it. |
+| Option                | Rough cost     | Notes                                                                                                                                                            |
+| --------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unsigned              | free           | SmartScreen warns on first run; "More info → Run anyway" works. Perfectly fine for personal use.                                                                 |
+| Azure Trusted Signing | ~$10/month     | What upstream uses. Needs an identity check; individuals were eligible at launch but availability has moved around — verify current terms before planning on it. |
+| OV certificate        | ~$200–400/year | Since the 2023 CA/Browser Forum rules the key must live on a hardware token or cloud HSM, which makes CI signing genuinely awkward.                              |
+| EV certificate        | ~$400+/year    | Same hardware constraint, but carries SmartScreen reputation immediately rather than earning it.                                                                 |
 
 For a fork you run yourself, unsigned is the honest default. Revisit if you ever
 hand a build to someone else.

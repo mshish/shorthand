@@ -22,11 +22,11 @@ through the transcript stream, not through the clipboard.
 
 ### Repository layout
 
-| Branch | Role |
-| --- | --- |
-| `main` | Byte-identical to `upstream/main`. Never committed to directly. |
-| `feat/*` | Cut from `main`, upstream-clean. These become pull requests to Handy. |
-| `shorthand` | Default branch. The product line. Fork-only work lives here. |
+| Branch      | Role                                                                  |
+| ----------- | --------------------------------------------------------------------- |
+| `main`      | Byte-identical to `upstream/main`. Never committed to directly.       |
+| `feat/*`    | Cut from `main`, upstream-clean. These become pull requests to Handy. |
+| `shorthand` | Default branch. The product line. Fork-only work lives here.          |
 
 Remotes follow the standard fork convention: `origin` is the private fork,
 `upstream` is `cjpais/Handy`.
@@ -114,14 +114,14 @@ runtime, not by a rebuild. It is a new flag rather than a reuse of Handy's
 
 Simplified mode (`show_all_settings` false) renders six sections:
 
-| Section | Origin | Contents |
-| --- | --- | --- |
-| **Capture** | fork-only, new | transcribe + cancel shortcuts, push-to-talk, microphone, channel, system audio + device, mute while recording, VAD, overlay, follow-stream output |
-| **Transcription** | fork-only, new | model catalog (`ModelsSettings`), `ModelSettingsCard` (language + translate, self-hiding by model capability), custom words, filler word removal |
-| **App** | fork-only, new | autostart, start hidden, tray icon, audio feedback, volume, output device |
-| **History** | upstream, unchanged | as upstream |
-| **Debug** | upstream, unchanged | as upstream |
-| **About** | upstream, + one row | as upstream, plus `show_all_settings` |
+| Section           | Origin              | Contents                                                                                                                                          |
+| ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Capture**       | fork-only, new      | transcribe + cancel shortcuts, push-to-talk, microphone, channel, system audio + device, mute while recording, VAD, overlay, follow-stream output |
+| **Transcription** | fork-only, new      | model catalog (`ModelsSettings`), `ModelSettingsCard` (language + translate, self-hiding by model capability), custom words, filler word removal  |
+| **App**           | fork-only, new      | autostart, start hidden, tray icon, audio feedback, volume, output device                                                                         |
+| **History**       | upstream, unchanged | as upstream                                                                                                                                       |
+| **Debug**         | upstream, unchanged | as upstream                                                                                                                                       |
+| **About**         | upstream, + one row | as upstream, plus `show_all_settings`                                                                                                             |
 
 Hidden in simplified mode: upstream's `general`, `models`, `advanced`,
 `postProcessing`.
@@ -228,17 +228,17 @@ workflow, so fork-only components must not contain bare string literals.
 
 This is the full permanent conflict surface. Everything else is new files.
 
-| File | Edit |
-| --- | --- |
-| `src/components/Sidebar.tsx` | register three fork-only sections; consult the registry |
-| `src/App.tsx` | initial section and unknown-section fallback must resolve to a *visible* section — both currently hardcode `general`, which simplified mode hides |
-| `src/components/settings/about/AboutSettings.tsx` | one row for `show_all_settings` |
-| `src-tauri/src/settings.rs` | one struct field, one default entry, `PasteMethod::None` default |
-| `src-tauri/src/shortcut/mod.rs` | one command |
-| `src-tauri/src/lib.rs` | one `collect_commands!` entry |
-| `src/stores/settingsStore.ts` | one updater entry |
-| `src/bindings.ts` | regenerated, not edited |
-| 24 × `src/i18n/locales/*/translation.json` | new section-title keys |
+| File                                              | Edit                                                                                                                                              |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/components/Sidebar.tsx`                      | register three fork-only sections; consult the registry                                                                                           |
+| `src/App.tsx`                                     | initial section and unknown-section fallback must resolve to a _visible_ section — both currently hardcode `general`, which simplified mode hides |
+| `src/components/settings/about/AboutSettings.tsx` | one row for `show_all_settings`                                                                                                                   |
+| `src-tauri/src/settings.rs`                       | one struct field, one default entry, `PasteMethod::None` default                                                                                  |
+| `src-tauri/src/shortcut/mod.rs`                   | one command                                                                                                                                       |
+| `src-tauri/src/lib.rs`                            | one `collect_commands!` entry                                                                                                                     |
+| `src/stores/settingsStore.ts`                     | one updater entry                                                                                                                                 |
+| `src/bindings.ts`                                 | regenerated, not edited                                                                                                                           |
+| 24 × `src/i18n/locales/*/translation.json`        | new section-title keys                                                                                                                            |
 
 ## Verification
 

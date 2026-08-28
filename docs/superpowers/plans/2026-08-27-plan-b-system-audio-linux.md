@@ -27,9 +27,11 @@
 ### Task 1: Enable the Linux cpal backends
 
 **Files:**
+
 - Modify: `src-tauri/Cargo.toml` (the `[target.'cfg(target_os = "linux")'.dependencies]` section, currently at line 164)
 
 **Interfaces:**
+
 - Produces: `cpal::HostId::PipeWire` and `cpal::HostId::PulseAudio` exist at compile time on Linux.
 
 - [ ] **Step 1: Add the features**
@@ -69,7 +71,7 @@ git commit -m "build(linux): enable cpal pipewire and pulseaudio backends"
 
 **Files:** none permanent. This task produces **findings**, which you write into Task 4 below before implementing it.
 
-**Why this task exists.** The Windows implementation opens an *output* device as an input stream, and `get_preferred_loopback_config` asks that device for its **output** config. Neither is guaranteed on Linux. An independent review raised that cpal's PipeWire host may expose its synthetic default-output entry as output-only (with loopback living on a separate duplex entry), and that its PulseAudio host may reject input streams on sink devices entirely, requiring the monitor **source** to be opened as an input device instead. If that is right, Task 4's resolution logic is wrong in a way that only surfaces at runtime. Half an hour here saves debugging a silent no-audio bug later.
+**Why this task exists.** The Windows implementation opens an _output_ device as an input stream, and `get_preferred_loopback_config` asks that device for its **output** config. Neither is guaranteed on Linux. An independent review raised that cpal's PipeWire host may expose its synthetic default-output entry as output-only (with loopback living on a separate duplex entry), and that its PulseAudio host may reject input streams on sink devices entirely, requiring the monitor **source** to be opened as an input device instead. If that is right, Task 4's resolution logic is wrong in a way that only surfaces at runtime. Half an hour here saves debugging a silent no-audio bug later.
 
 Do this on a real Linux machine with PipeWire running.
 
@@ -113,9 +115,11 @@ git commit -m "docs(linux): record cpal loopback device findings from spike"
 ### Task 3: Enable the real Linux host resolution
 
 **Files:**
+
 - Modify: `src-tauri/src/audio_toolkit/utils.rs` (`get_system_audio_host`, added by Phase A)
 
 **Interfaces:**
+
 - Produces: `get_system_audio_host()` returns a real host on Linux instead of Phase A's placeholder `None`.
 
 Phase A added this function with its Linux arm stubbed to `None`, because naming the `HostId::PipeWire`/`PulseAudio` variants before Task 1 enabled their Cargo features would not compile. Now they exist.
@@ -150,6 +154,7 @@ git commit -m "feat(linux): resolve PipeWire or PulseAudio for loopback capture"
 ### Task 4: Linux device enumeration and resolution
 
 **Files:**
+
 - Modify: `src-tauri/src/audio_toolkit/audio/device.rs`
 - Modify: `src-tauri/src/audio_toolkit/audio/mod.rs:8` (the `device` re-export)
 - Modify: `src-tauri/src/managers/audio.rs` (`get_effective_system_audio_device`)
@@ -157,6 +162,7 @@ git commit -m "feat(linux): resolve PipeWire or PulseAudio for loopback capture"
 - Modify: `src-tauri/src/lib.rs` (`collect_commands![...]`)
 
 **Interfaces:**
+
 - Consumes: `get_system_audio_host()` (Task 3).
 - Produces:
   - `pub fn list_system_audio_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>>`
@@ -319,14 +325,16 @@ git commit -m "feat(linux): resolve system audio devices via the loopback host"
 ### Task 5: Point the device selector at the loopback device list
 
 **Files:**
+
 - Modify: `src/stores/settingsStore.ts`
 - Modify: `src/hooks/useSettings.ts`
 - Modify: `src/components/settings/advanced/SystemAudioDeviceSelector.tsx`
 
 **Interfaces:**
+
 - Consumes: `commands.getAvailableSystemAudioDevices()` (Task 4).
 
-Phase A already gated this component on availability; this task fixes *which devices it lists*. Without it the selector shows ALSA playback devices whose names cannot be opened on the loopback host.
+Phase A already gated this component on availability; this task fixes _which devices it lists_. Without it the selector shows ALSA playback devices whose names cannot be opened on the loopback host.
 
 - [ ] **Step 1: Add the list to the store**
 
@@ -358,9 +366,11 @@ git commit -m "feat(linux): list loopback devices in the system audio selector"
 ### Task 6: Enforce availability at startup
 
 **Files:**
+
 - Modify: `src-tauri/src/lib.rs` (around line 171, where persisted settings are read)
 
 **Interfaces:**
+
 - Consumes: `get_system_audio_availability` (Phase A Task 6).
 
 Phase A's command-level path only runs when the user toggles the setting. **Startup does not go through it**: `lib.rs` reads persisted settings directly and constructs the managers, so a settings file carrying `system_audio_enabled = true` from a machine that had a sound server would still configure capture on one that does not.
@@ -399,6 +409,7 @@ git commit -m "feat(linux): disable persisted system audio when unavailable"
 ### Task 7: Build, CI, Nix, and packaging dependencies
 
 **Files:**
+
 - Modify: `BUILD.md` (Linux prerequisites)
 - Modify: `src-tauri/tauri.conf.json` (`linux.deb.depends`, `linux.rpm.depends`)
 - Modify: `.github/workflows/build.yml` (lines 124, 136, 142)
