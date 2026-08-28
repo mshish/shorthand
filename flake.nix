@@ -38,6 +38,7 @@
         glib
         libsoup_3
         alsa-lib
+        pipewire
         onnxruntime
         libayatana-appindicator
         libevdev

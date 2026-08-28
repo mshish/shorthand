@@ -549,8 +549,23 @@ impl ShortcutAction for TranscribeAction {
         debug!("TranscribeAction::start called for binding: {}", binding_id);
         crate::shorthand::mode::set_active(app, binding_id);
 
-        // Load model in the background
+        // An always-on microphone can still be open from the previous mode.
+        // Align its shared loopback lane before either stream managers are
+        // selected or microphone capture is allowed to start. Otherwise a
+        // Meeting's system stream could leak into a Dictation action that has
+        // explicitly disabled system audio.
         let rm = app.state::<Arc<AudioRecordingManager>>();
+        if let Err(error) = rm.prepare_system_audio_for_active_mode() {
+            error!("Failed to configure system audio for active mode: {error}");
+            let _ = app.emit(
+                "recording-error",
+                RecordingErrorEvent {
+                    error_type: "unknown".to_string(),
+                    detail: Some(format!("Failed to configure system audio: {error}")),
+                },
+            );
+            return;
+        }
 
         // Load ASR model and VAD model in parallel
         let kickoff_started = Instant::now();

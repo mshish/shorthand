@@ -36,7 +36,6 @@ use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
-#[cfg(windows)]
 use managers::transcription::SystemAudioTranscription;
 use managers::transcription::{
     transcription_managers, ActiveStreamManagers, StreamSource, StreamTranscriptMerger,
@@ -168,28 +167,33 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
-    let initial_settings = settings::get_settings(app_handle);
-    #[cfg(windows)]
-    let system_audio_transcription = if initial_settings.system_audio_enabled
-        && model_manager
-            .get_model_info(&initial_settings.selected_model)
-            .is_some_and(|model| model.supports_streaming)
+    let mut initial_settings = settings::get_settings(app_handle);
+    // Linux has no ALSA-loopback fallback. If neither supported sound-server
+    // backend can be opened at startup, persist the same disabled state that
+    // the managers below will observe; do not write a clone after constructing
+    // them and leave the live process using stale enabled settings.
+    #[cfg(target_os = "linux")]
+    if crate::audio_toolkit::get_system_audio_host().is_none()
+        && (initial_settings.system_audio_enabled
+            || initial_settings.dictation.system_audio_enabled)
     {
-        Some(Arc::new(
-            TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
-                .expect("Failed to initialize system audio transcription manager"),
-        ))
-    } else {
-        None
-    };
+        log::warn!("No supported Linux system-audio server is available; disabling system audio");
+        initial_settings.system_audio_enabled = false;
+        initial_settings.dictation.system_audio_enabled = false;
+        settings::write_settings(app_handle, initial_settings.clone());
+    }
+    // Meetings and Dictation each own a system-audio preference. Construct
+    // the lightweight lane now so the active mode can select it at hotkey
+    // time; model loading remains lazy inside TranscriptionManager.
+    let system_audio_transcription = Arc::new(
+        TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
+            .expect("Failed to initialize system audio transcription manager"),
+    );
     let recording_manager = Arc::new(
         AudioRecordingManager::new(
             app_handle,
             transcription_manager.stream_router(),
-            #[cfg(windows)]
-            system_audio_transcription
-                .as_ref()
-                .map(|manager| manager.stream_router()),
+            Some(system_audio_transcription.stream_router()),
         )
         .expect("Failed to initialize recording manager"),
     );
@@ -223,10 +227,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(follow_stream::FollowStreamServer::default());
     app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
-    #[cfg(windows)]
-    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
+    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(Some(
         system_audio_transcription,
-    )));
+    ))));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
 
@@ -767,7 +770,10 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::is_recording,
             commands::audio::get_microphone_channels,
             commands::audio::set_selected_channel,
+            commands::audio::get_system_audio_availability,
+            commands::audio::get_available_system_audio_devices,
             commands::audio::change_system_audio_enabled_setting,
+            commands::audio::change_dictation_system_audio_enabled_setting,
             commands::audio::set_system_audio_device,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,

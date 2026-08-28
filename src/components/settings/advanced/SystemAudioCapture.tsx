@@ -1,7 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../../hooks/useSettings";
-import { useOsType } from "../../../hooks/useOsType";
 import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { useModelStore } from "../../../stores/modelStore";
 
@@ -15,11 +14,19 @@ export const SystemAudioCapture: React.FC<SystemAudioCaptureProps> = ({
   grouped = false,
 }) => {
   const { t } = useTranslation();
-  const { getSetting, updateSetting, isUpdating } = useSettings();
-  const osType = useOsType();
+  const {
+    getSetting,
+    updateSetting,
+    isUpdating,
+    systemAudioAvailability,
+    refreshSystemAudioAvailability,
+  } = useSettings();
   const models = useModelStore((state) => state.models);
 
-  if (osType !== "windows") {
+  if (
+    systemAudioAvailability === null ||
+    systemAudioAvailability === "unavailable_no_sound_server"
+  ) {
     return null;
   }
 
@@ -36,7 +43,10 @@ export const SystemAudioCapture: React.FC<SystemAudioCaptureProps> = ({
       checked={
         supportsStreaming && (getSetting("system_audio_enabled") ?? false)
       }
-      onChange={(enabled) => updateSetting("system_audio_enabled", enabled)}
+      onChange={async (enabled) => {
+        await updateSetting("system_audio_enabled", enabled);
+        await refreshSystemAudioAvailability();
+      }}
       isUpdating={isUpdating("system_audio_enabled")}
       disabled={muteEnabled || !supportsStreaming}
       label={t("settings.advanced.systemAudio.label")}

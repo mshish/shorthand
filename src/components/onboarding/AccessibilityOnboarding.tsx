@@ -35,6 +35,12 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
   const refreshOutputDevices = useSettingsStore(
     (state) => state.refreshOutputDevices,
   );
+  const refreshSystemAudioAvailability = useSettingsStore(
+    (state) => state.refreshSystemAudioAvailability,
+  );
+  const refreshSystemAudioDevices = useSettingsStore(
+    (state) => state.refreshSystemAudioDevices,
+  );
   const [permissionPlatform, setPermissionPlatform] =
     useState<PermissionPlatform | null>(null);
   const [permissions, setPermissions] = useState<PermissionsState>({
@@ -59,9 +65,20 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
       : true;
 
   const completeOnboarding = useCallback(async () => {
-    await Promise.all([refreshAudioDevices(), refreshOutputDevices()]);
+    await Promise.all([
+      refreshAudioDevices(),
+      refreshOutputDevices(),
+      refreshSystemAudioAvailability(),
+      refreshSystemAudioDevices(),
+    ]);
     timeoutRef.current = setTimeout(() => onComplete(), 300);
-  }, [onComplete, refreshAudioDevices, refreshOutputDevices]);
+  }, [
+    onComplete,
+    refreshAudioDevices,
+    refreshOutputDevices,
+    refreshSystemAudioAvailability,
+    refreshSystemAudioDevices,
+  ]);
 
   const hasWindowsMicrophoneAccess = useCallback(async (): Promise<boolean> => {
     const microphoneStatus =

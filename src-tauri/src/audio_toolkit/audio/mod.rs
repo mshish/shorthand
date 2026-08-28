@@ -5,11 +5,16 @@ mod resampler;
 mod utils;
 mod visualizer;
 
-pub use device::{list_input_devices, list_output_devices, CpalDeviceInfo};
-#[cfg(windows)]
+#[cfg(target_os = "linux")]
+pub use device::resolve_linux_system_audio_device;
+pub use device::{
+    list_input_devices, list_output_devices, list_system_audio_devices, CpalDeviceInfo,
+    SystemAudioDeviceInfo,
+};
 pub use recorder::SystemAudioCapture;
 pub use recorder::{
-    is_microphone_access_denied, is_no_input_device_error, AudioRecorder, RecordedAudio, VadPolicy,
+    is_microphone_access_denied, is_no_input_device_error, AudioRecorder, LoopbackOpenOutcome,
+    RecordedAudio, VadPolicy,
 };
 pub use resampler::FrameResampler;
 pub use utils::{read_wav_samples, save_wav_file, verify_wav_file};

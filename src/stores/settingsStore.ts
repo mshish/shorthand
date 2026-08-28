@@ -8,6 +8,8 @@ import type {
   OrtAcceleratorSetting,
   DictationSettings,
   AssistedNotesSettings,
+  SystemAudioAvailability,
+  SystemAudioDevice,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -18,6 +20,8 @@ interface SettingsStore {
   isUpdating: Record<string, boolean>;
   audioDevices: AudioDevice[];
   outputDevices: AudioDevice[];
+  systemAudioDevices: SystemAudioDevice[];
+  systemAudioAvailability: SystemAudioAvailability | null;
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
 
@@ -32,6 +36,8 @@ interface SettingsStore {
   refreshSettings: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
+  refreshSystemAudioDevices: () => Promise<void>;
+  refreshSystemAudioAvailability: () => Promise<void>;
   updateBinding: (id: string, binding: string) => Promise<void>;
   resetBinding: (id: string) => Promise<void>;
   getSetting: <K extends keyof Settings>(key: K) => Settings[K] | undefined;
@@ -63,6 +69,7 @@ interface SettingsStore {
   setUpdating: (key: string, updating: boolean) => void;
   setAudioDevices: (devices: AudioDevice[]) => void;
   setOutputDevices: (devices: AudioDevice[]) => void;
+  setSystemAudioDevices: (devices: SystemAudioDevice[]) => void;
   setCustomSounds: (sounds: { start: boolean; stop: boolean }) => void;
 }
 
@@ -72,6 +79,12 @@ interface SettingsStore {
 const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   index: "default",
   name: "Default",
+  is_default: true,
+};
+
+const DEFAULT_SYSTEM_AUDIO_DEVICE: SystemAudioDevice = {
+  id: "default",
+  label: "Default",
   is_default: true,
 };
 
@@ -235,6 +248,8 @@ export const useSettingsStore = create<SettingsStore>()(
     isUpdating: {},
     audioDevices: [],
     outputDevices: [],
+    systemAudioDevices: [],
+    systemAudioAvailability: null,
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
 
@@ -248,6 +263,7 @@ export const useSettingsStore = create<SettingsStore>()(
       })),
     setAudioDevices: (audioDevices) => set({ audioDevices }),
     setOutputDevices: (outputDevices) => set({ outputDevices }),
+    setSystemAudioDevices: (systemAudioDevices) => set({ systemAudioDevices }),
     setCustomSounds: (customSounds) => set({ customSounds }),
 
     // Getters
@@ -321,6 +337,38 @@ export const useSettingsStore = create<SettingsStore>()(
       }
     },
 
+    // System-audio endpoints are intentionally separate from ordinary output
+    // devices: on Linux the valid capture endpoint is a Pulse monitor source
+    // or PipeWire sink-capture device, not a playback sink.
+    refreshSystemAudioDevices: async () => {
+      try {
+        const result = await commands.getAvailableSystemAudioDevices();
+        if (result.status === "ok") {
+          set({
+            systemAudioDevices: [
+              DEFAULT_SYSTEM_AUDIO_DEVICE,
+              ...result.data.filter((device) => device.id !== "default"),
+            ],
+          });
+        } else {
+          set({ systemAudioDevices: [DEFAULT_SYSTEM_AUDIO_DEVICE] });
+        }
+      } catch (error) {
+        console.error("Failed to load system-audio devices:", error);
+        set({ systemAudioDevices: [DEFAULT_SYSTEM_AUDIO_DEVICE] });
+      }
+    },
+
+    refreshSystemAudioAvailability: async () => {
+      try {
+        set({ systemAudioAvailability: null });
+        set({ systemAudioAvailability: await commands.getSystemAudioAvailability() });
+      } catch (error) {
+        console.error("Failed to probe system audio availability:", error);
+        set({ systemAudioAvailability: "unavailable_no_sound_server" });
+      }
+    },
+
     // Play a test sound
     playTestSound: async (soundType: "start" | "stop") => {
       try {
@@ -358,6 +406,12 @@ export const useSettingsStore = create<SettingsStore>()(
         const updater = settingUpdaters[key];
         if (updater) {
           await updater(value);
+          // A platform permission flow may accept the command while persisting
+          // a corrected value (for example, a refused system-audio request).
+          // Reload instead of leaving the optimistic toggle state on screen.
+          if (key === "system_audio_enabled") {
+            await get().refreshSettings();
+          }
         } else if (key !== "bindings" && key !== "selected_model") {
           console.warn(`No handler for setting: ${String(key)}`);
         }
@@ -644,15 +698,22 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
-      const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
+      const {
+        refreshSettings,
+        refreshSystemAudioAvailability,
+        checkCustomSounds,
+        loadDefaultSettings,
+      } = get();
 
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
       // is responsible for calling refreshAudioDevices/refreshOutputDevices
       // after onboarding completes. This avoids triggering permission dialogs
-      // on macOS before the user is ready.
+      // on macOS before the user is ready. The availability probe only creates
+      // a CPAL host; it never opens a capture stream or requests permission.
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),
+        refreshSystemAudioAvailability(),
         checkCustomSounds(),
       ]);
 

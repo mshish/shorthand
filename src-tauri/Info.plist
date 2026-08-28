@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Request microphone access to transcribe audio locally</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Shorthand records audio playing on this Mac so it can transcribe the other side of a call or meeting. Audio is transcribed locally.</string>
 </dict>
 </plist>

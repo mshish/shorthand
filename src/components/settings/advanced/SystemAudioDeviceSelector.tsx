@@ -1,8 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import type { AudioDevice } from "@/bindings";
+import type { DictationSettings, SystemAudioDevice } from "@/bindings";
 import { useSettings } from "../../../hooks/useSettings";
-import { useOsType } from "../../../hooks/useOsType";
 import { Dropdown } from "../../ui/Dropdown";
 import { SettingContainer } from "../../ui/SettingContainer";
 
@@ -20,36 +19,27 @@ export const SystemAudioDeviceSelector: React.FC<
     updateSetting,
     isUpdating,
     isLoading,
-    outputDevices,
-    refreshOutputDevices,
+    systemAudioDevices,
+    refreshSystemAudioDevices,
+    systemAudioAvailability,
   } = useSettings();
-  const osType = useOsType();
 
-  if (osType !== "windows") {
+  if (
+    systemAudioAvailability === null ||
+    systemAudioAvailability === "unavailable_no_sound_server"
+  ) {
     return null;
   }
 
-  const enabled = getSetting("system_audio_enabled") ?? false;
+  const dictation = getSetting("dictation") as DictationSettings | undefined;
+  const enabled =
+    (getSetting("system_audio_enabled") ?? false) ||
+    (dictation?.system_audio_enabled ?? false);
   const muteEnabled = getSetting("mute_while_recording") ?? false;
   const selectedDevice = getSetting("system_audio_device") || "Default";
-  // Plain map over the store's already-normalised list, matching
-  // OutputDeviceSelector/MicrophoneSelector/ClamshellMicrophoneSelector. The
-  // store (settingsStore.ts refreshOutputDevices) is the sole owner of the
-  // "Default" sentinel: it filters out whatever the backend enumeration
-  // injected and prepends its own DEFAULT_AUDIO_DEVICE, so outputDevices
-  // already contains exactly one Default entry. Adding a second one here
-  // was this component's own bug. The sentinel's raw name, "Default", is
-  // deliberately left untranslated to match the other three selectors,
-  // which are upstream components that also render device.name unchanged —
-  // even though settings.advanced.systemAudioDevice.default is a genuinely
-  // translatable fork string today, translating it here alone would make
-  // the same "Default" entry read in the user's language in this dropdown
-  // while staying English in the three adjacent ones on the same page.
-  // Making all four consistent would mean editing three upstream files for
-  // a translation-only change, which is out of scope for this fix.
-  const options = outputDevices.map((device: AudioDevice) => ({
-    value: device.name,
-    label: device.name,
+  const options = systemAudioDevices.map((device: SystemAudioDevice) => ({
+    value: device.id,
+    label: device.label,
   }));
   const disabled = !enabled || muteEnabled;
 
@@ -66,7 +56,7 @@ export const SystemAudioDeviceSelector: React.FC<
         selectedValue={selectedDevice}
         onSelect={(device) => updateSetting("system_audio_device", device)}
         placeholder={
-          isLoading || outputDevices.length === 0
+          isLoading || systemAudioDevices.length === 0
             ? t("settings.sound.outputDevice.loading")
             : t("settings.sound.outputDevice.placeholder")
         }
@@ -74,9 +64,9 @@ export const SystemAudioDeviceSelector: React.FC<
           disabled ||
           isUpdating("system_audio_device") ||
           isLoading ||
-          outputDevices.length === 0
+          systemAudioDevices.length === 0
         }
-        onRefresh={refreshOutputDevices}
+        onRefresh={refreshSystemAudioDevices}
       />
     </SettingContainer>
   );

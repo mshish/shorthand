@@ -544,10 +544,11 @@ pub struct TranscriptionManager {
     active_engine_lease: Arc<AtomicU64>,
 }
 
-/// Type-keyed Tauri state for the optional system-audio transcription lane.
-/// The wrapper is cheap to register; the heavyweight manager is constructed
-/// only when system audio is enabled.
-#[cfg(windows)]
+/// Type-keyed Tauri state for the system-audio transcription lane.
+///
+/// The manager exists ahead of a capture so either active mode can opt into
+/// the lane without racing a hotkey. It does not load a model until streaming
+/// actually starts.
 pub struct SystemAudioTranscription(pub Mutex<Option<Arc<TranscriptionManager>>>);
 
 struct CapturedHandles<T>(Mutex<Vec<Arc<T>>>);
@@ -597,7 +598,7 @@ fn dual_lane_enabled(system_audio_enabled: bool, model_supports_streaming: bool)
 }
 
 pub fn system_audio_streaming_enabled(app: &AppHandle) -> bool {
-    let settings = get_settings(app);
+    let settings = crate::shorthand::dictation::resolve_settings(app);
     let supports_streaming = app
         .try_state::<Arc<ModelManager>>()
         .and_then(|manager| manager.get_model_info(&settings.selected_model))
@@ -625,7 +626,6 @@ pub fn transcription_managers(app: &AppHandle) -> Vec<Arc<TranscriptionManager>>
     if let Some(primary) = app.try_state::<Arc<TranscriptionManager>>() {
         managers.push(Arc::clone(&primary));
     }
-    #[cfg(windows)]
     if system_audio_streaming_enabled(app) {
         if let Some(system) = app.try_state::<SystemAudioTranscription>() {
             if let Some(manager) = system.0.lock().unwrap().as_ref() {

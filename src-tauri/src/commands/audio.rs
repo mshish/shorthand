@@ -1,12 +1,13 @@
 use crate::audio_feedback;
-use crate::audio_toolkit::audio::{list_input_devices, list_output_devices, AudioRecorder};
+use crate::audio_toolkit::audio::{
+    list_input_devices, list_output_devices, list_system_audio_devices, AudioRecorder,
+};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
 use crate::managers::model::ModelManager;
-#[cfg(windows)]
 use crate::managers::transcription::{
     StreamSource, SystemAudioTranscription, TranscriptionManager,
 };
-use crate::settings::{get_settings, write_settings};
+use crate::settings::{get_settings, write_settings, AppSettings};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -46,12 +47,123 @@ pub struct AudioDevice {
     pub is_default: bool,
 }
 
+/// A capture-capable system-audio endpoint. Unlike `AudioDevice`, `id` is an
+/// opaque persisted value: Linux uses CPAL's stable DeviceId serialization,
+/// while legacy Windows settings retain their existing display-name values.
+#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+pub struct SystemAudioDevice {
+    pub id: String,
+    pub label: String,
+    pub is_default: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionAccess {
     Allowed,
     Denied,
     Unknown,
+}
+
+/// Whether this machine can expose a system-audio loopback device at all.
+///
+/// This is deliberately separate from whether a particular capture attempt
+/// succeeded. A reachable host is enough to render the controls; the recorder
+/// continues to report its actual loopback-open outcome independently.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAudioAvailability {
+    Available,
+    UnavailableNoSoundServer,
+    PermissionDenied,
+}
+
+/// Pure host-probe decision logic, kept separate from CPAL construction so it
+/// is testable without a running sound server.
+fn availability_from_host_probe(loopback_host_reachable: bool) -> SystemAudioAvailability {
+    if loopback_host_reachable {
+        SystemAudioAvailability::Available
+    } else {
+        SystemAudioAvailability::UnavailableNoSoundServer
+    }
+}
+
+/// The two mode-owned controls deliberately use separate commands. Generic
+/// Dictation settings changes remain pure persistence, while this narrow path
+/// can safely coordinate the shared recorder and its system transcription
+/// lane.
+#[derive(Clone, Copy)]
+enum SystemAudioSettingScope {
+    Meetings,
+    Dictation,
+}
+
+fn set_system_audio_enabled_for_scope(
+    settings: &mut AppSettings,
+    scope: SystemAudioSettingScope,
+    enabled: bool,
+) {
+    match scope {
+        SystemAudioSettingScope::Meetings => settings.system_audio_enabled = enabled,
+        SystemAudioSettingScope::Dictation => settings.dictation.system_audio_enabled = enabled,
+    }
+}
+
+fn ensure_system_audio_transcription(app: &AppHandle) -> Result<Arc<TranscriptionManager>, String> {
+    let system_state = app.state::<SystemAudioTranscription>();
+    let mut slot = system_state.0.lock().unwrap();
+    if let Some(manager) = slot.as_ref() {
+        return Ok(Arc::clone(manager));
+    }
+
+    let manager = Arc::new(
+        TranscriptionManager::new(
+            app,
+            app.state::<Arc<ModelManager>>().inner().clone(),
+            StreamSource::System,
+        )
+        .map_err(|error| format!("Failed to initialize system audio transcription: {error}"))?,
+    );
+    *slot = Some(Arc::clone(&manager));
+    Ok(manager)
+}
+
+/// Constructing a PulseAudio host can wait on its server socket, so keep the
+/// CPAL probe off Tauri's webview/main run loop.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailability {
+    // Plan C reads the macOS process-local permission observation from this
+    // handle after its native TCC spike establishes a reliable classifier.
+    let _ = &app;
+    tokio::task::spawn_blocking(|| {
+        availability_from_host_probe(crate::audio_toolkit::get_system_audio_host().is_some())
+    })
+    .await
+    .unwrap_or(SystemAudioAvailability::UnavailableNoSoundServer)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_available_system_audio_devices() -> Result<Vec<SystemAudioDevice>, String> {
+    // Both the PulseAudio handshake and PipeWire registry discovery can block;
+    // keep enumeration off Tauri's webview/main run loop.
+    tokio::task::spawn_blocking(|| {
+        list_system_audio_devices()
+            .map(|devices| {
+                devices
+                    .into_iter()
+                    .map(|device| SystemAudioDevice {
+                        id: device.id,
+                        label: device.label,
+                        is_default: device.is_default,
+                    })
+                    .collect()
+            })
+            .map_err(|error| format!("Failed to list system-audio devices: {error}"))
+    })
+    .await
+    .map_err(|error| format!("system-audio task join failed: {error}"))?
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -393,7 +505,34 @@ pub async fn change_system_audio_enabled_setting(
     app: AppHandle,
     enabled: bool,
 ) -> Result<(), String> {
+    change_system_audio_enabled_for_scope(app, SystemAudioSettingScope::Meetings, enabled).await
+}
+
+/// Change Dictation's mode-owned system-audio setting while keeping the
+/// physical capture lane aligned with whichever mode is active. This must not
+/// be folded into `change_dictation_settings`: that general transaction is
+/// intentionally side-effect free and must never trigger system privacy
+/// prompts as a by-product of saving unrelated Dictation preferences.
+#[tauri::command]
+#[specta::specta]
+pub async fn change_dictation_system_audio_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    change_system_audio_enabled_for_scope(app, SystemAudioSettingScope::Dictation, enabled).await
+}
+
+async fn change_system_audio_enabled_for_scope(
+    app: AppHandle,
+    scope: SystemAudioSettingScope,
+    enabled: bool,
+) -> Result<(), String> {
     let settings = get_settings(&app);
+    if enabled
+        && get_system_audio_availability(app.clone()).await != SystemAudioAvailability::Available
+    {
+        return Err("System audio capture is not available on this system".to_string());
+    }
     if enabled && settings.mute_while_recording {
         return Err(
             "System audio capture cannot be enabled while mute while recording is enabled"
@@ -412,63 +551,32 @@ pub async fn change_system_audio_enabled_setting(
         }
     }
 
-    #[cfg(windows)]
-    {
-        let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
-        let device_name = settings.system_audio_device.clone();
-        let existing_system_manager = app
-            .state::<SystemAudioTranscription>()
-            .0
-            .lock()
-            .unwrap()
-            .clone();
-        let system_manager = if enabled {
-            match existing_system_manager {
-                Some(manager) => Some(manager),
-                None => Some(Arc::new(
-                    TranscriptionManager::new(
-                        &app,
-                        app.state::<Arc<ModelManager>>().inner().clone(),
-                        StreamSource::System,
-                    )
-                    .map_err(|error| {
-                        format!("Failed to initialize system audio transcription: {error}")
-                    })?,
-                )),
-            }
-        } else {
-            None
-        };
-        let stream_router = system_manager
-            .as_ref()
-            .map(|manager| manager.stream_router());
-        let manager_for_update = Arc::clone(&manager);
-        tokio::task::spawn_blocking(move || {
-            manager_for_update.update_system_audio_capture(enabled, device_name, stream_router)
-        })
-        .await
-        .map_err(|error| format!("audio task join failed: {error}"))?
-        .map_err(|error| format!("Failed to update system audio capture: {error}"))?;
+    // Evaluate the candidate against the active mode before changing runtime
+    // capture. This keeps a Dictation preference change from restarting a
+    // currently active Meeting stream (and the inverse), while still applying
+    // a change immediately when that mode owns the open stream.
+    let mut candidate_settings = settings;
+    set_system_audio_enabled_for_scope(&mut candidate_settings, scope, enabled);
+    let resolved = crate::shorthand::dictation::apply_mode(
+        candidate_settings.clone(),
+        crate::shorthand::mode::active(&app),
+    );
+    let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+    let stream_router = Some(ensure_system_audio_transcription(&app)?.stream_router());
+    let manager_for_update = Arc::clone(&manager);
+    tokio::task::spawn_blocking(move || {
+        manager_for_update.apply_system_audio_configuration(
+            resolved.system_audio_enabled,
+            resolved.system_audio_device,
+            stream_router,
+        )
+    })
+    .await
+    .map_err(|error| format!("audio task join failed: {error}"))?
+    .map_err(|error| format!("Failed to update system audio capture: {error}"))?;
 
-        let system_state = app.state::<SystemAudioTranscription>();
-        let mut slot = system_state.0.lock().unwrap();
-        if !enabled {
-            if let Some(old_manager) = slot.take() {
-                let _ = old_manager.unload_model();
-            }
-        } else {
-            *slot = system_manager;
-        }
-        drop(slot);
-
-        let mut settings = get_settings(&app);
-        settings.system_audio_enabled = enabled;
-        write_settings(&app, settings);
-        Ok(())
-    }
-
-    #[cfg(not(windows))]
-    Err("System audio capture is only available on Windows".to_string())
+    write_settings(&app, candidate_settings);
+    Ok(())
 }
 
 #[tauri::command]
@@ -477,40 +585,52 @@ pub async fn set_system_audio_device(
     app: AppHandle,
     device_name: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let normalized_device =
-            device_name.filter(|name| !name.eq_ignore_ascii_case("default") && !name.is_empty());
-        let settings = get_settings(&app);
-        let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
-        let runtime_device = normalized_device.clone();
-        let stream_router = app
-            .state::<SystemAudioTranscription>()
-            .0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|manager| manager.stream_router());
-        tokio::task::spawn_blocking(move || {
-            manager.update_system_audio_capture(
-                settings.system_audio_enabled,
-                runtime_device,
-                stream_router,
-            )
-        })
-        .await
-        .map_err(|error| format!("audio task join failed: {error}"))?
-        .map_err(|error| format!("Failed to update system audio device: {error}"))?;
+    if get_system_audio_availability(app.clone()).await != SystemAudioAvailability::Available {
+        return Err("System audio capture is not available on this system".to_string());
+    }
+    let normalized_device =
+        device_name.filter(|name| !name.eq_ignore_ascii_case("default") && !name.is_empty());
+    let settings = get_settings(&app);
+    let mut candidate_settings = settings;
+    candidate_settings.system_audio_device = normalized_device.clone();
+    let resolved = crate::shorthand::dictation::apply_mode(
+        candidate_settings.clone(),
+        crate::shorthand::mode::active(&app),
+    );
+    let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+    let stream_router = Some(ensure_system_audio_transcription(&app)?.stream_router());
+    tokio::task::spawn_blocking(move || {
+        manager.apply_system_audio_configuration(
+            resolved.system_audio_enabled,
+            resolved.system_audio_device,
+            stream_router,
+        )
+    })
+    .await
+    .map_err(|error| format!("audio task join failed: {error}"))?
+    .map_err(|error| format!("Failed to update system audio device: {error}"))?;
 
-        let mut settings = get_settings(&app);
-        settings.system_audio_device = normalized_device;
-        write_settings(&app, settings);
-        Ok(())
+    write_settings(&app, candidate_settings);
+    Ok(())
+}
+
+#[cfg(test)]
+mod system_audio_availability_tests {
+    use super::*;
+
+    #[test]
+    fn available_when_a_loopback_host_is_reachable() {
+        assert_eq!(
+            availability_from_host_probe(true),
+            SystemAudioAvailability::Available
+        );
     }
 
-    #[cfg(not(windows))]
-    {
-        let _ = (app, device_name);
-        Err("System audio capture is only available on Windows".to_string())
+    #[test]
+    fn unavailable_when_no_loopback_host_is_reachable() {
+        assert_eq!(
+            availability_from_host_probe(false),
+            SystemAudioAvailability::UnavailableNoSoundServer
+        );
     }
 }

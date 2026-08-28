@@ -14,6 +14,12 @@ This guide covers how to set up the development environment and build Handy from
 
 #### macOS
 
+> [!IMPORTANT]
+> Shorthand requires **macOS 14.6 or later**. The audio backend (cpal 0.18)
+> links `AudioHardwareCreateProcessTap`, which does not exist before macOS
+> 14.2, and system-audio capture needs 14.6. Older macOS cannot run the app
+> at all — not merely without system audio.
+
 - Xcode Command Line Tools
 - Install with: `xcode-select --install`
 
@@ -23,13 +29,13 @@ Prebuilt ONNX Runtime binaries are not available for Intel Macs. Install ONNX Ru
 
 ```bash
 brew install onnxruntime
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri dev
+MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri dev
 ```
 
 The same environment variables apply for production builds:
 
 ```bash
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri build
+MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri build
 ```
 
 #### Windows

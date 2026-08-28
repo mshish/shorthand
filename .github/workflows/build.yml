@@ -107,6 +107,15 @@ jobs:
           # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
           targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      # cpal 0.18's CoreAudio ProcessTap path requires the macOS 14.6 SDK
+      # baseline that the app declares in tauri.conf.json. Bundle metadata does
+      # not control Rust/C compilation, so set the compiler deployment target
+      # explicitly for every native macOS build.
+      - name: Set macOS deployment target
+        if: contains(inputs.platform, 'macos')
+        shell: bash
+        run: echo "MACOSX_DEPLOYMENT_TARGET=14.6" >> "$GITHUB_ENV"
+
       - name: Rust cache
         # Release builds skip the cache (no-cache: true) so the artifact is
         # always compiled clean — no risk of a stale cached native lib being
@@ -121,7 +130,7 @@ jobs:
         if: contains(inputs.platform, 'ubuntu-24.04') && !contains(inputs.platform, 'arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev \
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -133,13 +142,13 @@ jobs:
         if: contains(inputs.platform, 'ubuntu-24.04-arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev xdg-utils
 
       - name: install dependencies (ubuntu 22.04)
         if: contains(inputs.platform, 'ubuntu-22.04') && !contains(inputs.platform, 'arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev
 
       - name: Verify gtk-layer-shell runtime dependency (Ubuntu)
         if: contains(inputs.platform, 'ubuntu')

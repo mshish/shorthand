@@ -14,6 +14,7 @@ import { SaveRecordings } from "@/components/settings/SaveRecordings";
 import { SaveTranscripts } from "@/components/settings/SaveTranscripts";
 import { FollowStreamOutput } from "@/components/settings/advanced/FollowStreamOutput";
 import { SystemAudioCapture } from "@/components/settings/advanced/SystemAudioCapture";
+import { DictationSystemAudioCapture } from "@/components/settings/advanced/DictationSystemAudioCapture";
 import { useSettings } from "@/hooks/useSettings";
 import { DictationAutoSubmit } from "../dictation/DictationAutoSubmit";
 import { DictationClipboardHandling } from "../dictation/DictationClipboardHandling";
@@ -124,11 +125,6 @@ export const ModesSettings: React.FC = () => {
   // has it — the strictly safer reading, since a visible-but-redundant
   // shortcut beats a hidden one that still fires.
   const isLinux = type() === "linux";
-  // System-audio capture is a Windows-only feature upstream. The shared
-  // `SystemAudioCapture` row self-hides on other platforms; the dictation row
-  // below is a plain boolean field with no such guard, so it needs this or it
-  // offers a toggle for something that cannot happen.
-  const isWindows = type() === "windows";
   // Each optional mode's push-to-talk only counts when that mode is actually
   // on. Without the `enabled &&` guards, a disabled mode's default suppresses
   // the row for everyone: dictation ships with push_to_talk true, so on a
@@ -202,7 +198,8 @@ export const ModesSettings: React.FC = () => {
                     per-mode now — the Dictation tab has its own row bound to
                     `dictation.system_audio_enabled` — but the *device* being
                     captured is still shared and still lives in Audio, because
-                    there is only one of it. This row self-hides outside Windows. */}
+                    there is only one of it. This row self-hides when the
+                    current platform has no usable system-audio backend. */}
                 <SystemAudioCapture descriptionMode="inline" grouped={true} />
                 <SaveRecordings descriptionMode="inline" grouped={true} />
                 <SaveTranscripts descriptionMode="inline" grouped={true} />
@@ -407,23 +404,10 @@ export const ModesSettings: React.FC = () => {
                   descriptionMode="tooltip"
                   grouped={true}
                 />
-                {/* Dictation's copy of system-audio capture. It borrows the
-                    shared row's strings, because it is the same setting for
-                    the other mode, and its Windows-only guard, because
-                    DictationToggleField is a plain boolean row with no
-                    predicates of its own. Without the guard this offers macOS
-                    and Linux users a switch for a feature that does not exist
-                    there, in the one tab where the Meetings row correctly
-                    hides itself. */}
-                {isWindows && (
-                  <DictationToggleField
-                    field="system_audio_enabled"
-                    label={t("settings.advanced.systemAudio.label")}
-                    description={t("settings.advanced.systemAudio.description")}
-                    descriptionMode="inline"
-                    grouped={true}
-                  />
-                )}
+                <DictationSystemAudioCapture
+                  descriptionMode="inline"
+                  grouped={true}
+                />
                 {/* In the default view here and Advanced on the Meetings tab.
                     See the note above that tab's <AdvancedOnly>. */}
                 <DictationToggleField

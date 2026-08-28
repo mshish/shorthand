@@ -39,7 +39,7 @@
     "macOS": {
       "files": {},
       "hardenedRuntime": true,
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "14.6",
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist"
     },
