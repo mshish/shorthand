@@ -4,7 +4,7 @@
 
 **Goal:** Make system-audio capture actually work on macOS, and — because macOS gives no error when it refuses — make the app able to tell the user that it was refused.
 
-**Architecture:** cpal 0.18 already captures system audio on macOS via the Core Audio Process Tap; Phase A made that machinery compile everywhere and Phase B proved the shape on Linux. Almost nothing is left to do for *capture*. What is left is *permission*, and macOS provides no supported way to observe it. This phase adds a small fork-only module that reads the permission through TCC's private preflight SPI, behind a Cargo feature, and wires the three-state answer into the availability enum Phase A already plumbed to the UI.
+**Architecture:** cpal 0.18 already captures system audio on macOS via the Core Audio Process Tap; Phase A made that machinery compile everywhere and Phase B proved the shape on Linux. Almost nothing is left to do for *capture*. What is left is *permission*, and macOS provides no supported way to observe it. This phase adds a small fork-only module that reads the permission through TCC's private preflight SPI, behind a Cargo feature, and wires that answer into the availability enum Phase A already plumbed to the UI.
 
 **Tech Stack:** Rust, `cpal` 0.18.x, Core Audio Process Tap, TCC private SPI (`dlopen`/`dlsym`), Tauri 2.x.
 
@@ -85,10 +85,9 @@ is still unmerged; vibe runs a fork of cpal to get it.
 
 **Why we implement it ourselves rather than forking cpal.** We already carry a
 rodio fork; a second forked dependency in the same chain is real maintenance
-cost for ~60 lines. cpal's version also collapses denied and not-determined into
-a single `bool`, which is exactly the distinction the UI needs — vibe has to
-report `NotDetermined` for both and then guess. `muesly`'s three-state version is
-the better model.
+cost for ~60 lines. It also lets us bind only the safe half of the SPI: cpal's
+PR additionally binds `TCCAccessRequest`, which needs an Objective-C block, and
+we have no use for it (see below).
 
 **The App Store objection does not apply to this app.** Private SPI disqualifies
 a Mac App Store submission, but Shorthand cannot ship there regardless: it
@@ -97,6 +96,34 @@ into other applications, neither of which works under the App Sandbox that MAS
 requires. `SIGNING_AND_UPDATES.md` plans distribution around Tauri's own updater
 with Developer ID signing. The Cargo feature in Task 2 exists so the decision
 stays reversible, not because a store build is planned.
+
+**Two findings that shape the implementation, from reading the reference
+projects' actual FFI code.**
+
+*Bind `TCCAccessPreflight` only; do not bind `TCCAccessRequest`.* The consent
+dialog is raised by starting the tap, not by any permission API — confirmed
+independently: *"`AudioDeviceStart` is the call that triggers the TCC prompt.
+Not creating the tap, aggregate device, or IOProc."* `afonsojramos/muesly`
+therefore never binds `TCCAccessRequest` at all: it attempts capture and polls
+the preflight for the answer. Skipping it removes the only genuinely dangerous
+part of this work. `TCCAccessPreflight` is a plain
+`extern "C" fn(*const c_void, *const c_void) -> i32`; `TCCAccessRequest` takes
+an **Objective-C block**, which is not a C function pointer but a struct with a
+layout and copy semantics, and getting it wrong is undefined behaviour rather
+than a compile error. cpal PR #1257's binding has to launder a channel sender
+through a raw `usize` *"so TCC's internal block memcpy doesn't double-drop the
+sender"* — a trap we simply do not need to walk into. Not binding it also means
+we need no `block2` dependency.
+
+*The preflight tells us granted-or-not, not why.* Sources disagree on the
+finer mapping. AudioCap and muesly read `0 => granted, 1 => denied, _ =>
+undetermined`; cpal checks only `== 0`; and `jameshball/osci-render` warns in a
+comment that *"on some OS builds, preflight may return the same code for both
+'not determined' and 'denied'."* Nobody cites a stable contract for `1` versus
+`2`. So treat the result as **granted / not-granted** and do not branch on the
+difference. This is a UI constraint as much as a code one: we cannot tell a
+user who declined from a user who was never asked, so the denied-state copy
+must read correctly for both.
 
 **Correction to the spec.** The spec's Task 7 premise about the menu-bar
 indicator is inverted. Per Apple Support: **orange** is the microphone,
@@ -112,18 +139,21 @@ path. The real tell is that the app appears under **Privacy & Security → Scree
 - **Windows and Linux behaviour must not change.** Everything in this phase is
   `#[cfg(target_os = "macos")]` or additive.
 - **Never accuse the user of declining something they were not asked.**
-  Undetermined is not denial. It maps to `Available`, and the prompt is what
-  resolves it.
+  Not-granted is not a denial: the preflight cannot tell a refusal from a
+  prompt never shown, so it maps to `Available` and a capture attempt is what
+  resolves it. Only an attempt that failed to change the answer earns the CTA.
 - **Never persist an enabled state the OS refused.** The permission read is
   process-local; a persisted `true` over a denial produces a checked toggle that
   captures nothing on every subsequent launch.
-- **Do not block the UI thread.** `TCCAccessRequest` shows a modal system dialog
-  and does not return until the user answers. Chromium documents a related
-  60-second landmine: if the user ignores the dialog, the blocking call times out
-  and *"all interactions with CoreAudio will fail until the audio process is
-  restarted."* Everything here goes through `spawn_blocking` or a channel.
+- **Do not block the UI thread.** The consent dialog is modal and the user may
+  ignore it indefinitely. Nothing that waits on it may run on the main thread;
+  everything here goes through `spawn_blocking`. (An earlier draft of this plan
+  cited a Chromium-documented 60-second timeout here. That claim could not be
+  substantiated — a search of Chromium's macOS audio sources found nothing of
+  the kind — so do not encode a 60-second constant on the strength of it. Bound
+  any wait with a timeout of our own choosing instead, and say it is ours.)
 - **Private SPI must fail open, never panic.** If `dlopen` or `dlsym` fails —
-  Apple moves the symbol, a future OS drops it — the result is `Undetermined`,
+  Apple moves the symbol, a future OS drops it — the result is `NotGranted`,
   which degrades to exactly the behaviour we would have had without the SPI at
   all. A missing private symbol must never break dictation.
 - All `cargo` commands run from `src-tauri/` or use `--manifest-path
@@ -159,12 +189,17 @@ app bundle's** Info.plist, not merely the source file. TCC reads the bundle.
 
 **Interfaces:**
 - Produces:
-  - `pub enum SystemAudioPermission { Granted, Denied, Undetermined }` —
+  - `pub enum SystemAudioPermission { Granted, NotGranted }` —
     `Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type`,
     `#[serde(rename_all = "snake_case")]`
-  - `pub fn preflight() -> SystemAudioPermission`
-  - `pub fn request() -> SystemAudioPermission` — shows the OS prompt; blocking,
-    callers must `spawn_blocking`.
+  - `pub fn preflight() -> SystemAudioPermission` — non-blocking, shows no UI.
+
+Two states, not three, and no `request()`. Both follow from the research
+section: the preflight cannot reliably separate "declined" from "never asked",
+and the prompt is raised by starting the tap rather than by an API, so
+`TCCAccessRequest` — the half that would need an Objective-C block — is never
+bound. If a future macOS documents a stable denied-versus-undetermined code,
+adding the third state is a small change; guessing at it now is not.
 
 A new fork-only module, per `AGENTS.md`'s "give fork-only features a boundary" —
 this costs nothing at merge time and keeps the private-SPI surface in one file
@@ -182,14 +217,30 @@ default = ["macos-tcc-spi"]
 # denied tap is indistinguishable from a silent room. Disqualifying for the Mac
 # App Store, which this app cannot target anyway — the flag exists so that
 # decision stays reversible. With the feature off, permission always reads
-# Undetermined and the UI falls back to offering the settings link
+# NotGranted and the UI falls back to offering the settings link
 # unconditionally.
 macos-tcc-spi = []
 ```
 
-The `libc` crate is needed for `dlopen`/`dlsym`. Check whether it is already an
-indirect dependency you can promote rather than adding a new one, and put it
-under `[target.'cfg(target_os = "macos")'.dependencies]`.
+Add to `[target.'cfg(target_os = "macos")'.dependencies]`:
+
+```toml
+libloading = "0.8"
+objc2-core-foundation = "0.3"
+```
+
+Both already resolve in `Cargo.lock` (0.8.9 and 0.3.2) as transitive
+dependencies, so declaring them directly should not move any other version —
+confirm that with a build rather than assuming. `objc2` and `objc2-foundation`
+are already direct macOS dependencies.
+
+**Do not add `block2`.** It is only needed for `TCCAccessRequest`'s completion
+block, which this plan deliberately does not bind.
+
+Note `objc2-core-foundation` 0.3.2 exports no `CFStringRef` alias — use
+`CFString::from_str(...)` and cast `&*service as *const _ as *const c_void` at
+the boundary, as cpal's PR does. The binding holds the +1 retain for the
+duration of the call and releases on drop, so there is no manual `CFRelease`.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -211,23 +262,17 @@ mod system_audio_permission_tests {
     }
 
     #[test]
-    fn one_is_denied() {
-        assert_eq!(
-            SystemAudioPermission::from_preflight_status(1),
-            SystemAudioPermission::Denied
-        );
-    }
-
-    #[test]
-    fn anything_else_is_undetermined() {
-        // TCC returns 2 for "not determined", but the SPI is undocumented and
-        // the set of statuses is not guaranteed. Anything we do not recognise
-        // must not be reported as a denial.
-        for status in [2, 3, -1, i64::MAX] {
+    fn every_other_status_is_not_granted() {
+        // Only `0 == granted` is agreed across the reference implementations.
+        // osci-render warns that some OS builds return the same code for
+        // "denied" and "not determined", so no other value may be read as
+        // meaning anything in particular — least of all as a denial we would
+        // then show the user.
+        for status in [1, 2, 3, -1, i32::MAX, i32::MIN] {
             assert_eq!(
                 SystemAudioPermission::from_preflight_status(status),
-                SystemAudioPermission::Undetermined,
-                "status {status} should be undetermined"
+                SystemAudioPermission::NotGranted,
+                "status {status} should be not-granted"
             );
         }
     }
@@ -257,38 +302,45 @@ Model on `insidegui/AudioCap`'s `AudioRecordingPermission.swift` and
 //!
 //! So we read TCC's preflight SPI, as every shipping consumer of this API
 //! does. It is private, and it fails open: any failure to load the symbol
-//! yields `Undetermined`, which behaves exactly as if this module were absent.
+//! yields `NotGranted`, which behaves exactly as if this module were absent —
+//! the capture attempt still raises the prompt, and the settings link is still
+//! offered.
+
+use libloading::{Library, Symbol};
+use objc2_core_foundation::{CFRetained, CFString};
+use std::{ffi::c_void, sync::OnceLock};
 
 const TCC_FRAMEWORK_PATH: &str =
     "/System/Library/PrivateFrameworks/TCC.framework/Versions/A/TCC";
 const SERVICE_AUDIO_CAPTURE: &str = "kTCCServiceAudioCapture";
 
-type PreflightFn = unsafe extern "C" fn(CFStringRef, CFDictionaryRef) -> i64;
-type RequestFn = unsafe extern "C" fn(CFStringRef, CFDictionaryRef, BlockPtr);
+/// `int TCCAccessPreflight(CFStringRef service, CFDictionaryRef options)`.
+///
+/// AudioCap's Swift declares the return as `Int` (64-bit), but every non-Swift
+/// reimplementation — cpal, muesly, osci-render — types it as a 32-bit `int`,
+/// and we only ever compare it against 0. Follow the C spelling.
+type PreflightFn = unsafe extern "C" fn(*const c_void, *const c_void) -> i32;
 ```
 
 Requirements, each of which is load-bearing:
 
-- **`from_preflight_status` is a separate pure function**, so the tests above can
-  reach it. `0 => Granted`, `1 => Denied`, everything else `=> Undetermined`.
-- **Every failure path returns `Undetermined`**: `dlopen` returning null,
-  `dlsym` returning null, a `CFString` that fails to construct. Log at `warn!`
-  once, not per call.
-- **`request()` bridges the callback to a channel.** `TCCAccessRequest` takes an
-  Objective-C block invoked with a `bool`. Use `block2` (check whether it is
-  already in the tree via `objc2`, which cpal pulls in) rather than hand-rolling
-  a block. Send the result over an `mpsc` channel and wait on the receiver with a
-  generous timeout; on timeout return `Undetermined` and log — do not block
-  forever, per the Chromium landmine in the constraints.
-- **When the `macos-tcc-spi` feature is off**, both functions are
-  `#[cfg(not(feature = "macos-tcc-spi"))]` stubs returning `Undetermined`, with
-  no `dlopen` compiled in at all.
+- **`from_preflight_status` is a separate pure function**, so the tests above
+  can reach it. `0 => Granted`, everything else `=> NotGranted`.
+- **Every failure path returns `NotGranted`**: `dlopen` returning null, `dlsym`
+  returning null, a `CFString` that fails to construct. Log at `warn!` once, not
+  per call — cache the loaded `Library` in a `OnceLock<Option<Library>>` so a
+  failed load is remembered rather than retried on every probe.
+- **When the `macos-tcc-spi` feature is off**, `preflight()` is a
+  `#[cfg(not(feature = "macos-tcc-spi"))]` stub returning `NotGranted`, with no
+  `dlopen` compiled in at all. That degrades to "always offer the settings
+  link", which is a coherent product rather than a broken one.
 - **The whole module is `#[cfg(target_os = "macos")]`** at the `mod` site in
   `lib.rs`.
 
-Confirm the exact `TCCAccessPreflight` / `TCCAccessRequest` signatures against
-AudioCap's Swift before writing the `extern "C"` types — a wrong signature here
-is UB, not a compile error.
+cpal PR #1257's `permissions.rs` is the closest working model — copy its
+`OnceLock` loading and its `CFString::from_str` plus
+`&*service as *const _ as *const c_void` cast near-verbatim, and simply omit its
+`request_system_audio_permission` half.
 
 - [ ] **Step 5: Run the tests and watch them pass**
 
@@ -296,7 +348,7 @@ is UB, not a compile error.
 cargo test --manifest-path src-tauri/Cargo.toml system_audio_permission_tests
 ```
 
-Expected: PASS (3 tests). These pass on every platform, because the mapping is
+Expected: PASS (2 tests). These pass on every platform, because the mapping is
 pure; only the SPI is macOS-gated.
 
 - [ ] **Step 6: Verify and commit**
@@ -346,20 +398,15 @@ mod macos_system_audio_availability_tests {
     }
 
     #[test]
-    fn denied_is_permission_denied() {
+    fn not_granted_is_available_until_an_attempt_has_proved_otherwise() {
+        // `NotGranted` covers both "declined" and "never asked", and the
+        // preflight cannot separate them. Reporting a denial here would show
+        // the "grant access" CTA to a user who was never prompted, and hide
+        // the toggle that is the only thing that would prompt them. The CTA is
+        // earned by a capture attempt that failed to change this answer, which
+        // is Task 3 Step 4's job — never by the probe alone.
         assert_eq!(
-            availability_from_permission(SystemAudioPermission::Denied),
-            SystemAudioAvailability::PermissionDenied
-        );
-    }
-
-    #[test]
-    fn undetermined_is_available_not_denied() {
-        // We have not asked yet. Reporting a denial here would render the
-        // "you declined" CTA to a user who was never prompted, and hide the
-        // toggle that is the only thing that would prompt them.
-        assert_eq!(
-            availability_from_permission(SystemAudioPermission::Undetermined),
+            availability_from_permission(SystemAudioPermission::NotGranted),
             SystemAudioAvailability::Available
         );
     }
@@ -386,10 +433,11 @@ fn availability_from_permission(
 ) -> SystemAudioAvailability {
     use crate::system_audio_permission::SystemAudioPermission;
     match permission {
-        SystemAudioPermission::Denied => SystemAudioAvailability::PermissionDenied,
-        // Undetermined is not a denial: the prompt has not been shown yet, and
-        // enabling the toggle is what shows it.
-        SystemAudioPermission::Granted | SystemAudioPermission::Undetermined => {
+        // Both states render the ordinary toggle. `PermissionDenied` is
+        // reported by the enable path in Step 4, once an attempt has proved
+        // the OS will not grant it — never by this probe, which cannot tell a
+        // refusal from a prompt that has not been shown yet.
+        SystemAudioPermission::Granted | SystemAudioPermission::NotGranted => {
             SystemAudioAvailability::Available
         }
     }
@@ -400,33 +448,48 @@ The macOS arm of the command reads `preflight()` inside `spawn_blocking` — it 
 cheap, but it is still a `dlopen`ed call into a system daemon and this command is
 already async for the same reason on Linux.
 
-- [ ] **Step 4: Request permission when the user enables**
+- [ ] **Step 4: Raise the prompt by attempting capture, then re-read**
 
 In **both** `change_system_audio_enabled_setting` and
 `change_dictation_system_audio_enabled_setting` — they share
 `set_system_audio_enabled_for_scope`, so put this in the shared path rather than
 writing it twice.
 
-The flow, on macOS only, when `enabled == true`:
+There is no API that shows the prompt, so we cause it the way macOS actually
+raises it: by starting the tap. The flow, on macOS only, when `enabled == true`:
 
 ```
 preflight()
-  Granted      -> proceed, persist enabled = true
-  Undetermined -> request()   // shows the OS prompt, blocking
-                    Granted -> proceed, persist enabled = true
-                    _       -> persist enabled = false, availability reports denied
-  Denied       -> do NOT prompt (macOS will not ask twice), persist enabled = false
+  Granted     -> persist enabled = true, done
+  NotGranted  -> open the loopback stream AND play() it   // this is what prompts
+                 poll preflight() until it changes, or until our timeout
+                   Granted    -> persist enabled = true
+                   NotGranted -> persist enabled = false,
+                                 availability reports permission_denied
 ```
 
 Requirements:
 
+- **The attempt must reach `play()`.** Building the stream is not enough — the
+  prompt is raised by starting IO on the tap-backed aggregate device. Tear the
+  stream down afterwards; a probe must never leave capture running.
+- **Poll; do not wait on a callback.** The dialog is asynchronous and the user
+  may take seconds to answer. Poll `preflight()` on an interval (muesly uses
+  500ms) up to a bounded timeout that is **ours to choose** — no source
+  justifies a particular number, so pick one, name the constant, and say in a
+  comment that it is our choice rather than an OS contract.
+- **A timeout is not a denial.** If the answer has not changed when polling
+  stops, the dialog is most likely still open. Persist `false` so nothing
+  claims to be capturing, but prefer copy that invites another attempt over
+  copy asserting the user refused.
 - **Do not persist a refused enable.** Write `false`, and let the frontend's
-  re-read (which Phase A Task 6 Step 7 already added, and which the review
-  confirmed works in both scopes) pick up the corrected value.
+  re-read (Phase A Task 6 Step 7, confirmed working in both scopes) pick up the
+  corrected value.
 - **Return `Ok`, not `Err`, on a refusal.** This is not a command failure — the
-  user made a choice. The UI reflects it through availability, not through an
-  error toast.
-- **`request()` goes through `spawn_blocking`.** It shows a modal dialog.
+  user made a choice. The UI reflects it through availability, not an error
+  toast.
+- **All of it goes through `spawn_blocking`**, and none may run on the main
+  thread: it opens cpal streams and waits on a modal dialog.
 - **Disabling never prompts.** Only `enabled == true` touches permission.
 - Beware the settings lost-update pattern being fixed separately in
   `commands/audio.rs`: re-read settings immediately before writing, and mutate
@@ -439,7 +502,7 @@ Requirements:
 cargo test --manifest-path src-tauri/Cargo.toml macos_system_audio_availability_tests
 ```
 
-Expected: PASS (3 tests).
+Expected: PASS (2 tests).
 
 - [ ] **Step 6: Verify and commit**
 
@@ -638,7 +701,7 @@ Finder**, not a dev build launched from a terminal.
       <bundle-id>` and the app in its default on-demand microphone mode, enable
       system audio **without recording anything**. The dialog must appear
       immediately, showing the Task 1 string verbatim.
-- [ ] **Undetermined does not render the denied CTA**: after the reset and
+- [ ] **A never-asked state does not render the denied CTA**: after the reset and
       *before* touching the toggle, confirm the ordinary toggle renders, not the
       "you declined" branch.
 - [ ] **Deny path**: decline the prompt. Confirm the CTA renders, and that the
