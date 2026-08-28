@@ -43,6 +43,12 @@ function App() {
   const refreshOutputDevices = useSettingsStore(
     (state) => state.refreshOutputDevices,
   );
+  const refreshSystemAudioAvailability = useSettingsStore(
+    (state) => state.refreshSystemAudioAvailability,
+  );
+  const refreshSystemAudioDevices = useSettingsStore(
+    (state) => state.refreshSystemAudioDevices,
+  );
   const hasCompletedPostOnboardingInit = useRef(false);
 
   useEffect(() => {
@@ -66,8 +72,16 @@ function App() {
       });
       refreshAudioDevices();
       refreshOutputDevices();
+      refreshSystemAudioAvailability();
+      refreshSystemAudioDevices();
     }
-  }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
+  }, [
+    onboardingStep,
+    refreshAudioDevices,
+    refreshOutputDevices,
+    refreshSystemAudioAvailability,
+    refreshSystemAudioDevices,
+  ]);
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {

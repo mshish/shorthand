@@ -22,6 +22,17 @@ mod settings;
 mod shortcut;
 pub mod shorthand;
 mod signal_handle;
+// Compiled on every platform, not just macOS, so the pure status mapping keeps
+// its unit tests on Windows and Linux — the FFI inside is the part nothing off
+// macOS can check, so the little that can be checked should be. Its callers are
+// all behind both gates, which leaves it dead code on every other target and on
+// macOS with the SPI feature off — the escape-hatch build nobody makes by
+// accident, and so exactly the one that would rot unnoticed.
+#[cfg_attr(
+    not(all(target_os = "macos", feature = "macos-tcc-spi")),
+    allow(dead_code)
+)]
+mod system_audio_permission;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
@@ -36,7 +47,6 @@ use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
-#[cfg(windows)]
 use managers::transcription::SystemAudioTranscription;
 use managers::transcription::{
     transcription_managers, ActiveStreamManagers, StreamSource, StreamTranscriptMerger,
@@ -168,25 +178,46 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
-    let initial_settings = settings::get_settings(app_handle);
-    #[cfg(windows)]
-    let system_audio_transcription = if initial_settings.system_audio_enabled
-        && model_manager
-            .get_model_info(&initial_settings.selected_model)
-            .is_some_and(|model| model.supports_streaming)
+    // `mut` is load-bearing only for the Linux normalisation directly below.
+    // That block is compiled out everywhere else, leaving a binding that is
+    // never reassigned -- which `unused_mut` rejects under `-D warnings`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut initial_settings = settings::get_settings(app_handle);
+    // Linux has no ALSA-loopback fallback. If neither supported sound-server
+    // backend can be opened at startup, persist the same disabled state that
+    // the managers below will observe; do not write a clone after constructing
+    // them and leave the live process using stale enabled settings.
+    #[cfg(target_os = "linux")]
+    if crate::audio_toolkit::get_system_audio_host().is_none()
+        && (initial_settings.system_audio_enabled
+            || initial_settings.dictation.system_audio_enabled)
     {
-        Some(Arc::new(
-            TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
-                .expect("Failed to initialize system audio transcription manager"),
-        ))
-    } else {
-        None
-    };
+        log::warn!("No supported Linux system-audio server is available; disabling system audio");
+        initial_settings.system_audio_enabled = false;
+        initial_settings.dictation.system_audio_enabled = false;
+        settings::write_settings(app_handle, initial_settings.clone());
+    }
+    // Meetings and Dictation each own a system-audio preference over one
+    // shared lane. Construct it when either wants it, so the active mode can
+    // select it at hotkey time; model loading remains lazy inside
+    // TranscriptionManager. Constructing it unconditionally would start its
+    // idle-watcher thread on every platform for every user, and the router it
+    // hands the recording manager is also what makes every recorder allocate a
+    // second Silero session. `ensure_system_audio_transcription` builds it
+    // later if the user turns the lane on.
+    let system_audio_transcription =
+        if commands::audio::system_audio_lane_required(&initial_settings) {
+            Some(Arc::new(
+                TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
+                    .expect("Failed to initialize system audio transcription manager"),
+            ))
+        } else {
+            None
+        };
     let recording_manager = Arc::new(
         AudioRecordingManager::new(
             app_handle,
             transcription_manager.stream_router(),
-            #[cfg(windows)]
             system_audio_transcription
                 .as_ref()
                 .map(|manager| manager.stream_router()),
@@ -223,7 +254,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(follow_stream::FollowStreamServer::default());
     app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
-    #[cfg(windows)]
     app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
         system_audio_transcription,
     )));
@@ -754,6 +784,7 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::get_microphone_mode,
             commands::audio::get_windows_microphone_permission_status,
             commands::audio::open_microphone_privacy_settings,
+            commands::audio::open_system_audio_privacy_settings,
             commands::audio::get_available_microphones,
             commands::audio::set_selected_microphone,
             commands::audio::get_selected_microphone,
@@ -767,7 +798,10 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::is_recording,
             commands::audio::get_microphone_channels,
             commands::audio::set_selected_channel,
+            commands::audio::get_system_audio_availability,
+            commands::audio::get_available_system_audio_devices,
             commands::audio::change_system_audio_enabled_setting,
+            commands::audio::change_dictation_system_audio_enabled_setting,
             commands::audio::set_system_audio_device,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,

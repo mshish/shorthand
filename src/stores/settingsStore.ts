@@ -8,6 +8,8 @@ import type {
   OrtAcceleratorSetting,
   DictationSettings,
   AssistedNotesSettings,
+  SystemAudioAvailability,
+  SystemAudioDevice,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -18,6 +20,17 @@ interface SettingsStore {
   isUpdating: Record<string, boolean>;
   audioDevices: AudioDevice[];
   outputDevices: AudioDevice[];
+  systemAudioDevices: SystemAudioDevice[];
+  /**
+   * The last answer the backend actually gave. `null` means the probe has
+   * never returned one — not "unavailable". A probe that throws leaves this
+   * untouched, so an IPC or serialization failure cannot masquerade as a
+   * machine with no sound server (which would hide every system-audio
+   * surface, including the ones that trigger a re-probe).
+   */
+  systemAudioAvailability: SystemAudioAvailability | null;
+  /** True while a probe is in flight. Independent of the answer above. */
+  isProbingSystemAudio: boolean;
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
 
@@ -32,6 +45,8 @@ interface SettingsStore {
   refreshSettings: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
+  refreshSystemAudioDevices: () => Promise<void>;
+  refreshSystemAudioAvailability: () => Promise<void>;
   updateBinding: (id: string, binding: string) => Promise<void>;
   resetBinding: (id: string) => Promise<void>;
   getSetting: <K extends keyof Settings>(key: K) => Settings[K] | undefined;
@@ -63,6 +78,7 @@ interface SettingsStore {
   setUpdating: (key: string, updating: boolean) => void;
   setAudioDevices: (devices: AudioDevice[]) => void;
   setOutputDevices: (devices: AudioDevice[]) => void;
+  setSystemAudioDevices: (devices: SystemAudioDevice[]) => void;
   setCustomSounds: (sounds: { start: boolean; stop: boolean }) => void;
 }
 
@@ -72,6 +88,18 @@ interface SettingsStore {
 const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   index: "default",
   name: "Default",
+  is_default: true,
+};
+
+/**
+ * The synthetic "follow the system default" entry. Exported because
+ * `system_audio_device` is persisted as `null` when it is selected, so the
+ * selector has to resolve that `null` back to this option's `id` to show it
+ * as chosen — and there must be exactly one owner of the sentinel.
+ */
+export const DEFAULT_SYSTEM_AUDIO_DEVICE: SystemAudioDevice = {
+  id: "default",
+  label: "Default",
   is_default: true,
 };
 
@@ -227,6 +255,13 @@ const settingUpdaters: {
   },
 };
 
+/**
+ * The single in-flight system-audio probe, if any. Module scope rather than
+ * store state because it is a concurrency latch, not something a component
+ * renders; `isProbingSystemAudio` is the rendered half.
+ */
+let systemAudioProbe: Promise<void> | null = null;
+
 export const useSettingsStore = create<SettingsStore>()(
   subscribeWithSelector((set, get) => ({
     settings: null,
@@ -235,6 +270,9 @@ export const useSettingsStore = create<SettingsStore>()(
     isUpdating: {},
     audioDevices: [],
     outputDevices: [],
+    systemAudioDevices: [],
+    systemAudioAvailability: null,
+    isProbingSystemAudio: false,
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
 
@@ -248,6 +286,7 @@ export const useSettingsStore = create<SettingsStore>()(
       })),
     setAudioDevices: (audioDevices) => set({ audioDevices }),
     setOutputDevices: (outputDevices) => set({ outputDevices }),
+    setSystemAudioDevices: (systemAudioDevices) => set({ systemAudioDevices }),
     setCustomSounds: (customSounds) => set({ customSounds }),
 
     // Getters
@@ -321,6 +360,65 @@ export const useSettingsStore = create<SettingsStore>()(
       }
     },
 
+    // System-audio endpoints are intentionally separate from ordinary output
+    // devices: on Linux the valid capture endpoint is a Pulse monitor source
+    // or PipeWire sink-capture device, not a playback sink.
+    refreshSystemAudioDevices: async () => {
+      try {
+        const result = await commands.getAvailableSystemAudioDevices();
+        if (result.status === "ok") {
+          set({
+            systemAudioDevices: [
+              DEFAULT_SYSTEM_AUDIO_DEVICE,
+              ...result.data.filter((device) => device.id !== "default"),
+            ],
+          });
+        } else {
+          set({ systemAudioDevices: [DEFAULT_SYSTEM_AUDIO_DEVICE] });
+        }
+      } catch (error) {
+        console.error("Failed to load system-audio devices:", error);
+        set({ systemAudioDevices: [DEFAULT_SYSTEM_AUDIO_DEVICE] });
+      }
+    },
+
+    // The probe builds a CPAL host on a blocking thread and a PulseAudio
+    // handshake can take seconds, so it must not be fanned out and must not
+    // blank the answer it is refreshing. Callers that arrive while one is in
+    // flight join it instead of starting a second: with only ever one probe
+    // running there is a single writer, which is also why no generation token
+    // is needed to keep a slow probe from overwriting a newer answer.
+    refreshSystemAudioAvailability: async () => {
+      if (systemAudioProbe) {
+        return systemAudioProbe;
+      }
+
+      set({ isProbingSystemAudio: true });
+      systemAudioProbe = (async () => {
+        try {
+          const availability = await commands.getSystemAudioAvailability();
+          const previous = get().systemAudioAvailability;
+          set({ systemAudioAvailability: availability });
+          // Nothing else re-enumerates on its own, and the selector is the
+          // only surface that can ask for a refresh — so a machine that
+          // becomes capable mid-session (a sound server started after
+          // launch) would otherwise hold an empty device list forever.
+          if (availability === "available" && previous !== "available") {
+            await get().refreshSystemAudioDevices();
+          }
+        } catch (error) {
+          // Deliberately leave the previous answer in place. A thrown probe
+          // says nothing about the machine's sound server.
+          console.error("Failed to probe system audio availability:", error);
+        } finally {
+          systemAudioProbe = null;
+          set({ isProbingSystemAudio: false });
+        }
+      })();
+
+      return systemAudioProbe;
+    },
+
     // Play a test sound
     playTestSound: async (soundType: "start" | "stop") => {
       try {
@@ -358,6 +456,12 @@ export const useSettingsStore = create<SettingsStore>()(
         const updater = settingUpdaters[key];
         if (updater) {
           await updater(value);
+          // A platform permission flow may accept the command while persisting
+          // a corrected value (for example, a refused system-audio request).
+          // Reload instead of leaving the optimistic toggle state on screen.
+          if (key === "system_audio_enabled") {
+            await get().refreshSettings();
+          }
         } else if (key !== "bindings" && key !== "selected_model") {
           console.warn(`No handler for setting: ${String(key)}`);
         }
@@ -649,7 +753,11 @@ export const useSettingsStore = create<SettingsStore>()(
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
       // is responsible for calling refreshAudioDevices/refreshOutputDevices
       // after onboarding completes. This avoids triggering permission dialogs
-      // on macOS before the user is ready.
+      // on macOS before the user is ready. The system-audio availability probe
+      // stays out for the same reason plus one of its own: `useSettings()`
+      // calls initialize() from every one of its ~81 mount sites while
+      // isLoading is still true, and each probe builds its own CPAL host.
+      // App.tsx and AccessibilityOnboarding own that call, like the lists.
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),

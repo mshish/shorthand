@@ -421,3 +421,41 @@ phases ship on one branch. Changes:
 - Frontend: availability is now refreshed after every capture attempt via a
   shared `useSystemAudioAvailability` hook, and `useSettings` gains the
   system-audio device list it must expose for the selector to build.
+
+**2026-08-27 (second revision)** — corrected after researching how real Core
+Audio tap consumers handle permission. Two claims above are wrong and are
+superseded by `docs/superpowers/plans/2026-08-27-plan-c-system-audio-macos.md`,
+whose "What the research established" section carries the evidence.
+
+- **"Status can only be observed from an attempt's outcome" is false, and it is
+  the load-bearing error.** A denied tap does not fail:
+  `AudioHardwareCreateProcessTap`, the aggregate device and the stream start all
+  return `noErr`, the callback fires at normal cadence, and every sample is
+  zero. The author of cpal's macOS loopback backend describes it as *"You
+  silently get denied, and record complete silence."* So an attempt's outcome
+  observes nothing, and everything built on it — the probe, the classifier, the
+  observed-state cache — could not have worked. cpal cannot report it either:
+  `ErrorKind::PermissionDenied` is reachable only from two AudioUnit/file
+  statuses, and `AudioHardwareCreateProcessTap` is a HAL call.
+- **"There is no public API to precheck this permission" is true, but the
+  conclusion drawn from it was wrong.** There is no *public* API; there is a
+  private one, TCC's `TCCAccessPreflight`/`TCCAccessRequest`, and it is what
+  every shipping consumer of this API uses — AudioCap, vibe, muesly,
+  osci-render, and cpal's own unmerged PR #1257. Plan C reads it in a fork-only
+  module behind a Cargo feature, so permission is known *before* any capture is
+  attempted. Point 6's "necessarily reactive" framing no longer holds.
+- **The purple/orange claim is inverted.** Orange is the microphone; purple is
+  system-audio recording — and ScreenCaptureKit produces purple too, so the
+  indicator does not distinguish the two paths. The authoritative check is that
+  the app appears under Privacy & Security → Screen & System Audio Recording →
+  **System Audio Recording Only**.
+- **A new trap, from reading cpal's source.** cpal chooses loopback over
+  ordinary input capture solely on whether the device reports no input configs
+  (`macos/device.rs:723-735`, `:685-690`). An output device that also has inputs
+  — a USB interface, BlackHole, an aggregate device, a Bluetooth headset in HFP
+  — silently records *its inputs* instead of the system mix. Plan C Task 4 adds
+  a guard.
+- **Unchanged and still correct:** the consent string, the absence of a
+  hardened-runtime entitlement, that this is a lighter permission than Screen
+  Recording, that a refused enable must not be persisted, and that Linux needs
+  no permission UX.

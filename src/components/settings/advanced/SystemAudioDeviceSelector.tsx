@@ -1,8 +1,8 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import type { AudioDevice } from "@/bindings";
+import type { DictationSettings, SystemAudioDevice } from "@/bindings";
 import { useSettings } from "../../../hooks/useSettings";
-import { useOsType } from "../../../hooks/useOsType";
+import { DEFAULT_SYSTEM_AUDIO_DEVICE } from "../../../stores/settingsStore";
 import { Dropdown } from "../../ui/Dropdown";
 import { SettingContainer } from "../../ui/SettingContainer";
 
@@ -20,36 +20,47 @@ export const SystemAudioDeviceSelector: React.FC<
     updateSetting,
     isUpdating,
     isLoading,
-    outputDevices,
-    refreshOutputDevices,
+    systemAudioDevices,
+    refreshSystemAudioDevices,
+    systemAudioAvailability,
   } = useSettings();
-  const osType = useOsType();
 
-  if (osType !== "windows") {
+  // `null` means the probe has never answered, not that the answer was no.
+  //
+  // `permission_denied` hides the row too. The notice that replaces the toggles
+  // explains the situation; a device dropdown beside it can only mislead, and
+  // on the Audio tab — where no toggle is rendered — it would otherwise sit
+  // there alone with nothing to explain why choosing a device does nothing. It
+  // is not reliably greyed out either: `enabled` is the OR of both scopes, so a
+  // flag left true by a previously-granted session keeps it live, and every
+  // selection then fails the backend's availability gate with a raw error.
+  if (
+    systemAudioAvailability === null ||
+    systemAudioAvailability === "unavailable_no_sound_server" ||
+    systemAudioAvailability === "permission_denied"
+  ) {
     return null;
   }
 
-  const enabled = getSetting("system_audio_enabled") ?? false;
+  const dictation = getSetting("dictation") as DictationSettings | undefined;
+  const enabled =
+    (getSetting("system_audio_enabled") ?? false) ||
+    (dictation?.system_audio_enabled ?? false);
   const muteEnabled = getSetting("mute_while_recording") ?? false;
-  const selectedDevice = getSetting("system_audio_device") || "Default";
-  // Plain map over the store's already-normalised list, matching
-  // OutputDeviceSelector/MicrophoneSelector/ClamshellMicrophoneSelector. The
-  // store (settingsStore.ts refreshOutputDevices) is the sole owner of the
-  // "Default" sentinel: it filters out whatever the backend enumeration
-  // injected and prepends its own DEFAULT_AUDIO_DEVICE, so outputDevices
-  // already contains exactly one Default entry. Adding a second one here
-  // was this component's own bug. The sentinel's raw name, "Default", is
-  // deliberately left untranslated to match the other three selectors,
-  // which are upstream components that also render device.name unchanged —
-  // even though settings.advanced.systemAudioDevice.default is a genuinely
-  // translatable fork string today, translating it here alone would make
-  // the same "Default" entry read in the user's language in this dropdown
-  // while staying English in the three adjacent ones on the same page.
-  // Making all four consistent would mean editing three upstream files for
-  // a translation-only change, which is out of scope for this fix.
-  const options = outputDevices.map((device: AudioDevice) => ({
-    value: device.name,
-    label: device.name,
+  const savedDevice = getSetting("system_audio_device");
+  // "Follow the system default" is persisted as null, and the sentinel option
+  // is matched by `id`, so the unset case has to resolve to that id or the
+  // dropdown matches nothing and shows its placeholder instead. Legacy Windows
+  // values are plain device names, which are also the ids the backend reports,
+  // so they resolve as themselves. "Default" is the pre-sentinel spelling the
+  // write path still maps back to null; accept it on the way in for symmetry.
+  const selectedDevice =
+    !savedDevice || savedDevice === "Default"
+      ? DEFAULT_SYSTEM_AUDIO_DEVICE.id
+      : savedDevice;
+  const options = systemAudioDevices.map((device: SystemAudioDevice) => ({
+    value: device.id,
+    label: device.label,
   }));
   const disabled = !enabled || muteEnabled;
 
@@ -66,17 +77,15 @@ export const SystemAudioDeviceSelector: React.FC<
         selectedValue={selectedDevice}
         onSelect={(device) => updateSetting("system_audio_device", device)}
         placeholder={
-          isLoading || outputDevices.length === 0
+          isLoading || systemAudioDevices.length === 0
             ? t("settings.sound.outputDevice.loading")
             : t("settings.sound.outputDevice.placeholder")
         }
-        disabled={
-          disabled ||
-          isUpdating("system_audio_device") ||
-          isLoading ||
-          outputDevices.length === 0
-        }
-        onRefresh={refreshOutputDevices}
+        // Deliberately not disabled on an empty list: opening the dropdown is
+        // what calls onRefresh, so disabling it while empty would leave the
+        // list with no way to fill itself.
+        disabled={disabled || isUpdating("system_audio_device") || isLoading}
+        onRefresh={refreshSystemAudioDevices}
       />
     </SettingContainer>
   );

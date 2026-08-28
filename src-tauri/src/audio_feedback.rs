@@ -1,6 +1,6 @@
 use crate::settings::SoundTheme;
 use crate::settings::{self, AppSettings};
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::HostTrait;
 use log::{debug, error, warn};
 use rodio::OutputStreamBuilder;
 use std::fs::File;
@@ -109,7 +109,9 @@ fn play_audio_file(
 
             let mut found_device = None;
             for device in devices {
-                if device.name()? == device_name {
+                if crate::audio_toolkit::device_display_name(&device)
+                    .is_some_and(|name| name == *device_name)
+                {
                     found_device = Some(device);
                     break;
                 }
