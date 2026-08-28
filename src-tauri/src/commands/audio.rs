@@ -376,16 +376,29 @@ pub async fn get_system_audio_availability(app: AppHandle) -> SystemAudioAvailab
 
     #[cfg(target_os = "macos")]
     {
-        // A refusal we have already observed outranks the preflight, which
-        // cannot tell a refusal from a prompt never shown.
+        // The preflight has to run first, and unconditionally. Granting in
+        // System Settings cannot notify us, so reading it is the only way we
+        // ever learn about it — and this command is what "Try again" calls.
+        // Short-circuiting on the remembered refusal before reading would make
+        // that button permanently unable to observe the grant it exists to
+        // pick up, stranding the user until the process restarts.
+        let permission = tokio::task::spawn_blocking(crate::system_audio_permission::preflight)
+            .await
+            .unwrap_or(crate::system_audio_permission::SystemAudioPermission::NotGranted);
+
+        if permission == crate::system_audio_permission::SystemAudioPermission::Granted {
+            set_macos_system_audio_permission_refused(false);
+            return SystemAudioAvailability::Available;
+        }
+
+        // Still not granted. Only now does an attempt we already made and lost
+        // decide between "ask them" and "tell them how to fix it" — the
+        // preflight itself cannot tell a refusal from a prompt never shown.
         if macos_system_audio_permission_refused() {
             return SystemAudioAvailability::PermissionDenied;
         }
-        tokio::task::spawn_blocking(|| {
-            availability_from_permission(crate::system_audio_permission::preflight())
-        })
-        .await
-        .unwrap_or(SystemAudioAvailability::Available)
+
+        availability_from_permission(permission)
     }
 
     #[cfg(not(target_os = "macos"))]

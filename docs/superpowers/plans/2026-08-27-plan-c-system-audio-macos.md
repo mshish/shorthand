@@ -629,9 +629,17 @@ Fork-only keys go in `src/shorthand/locales/en.json`, never `src/i18n/locales/` 
 `src/shorthand/locales/README.md` first and match the file's key convention:
 
 ```json
-"settings.advanced.systemAudio.permissionNeeded": "Shorthand needs permission to record audio playing on this Mac. macOS only asks once, so if you declined, you can grant it in System Settings.",
+"settings.advanced.systemAudio.permissionNeeded": "Shorthand needs permission to record audio playing on this Mac. Grant it in System Settings, under Privacy & Security -> Screen & System Audio Recording. macOS only asks once, so the prompt may not appear again.",
 "settings.advanced.systemAudio.tryAgain": "Try again"
 ```
+
+Note what that copy does *not* say. An earlier draft of this step read "so if
+you declined, you can grant it" — which contradicts this plan's own constraint
+never to accuse the user of declining something they were not asked. The same
+state is reached by refusing the dialog, by ignoring it until our timeout, and
+by never being shown one at all, and we cannot tell those apart. It also names
+the pane: the row lives under Screen & System Audio Recording, which is not
+where anyone looks for an audio-only permission.
 
 Reuse the existing `accessibility.openSettings` key for the settings button —
 it already labels the Windows microphone-permission button — rather than adding

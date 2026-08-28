@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSettings } from "../../../hooks/useSettings";
 import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { useModelStore } from "../../../stores/modelStore";
+import { SystemAudioPermissionNotice } from "./SystemAudioPermissionNotice";
 
 interface SystemAudioCaptureProps {
   descriptionMode?: "inline" | "tooltip";
@@ -31,6 +32,14 @@ export const SystemAudioCapture: React.FC<SystemAudioCaptureProps> = ({
     systemAudioAvailability === "unavailable_no_sound_server"
   ) {
     return null;
+  }
+
+  // `permission_denied` is only reachable once a capture attempt has failed
+  // to change the permission answer. The toggle cannot help here — the
+  // backend refuses the enable, so it would spin, round-trip and silently
+  // revert — so replace it with the explanation and the way back.
+  if (systemAudioAvailability === "permission_denied") {
+    return <SystemAudioPermissionNotice grouped={grouped} />;
   }
 
   const muteEnabled = getSetting("mute_while_recording") ?? false;

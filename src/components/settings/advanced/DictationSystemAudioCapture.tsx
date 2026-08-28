@@ -5,6 +5,7 @@ import { commands, type DictationSettings } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { useModelStore } from "@/stores/modelStore";
 import { ToggleSwitch } from "../../ui/ToggleSwitch";
+import { SystemAudioPermissionNotice } from "./SystemAudioPermissionNotice";
 
 interface DictationSystemAudioCaptureProps {
   descriptionMode?: "inline" | "tooltip";
@@ -39,6 +40,14 @@ export const DictationSystemAudioCapture: React.FC<
     systemAudioAvailability === "unavailable_no_sound_server"
   ) {
     return null;
+  }
+
+  // `permission_denied` is only reachable once a capture attempt has failed
+  // to change the permission answer. The toggle cannot help here — the
+  // backend refuses the enable, so it would spin, round-trip and silently
+  // revert — so replace it with the explanation and the way back.
+  if (systemAudioAvailability === "permission_denied") {
+    return <SystemAudioPermissionNotice grouped={grouped} />;
   }
 
   const dictation = getSetting("dictation") as DictationSettings | undefined;

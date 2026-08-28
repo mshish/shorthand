@@ -26,9 +26,18 @@ export const SystemAudioDeviceSelector: React.FC<
   } = useSettings();
 
   // `null` means the probe has never answered, not that the answer was no.
+  //
+  // `permission_denied` hides the row too. The notice that replaces the toggles
+  // explains the situation; a device dropdown beside it can only mislead, and
+  // on the Audio tab — where no toggle is rendered — it would otherwise sit
+  // there alone with nothing to explain why choosing a device does nothing. It
+  // is not reliably greyed out either: `enabled` is the OR of both scopes, so a
+  // flag left true by a previously-granted session keeps it live, and every
+  // selection then fails the backend's availability gate with a raw error.
   if (
     systemAudioAvailability === null ||
-    systemAudioAvailability === "unavailable_no_sound_server"
+    systemAudioAvailability === "unavailable_no_sound_server" ||
+    systemAudioAvailability === "permission_denied"
   ) {
     return null;
   }
