@@ -530,7 +530,7 @@ impl AudioRecordingManager {
             if device.is_none() {
                 warn!("Configured system audio device is unavailable; continuing microphone-only");
             }
-            return device.map(|device| SystemAudioCapture { device });
+            device.map(|device| SystemAudioCapture { device })
         }
 
         #[cfg(target_os = "macos")]
@@ -550,7 +550,7 @@ impl AudioRecordingManager {
                 crate::audio_toolkit::get_system_audio_host()?.default_output_device()
             };
 
-            return device.map(|device| SystemAudioCapture { device });
+            device.map(|device| SystemAudioCapture { device })
         }
 
         #[cfg(windows)]

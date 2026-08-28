@@ -91,7 +91,7 @@ pub fn list_system_audio_devices() -> Result<Vec<SystemAudioDeviceInfo>, Box<dyn
 {
     #[cfg(target_os = "linux")]
     {
-        return list_linux_system_audio_devices();
+        list_linux_system_audio_devices()
     }
 
     #[cfg(not(target_os = "linux"))]
