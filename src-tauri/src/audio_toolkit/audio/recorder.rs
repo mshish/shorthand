@@ -1861,3 +1861,155 @@ mod tests {
         harness.shutdown();
     }
 }
+
+/// Opens the real system-audio loopback endpoint on developer machines. CI is
+/// intentionally skipped because its runners have no audio hardware; these
+/// tests catch CPAL format negotiation or stream-opening regressions that
+/// synthetic loopback-pump tests cannot exercise.
+#[cfg(test)]
+mod hardware_tests {
+    use super::AudioRecorder;
+    use cpal::traits::{DeviceTrait, StreamTrait};
+    use std::sync::{atomic::AtomicBool, Arc};
+    use std::time::Duration;
+
+    fn system_audio_device() -> Option<cpal::Device> {
+        #[cfg(target_os = "linux")]
+        {
+            crate::audio_toolkit::resolve_linux_system_audio_device(None)
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut devices = crate::audio_toolkit::list_system_audio_devices().ok()?;
+            let index = devices
+                .iter()
+                .position(|device| device.is_default)
+                .unwrap_or(0);
+            devices.get_mut(index).map(|device| device.device.clone())
+        }
+    }
+
+    fn build_input_stream<T>(
+        device: &cpal::Device,
+        config: &cpal::SupportedStreamConfig,
+        callback_fired: Arc<AtomicBool>,
+    ) -> cpal::Stream
+    where
+        T: cpal::SizedSample,
+    {
+        device
+            .build_input_stream(
+                (*config).into(),
+                move |_: &[T], _: &cpal::InputCallbackInfo| {
+                    callback_fired.store(true, std::sync::atomic::Ordering::Release);
+                },
+                |error| log::warn!("System-audio hardware test stream error: {error}"),
+                None,
+            )
+            .expect("build a system-audio input stream")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn build_silent_output_stream<T>(
+        device: &cpal::Device,
+        config: &cpal::SupportedStreamConfig,
+    ) -> cpal::Stream
+    where
+        T: cpal::Sample + cpal::SizedSample,
+    {
+        device
+            .build_output_stream(
+                (*config).into(),
+                |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                    data.fill(T::EQUILIBRIUM);
+                },
+                |error| log::warn!("System-audio hardware test output stream error: {error}"),
+                None,
+            )
+            .expect("build a silent system-audio output stream")
+    }
+
+    #[test]
+    fn negotiated_loopback_format_is_supported() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let Some(device) = system_audio_device() else {
+            eprintln!("No system-audio device is available; skipping hardware test");
+            return;
+        };
+        let config = AudioRecorder::get_preferred_loopback_config(&device)
+            .expect("negotiate a system-audio loopback config");
+        assert!(
+            AudioRecorder::SUPPORTED_FORMATS.contains(&config.sample_format()),
+            "negotiated unsupported loopback format: {:?}",
+            config.sample_format()
+        );
+        assert!(
+            config.channels() > 0,
+            "negotiated loopback config has no channels"
+        );
+    }
+
+    #[test]
+    fn system_audio_input_stream_delivers_frames() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let Some(device) = system_audio_device() else {
+            eprintln!("No system-audio device is available; skipping hardware test");
+            return;
+        };
+        let config = AudioRecorder::get_preferred_loopback_config(&device)
+            .expect("negotiate a system-audio loopback config");
+        let callback_fired = Arc::new(AtomicBool::new(false));
+
+        // WASAPI/CoreAudio loopback can remain idle until an output client is
+        // active. Keep one silent client alive so the capture endpoint is
+        // scheduled; this test still treats silence as valid capture data.
+        #[cfg(not(target_os = "linux"))]
+        let output_stream = match config.sample_format() {
+            cpal::SampleFormat::U8 => build_silent_output_stream::<u8>(&device, &config),
+            cpal::SampleFormat::I8 => build_silent_output_stream::<i8>(&device, &config),
+            cpal::SampleFormat::I16 => build_silent_output_stream::<i16>(&device, &config),
+            cpal::SampleFormat::I32 => build_silent_output_stream::<i32>(&device, &config),
+            cpal::SampleFormat::F32 => build_silent_output_stream::<f32>(&device, &config),
+            sample_format => panic!("unsupported loopback format: {sample_format:?}"),
+        };
+        #[cfg(not(target_os = "linux"))]
+        output_stream
+            .play()
+            .expect("start a silent system-audio output stream");
+
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::U8 => {
+                build_input_stream::<u8>(&device, &config, Arc::clone(&callback_fired))
+            }
+            cpal::SampleFormat::I8 => {
+                build_input_stream::<i8>(&device, &config, Arc::clone(&callback_fired))
+            }
+            cpal::SampleFormat::I16 => {
+                build_input_stream::<i16>(&device, &config, Arc::clone(&callback_fired))
+            }
+            cpal::SampleFormat::I32 => {
+                build_input_stream::<i32>(&device, &config, Arc::clone(&callback_fired))
+            }
+            cpal::SampleFormat::F32 => {
+                build_input_stream::<f32>(&device, &config, Arc::clone(&callback_fired))
+            }
+            sample_format => panic!("unsupported loopback format: {sample_format:?}"),
+        };
+        stream.play().expect("start a system-audio input stream");
+        std::thread::sleep(Duration::from_millis(750));
+
+        // Silence is legitimate, and macOS may deliver all-zero buffers when
+        // permission is denied. This test verifies frame arrival only.
+        assert!(
+            callback_fired.load(std::sync::atomic::Ordering::Acquire),
+            "system-audio stream did not deliver a data callback"
+        );
+    }
+}

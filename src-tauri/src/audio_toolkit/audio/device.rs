@@ -276,3 +276,87 @@ fn list_pipewire_sink_default(
         device,
     }])
 }
+
+/// Exercises the real system-audio endpoint discovery path on developer
+/// machines. These tests are deliberately skipped in CI because its runners
+/// have no audio hardware; failures here catch a CPAL/backend mismatch before
+/// a user's saved system-audio selection silently falls back to microphone-only.
+#[cfg(test)]
+mod hardware_tests {
+    use super::list_system_audio_devices;
+
+    #[test]
+    fn system_audio_host_is_available() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        assert!(
+            crate::audio_toolkit::get_system_audio_host().is_some(),
+            "system-audio capture needs a CPAL host"
+        );
+    }
+
+    #[test]
+    fn system_audio_devices_have_stable_selector_data() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let devices = list_system_audio_devices().expect("list system-audio devices");
+        assert!(
+            !devices.is_empty(),
+            "a local system-audio endpoint should be available"
+        );
+        for device in devices {
+            assert!(!device.id.is_empty(), "system-audio device id is empty");
+            assert!(
+                !device.label.is_empty(),
+                "system-audio device label is empty"
+            );
+        }
+    }
+
+    #[test]
+    fn system_audio_device_list_has_at_most_one_default() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let devices = list_system_audio_devices().expect("list system-audio devices");
+        assert!(
+            devices.iter().filter(|device| device.is_default).count() <= 1,
+            "multiple system-audio devices are marked default"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_linux_system_audio_device_resolves() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let devices = list_system_audio_devices().expect("list system-audio devices");
+        for device in devices {
+            assert!(
+                super::resolve_linux_system_audio_device(Some(&device.id)).is_some(),
+                "system-audio device '{}' did not resolve back to an endpoint",
+                device.label
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_default_system_audio_device_resolves() {
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        assert!(
+            super::resolve_linux_system_audio_device(None).is_some(),
+            "the Linux default system-audio endpoint did not resolve"
+        );
+    }
+}
