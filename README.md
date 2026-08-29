@@ -2,6 +2,17 @@
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
+## About this fork
+
+Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), a local speech-to-text app. Everything Handy does, this does.
+
+What it adds:
+
+- **[`--follow-stream`](FOLLOW_STREAM.md)** — another program reads the transcript while you are still talking. The [Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin) uses this to keep meeting notes current during the meeting.
+- **A different look** — see [BRANDING.md](BRANDING.md).
+
+Handy's own changes still land here regularly. Some inherited code and documentation below still says "Handy" where the rename has not reached. [AGENTS.md](AGENTS.md) covers how this fork tracks upstream and how to contribute.
+
 **A free, open source, and extensible speech-to-text application that works completely offline.**
 
 Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. This happens on your own computer without sending any information to the cloud.
@@ -111,6 +122,16 @@ handy --start-hidden --no-tray
 > ```bash
 > /Applications/Handy.app/Contents/MacOS/Handy --toggle-transcription
 > ```
+
+**Fork-only: live transcript streaming**
+
+```bash
+handy --follow-stream        # Follow live transcript events as NDJSON
+handy --follow-stream delta  # NDJSON, one record per newly-committed suffix
+handy --follow-stream text   # Plain `me: `/`them: ` text as it commits
+```
+
+The flags above control a running Shorthand. This one reads from it: you get transcript events until you disconnect, and Shorthand carries on regardless. Turn on **Follow live transcript output** under Advanced first — it is off by default. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) has the protocol.
 
 ## Known Issues & Current Limitations
 
@@ -480,13 +501,9 @@ Update to a newer release, and replace any `pkill -USR1 -n handy` keybindings wi
 
 ### How to Contribute
 
-1. **Check existing issues** at [github.com/cjpais/Handy/issues](https://github.com/cjpais/Handy/issues)
-2. **Fork the repository** and create a feature branch
-3. **Test thoroughly** on your target platform
-4. **Submit a pull request** with clear description of changes
-5. **Join the discussion** - reach out at [contact@handy.computer](mailto:contact@handy.computer)
+Fork it, branch off `main`, test on your platform, open a pull request. Nothing else is required — GitHub pre-fills the description with Handy's template, and you can replace it, because that checklist is for pull requests aimed at Handy.
 
-The goal is to create both a useful tool and a foundation for others to build upon—a well-patterned, simple codebase that serves the community.
+Sending a change to Handy instead is a different process with real requirements. [AGENTS.md](AGENTS.md#github-workflow-for-ai-coding-assistants) has them.
 
 ## Sponsors
 
