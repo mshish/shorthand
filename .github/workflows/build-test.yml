@@ -1,6 +1,13 @@
 name: "Build Test"
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      sign-binaries:
+        description: "Sign and notarize the binaries (needs the Apple and Azure secrets to be populated)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-test:
@@ -16,9 +23,10 @@ jobs:
           - platform: "macos-latest" # for Intel based macs.
             args: "--target x86_64-apple-darwin"
             target: "x86_64-apple-darwin"
-          - platform: "ubuntu-22.04" # Build .deb on 22.04
-            args: "--bundles deb"
-            target: "x86_64-unknown-linux-gnu"
+          # ubuntu-22.04 is out because libspa fails to compile against the
+          # libpipewire headers 22.04 ships (7 errors). The fork's system-audio
+          # capture needs a newer libpipewire; ubuntu-24.04 builds it fine and
+          # still produces a .deb.
           - platform: "ubuntu-24.04" # Build AppImage and RPM on 24.04
             args: "--bundles appimage,rpm"
             target: "x86_64-unknown-linux-gnu"
@@ -37,7 +45,18 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      sign-binaries: true
+      # Off by default, because a test build is usually wanted to answer "does
+      # this compile" and the signing steps fail outright when the Apple secrets
+      # are unset — the certificate import dies before a single crate is built,
+      # so an unsigned run is the difference between an answer and nothing.
+      # Everything needed for signing is still here and still wired: tick the
+      # box on dispatch once the Developer ID certificate is in the secrets.
+      #
+      # Unsigned macOS artifacts are quarantined on download. Testers need
+      # `xattr -dr com.apple.quarantine <app>`, or Open Anyway under Privacy &
+      # Security. Unsigned builds also carry no minisign signature, so they
+      # install and run but will not auto-update — see SIGNING_AND_UPDATES.md.
+      sign-binaries: ${{ inputs.sign-binaries }}
       asset-prefix: "handy-test"
       upload-artifacts: true
       is-debug-build: ${{ contains(matrix.args, '--debug') }}

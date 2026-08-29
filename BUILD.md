@@ -14,6 +14,12 @@ This guide covers how to set up the development environment and build Handy from
 
 #### macOS
 
+> [!IMPORTANT]
+> Shorthand requires **macOS 14.6 or later**. The audio backend (cpal 0.18)
+> links `AudioHardwareCreateProcessTap`, which does not exist before macOS
+> 14.2, and system-audio capture needs 14.6. Older macOS cannot run the app
+> at all — not merely without system audio.
+
 - Xcode Command Line Tools
 - Install with: `xcode-select --install`
 
@@ -23,13 +29,13 @@ Prebuilt ONNX Runtime binaries are not available for Intel Macs. Install ONNX Ru
 
 ```bash
 brew install onnxruntime
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri dev
+MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri dev
 ```
 
 The same environment variables apply for production builds:
 
 ```bash
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri build
+MACOSX_DEPLOYMENT_TARGET=14.6 ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri build
 ```
 
 #### Windows
@@ -65,16 +71,19 @@ ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun 
 
 - Build essentials
 - ALSA development libraries
+- PipeWire development libraries (system-audio capture). PulseAudio needs no
+  package: cpal's PulseAudio backend is a pure-Rust reimplementation of the
+  wire protocol and links no `libpulse`.
 - Install with:
 
   ```bash
   # Ubuntu/Debian
   sudo apt update
-  sudo apt install build-essential clang libclang-dev libevdev-dev libasound2-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
+  sudo apt install build-essential clang libclang-dev libevdev-dev libasound2-dev libpipewire-0.3-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
 
   # Fedora/RHEL
   sudo dnf groupinstall "Development Tools"
-  sudo dnf install alsa-lib-devel pkgconf openssl-devel vulkan-devel glslc \
+  sudo dnf install alsa-lib-devel pipewire-devel pkgconf openssl-devel vulkan-devel glslc \
     clang clang-devel libevdev-devel \
     spirv-headers-devel spirv-tools-devel glslang \
     gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel \
@@ -82,7 +91,7 @@ ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun 
     cmake
 
   # Arch Linux
-  sudo pacman -S base-devel clang libevdev shaderc spirv-headers glslang alsa-lib pkgconf openssl vulkan-devel \
+  sudo pacman -S base-devel clang libevdev shaderc spirv-headers glslang alsa-lib libpipewire pkgconf openssl vulkan-devel \
     gtk3 webkit2gtk-4.1 libappindicator-gtk3 librsvg gtk-layer-shell \
     cmake
   ```
@@ -144,6 +153,116 @@ sudo cp -a src-tauri/transcribe-libs/. /usr/lib/Handy/
 
 Resources only need re-copying if they change upstream (new icons, sounds, models, etc.).
 
+## Windows: "The directory name is invalid (os error 267)"
+
+If `cargo` dies in `transcribe-cpp-sys`'s build script with
+
+```
+failed to execute command: The directory name is invalid. (os error 267)
+```
+
+it is not your MSBuild, cmake, Visual Studio generator or long-path setting.
+Verified 2026-08-29: MSBuild 17.14 runs fine, cmake lists the VS 2022
+generator, LongPathsEnabled is already on, and the identical cmake configure
+succeeds in an ordinary directory.
+
+`transcribe-cpp-sys` shortens paths by creating an NTFS junction at
+`%LOCALAPPDATA%	cs\<hash>` pointing at `OUT_DIR`, because MSBuild's
+FileTracker ignores LongPathsEnabled (FTK1011). On some machines nested
+`mkdir` through that junction fails silently, so `build/` never exists and
+cmake is spawned with it as its working directory.
+
+Use the crate's own fallback: when it cannot create the junction it builds in
+`OUT_DIR` instead. Point `LOCALAPPDATA` at a _file_ so that creation fails,
+and keep `CARGO_TARGET_DIR` short so `OUT_DIR` stays under `MAX_PATH`:
+
+```bash
+printf x > /c/temp/not-a-dir.txt
+CARGO_TARGET_DIR=C:/ct LOCALAPPDATA='C:	emp
+ot-a-dir.txt' cargo check --all-targets
+```
+
+That compiles the whole crate locally in about five minutes, which beats
+waiting twenty for CI to report the same thing. Set both per invocation; do
+not export them.
+
+## Running the CI workflows locally
+
+CI runs the real cross-platform builds, so a broken workflow costs 20-40 minutes
+per attempt to discover. [`act`](https://github.com/nektos/act) runs the same
+workflow files in Docker on your machine. Use it before pushing a workflow
+change.
+
+```bash
+act push -W .github/workflows/test.yml
+```
+
+`act` only runs the Linux jobs — the Windows and macOS matrix entries need real
+runners. That still covers `test`, `code-quality` and `nix-check`, which is where
+most workflow mistakes show up.
+
+Two flags earn their keep:
+
+```bash
+# List what would run, without running it
+act push -W .github/workflows/nix-check.yml --list
+
+# Some actions install system-level tooling and need more than the default
+act push -W .github/workflows/nix-check.yml --privileged
+```
+
+Give secrets an explicit empty value rather than leaving them unset, so the run
+exercises the same "no credentials" path CI takes:
+
+```bash
+act push -W .github/workflows/nix-check.yml --privileged -s CACHIX_AUTH_TOKEN=""
+```
+
+### On Windows, run act from inside WSL
+
+Not from PowerShell, Git Bash, or the Windows `act.exe` — those fail in ways that
+look like bugs in the workflow but are not.
+
+`act` caches each action's repository on disk and copies it into the container.
+On NTFS there is no executable bit to copy, so any composite action that runs a
+script from its own checkout dies immediately:
+
+```
+/var/run/act/actions/cachix-install-nix-action@v31/install-nix.sh: Permission denied
+```
+
+Working inside the distro removes the problem, because the cache and the checkout
+both live on ext4. Docker Desktop's WSL integration already exposes `docker`
+there, so only `act` itself needs installing:
+
+```bash
+curl -sL https://api.github.com/repos/nektos/act/releases/latest \
+  | grep -o 'https://[^"]*act_Linux_x86_64\.tar\.gz' | head -1 \
+  | xargs curl -sL -o /tmp/act.tgz \
+  && tar xzf /tmp/act.tgz -C ~/bin act && chmod +x ~/bin/act
+```
+
+Clone the repository inside the distro as well. Running act against a
+`/mnt/d/...` path bind-mounts it back through drvfs and reintroduces the same
+permission-bit loss:
+
+```bash
+git clone /mnt/d/tools/shorthand-repos/shorthand-app ~/shorthand-app
+```
+
+Refresh that clone before a run rather than re-cloning:
+
+```bash
+git -C ~/shorthand-app fetch --all && git -C ~/shorthand-app reset --hard origin/main
+```
+
+The same reasoning applies to any container you drive by hand. Running
+`docker run nixos/nix` from Windows against a `D:\` bind mount fails partway
+through the bun dependency stage with `EPERM: Operation not permitted: failed to
+link package` for every package — with or without a `/nix` volume, privileged or
+not, and for upstream's own flake as much as this one. It is the Windows
+filesystem boundary, not the build. Run it from inside the distro instead.
+
 ## Troubleshooting
 
 ### macOS Accessibility remains enabled after a local rebuild
@@ -200,7 +319,7 @@ cd src-tauri/target/release/bundle/appimage
 **Workaround:** The binary, deb, and rpm bundles all build fine — only the AppImage step fails. To skip it:
 
 ```bash
-bun run tauri build -- --bundles deb
+bun run tauri build — --bundles deb
 ```
 
 Then install using the deb extraction method above.
@@ -258,24 +377,19 @@ Artifacts then land in `C:\h\release\...` instead of the repo's
 it is only picked up by freshly started processes. Then `bun run tauri dev`
 and `bun run tauri build` work normally.
 
-### Windows `tauri build` fails at bundling with `program not found`
+### Windows `tauri build` fails at bundling with a signing error
 
-If the build compiles all the way to `Built application at: ...\handy.exe` and
-then fails with:
+Historically `tauri.conf.json` carried a custom `signCommand` pointing at
+`trusted-signing-cli`, which only existed in CI, so local bundling failed with
+`failed to bundle project 'program not found'`.
 
-```
-Signing C:\...\handy.exe with a custom signing command
-failed to bundle project `program not found`
-```
+That setting is gone — this fork signs in the release workflow instead, never
+in `tauri.conf.json` (see [SIGNING_AND_UPDATES.md](SIGNING_AND_UPDATES.md)), so
+`bun run tauri build` bundles locally without credentials. If you hit a signing
+error at the bundling step now, something has reintroduced `signCommand`.
 
-that's the code-signing step: `tauri.conf.json` configures a custom
-`signCommand` (`trusted-signing-cli`, Azure Trusted Signing) that only exists
-in the release CI environment. Local development doesn't need it:
+To compile a release binary while skipping bundling entirely:
 
 ```powershell
-# Development (no bundling/signing at all):
-bun run tauri dev
-
-# Or compile a release binary without the installer/signing step:
 bun run tauri build --no-bundle
 ```

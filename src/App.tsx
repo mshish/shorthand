@@ -14,20 +14,15 @@ import SecureInputWarning from "./components/SecureInputWarning";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import { Sidebar } from "./components/Sidebar";
 import { WhatsNewGate } from "./components/whats-new";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
+import { useVisibleSection } from "@/shorthand/useVisibleSection";
 
 type OnboardingStep = "accessibility" | "model" | "done";
-
-const renderSettingsContent = (section: SidebarSection) => {
-  const ActiveComponent =
-    SECTIONS_CONFIG[section]?.component || SECTIONS_CONFIG.general.component;
-  return <ActiveComponent />;
-};
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -37,15 +32,22 @@ function App() {
   // Track if this is a returning user who just needs to grant permissions
   // (vs a new user who needs full onboarding including model selection)
   const [isReturningUser, setIsReturningUser] = useState(false);
-  const [currentSection, setCurrentSection] =
-    useState<SidebarSection>("general");
   const { settings, updateSetting } = useSettings();
+  const { currentSection, setCurrentSection, ActiveComponent } =
+    useVisibleSection(settings);
+
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
     (state) => state.refreshAudioDevices,
   );
   const refreshOutputDevices = useSettingsStore(
     (state) => state.refreshOutputDevices,
+  );
+  const refreshSystemAudioAvailability = useSettingsStore(
+    (state) => state.refreshSystemAudioAvailability,
+  );
+  const refreshSystemAudioDevices = useSettingsStore(
+    (state) => state.refreshSystemAudioDevices,
   );
   const hasCompletedPostOnboardingInit = useRef(false);
 
@@ -70,8 +72,16 @@ function App() {
       });
       refreshAudioDevices();
       refreshOutputDevices();
+      refreshSystemAudioAvailability();
+      refreshSystemAudioDevices();
     }
-  }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
+  }, [
+    onboardingStep,
+    refreshAudioDevices,
+    refreshOutputDevices,
+    refreshSystemAudioAvailability,
+    refreshSystemAudioDevices,
+  ]);
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {
@@ -309,7 +319,7 @@ function App() {
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
                 <SecureInputWarning />
-                {renderSettingsContent(currentSection)}
+                <ActiveComponent />
               </div>
             </div>
           </div>

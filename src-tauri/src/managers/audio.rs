@@ -1,15 +1,22 @@
+#[cfg(any(windows, target_os = "macos"))]
+use crate::audio_toolkit::audio::list_output_devices;
+use crate::audio_toolkit::audio::SystemAudioCapture;
 use crate::audio_toolkit::{
     list_input_devices,
     vad::{
         frames_for_duration_ms, EarshotVad, SmoothedVad, VAD_OFFLINE_HANGOVER_MS, VAD_ONSET_MS,
         VAD_PREFILL_MS, VAD_STREAMING_HANGOVER_MS,
     },
-    AudioRecorder, SileroVad, VadPolicy, VoiceActivityDetector,
+    AudioRecorder, LoopbackOpenOutcome, RecordedAudio, SileroVad, VadPolicy, VoiceActivityDetector,
 };
 use crate::helpers::clamshell;
 use crate::managers::transcription::StreamRouter;
 use crate::settings::{get_settings, write_settings, AppSettings, VadBackend};
 use crate::utils;
+#[cfg(target_os = "macos")]
+use cpal::traits::DeviceTrait;
+#[cfg(any(windows, target_os = "macos"))]
+use cpal::traits::HostTrait;
 use log::{debug, error, info, trace, warn};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -19,6 +26,12 @@ use tauri::{Emitter, Manager};
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const SILERO_VAD_THRESHOLD: f32 = 0.3;
 const EARSHOT_VAD_THRESHOLD: f32 = 0.5;
+
+#[derive(Clone, PartialEq, Eq)]
+struct PendingSystemAudioCapture {
+    enabled: bool,
+    device_name: Option<String>,
+}
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -282,26 +295,33 @@ fn create_audio_recorder(
     app_handle: &tauri::AppHandle,
     selected_channel: Option<u16>,
     stream_router: Arc<StreamRouter>,
+    system_stream_router: Option<Arc<StreamRouter>>,
 ) -> Result<AudioRecorder, anyhow::Error> {
-    let detector: Box<dyn VoiceActivityDetector> = match backend {
-        VadBackend::Silero => {
-            let vad_path = app_handle
-                .path()
-                .resolve(
-                    "resources/models/silero_vad_v4.onnx",
-                    tauri::path::BaseDirectory::Resource,
-                )
-                .map_err(|e| anyhow::anyhow!("Failed to resolve VAD path: {e}"))?;
-            Box::new(
-                SileroVad::new(vad_path, SILERO_VAD_THRESHOLD)
-                    .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {e}"))?,
-            )
+    // Each capture lane has separate detector state; both lanes honor the
+    // selected backend and preserve the same time-based capture profile.
+    let make_detector = || -> Result<Box<dyn VoiceActivityDetector>, anyhow::Error> {
+        match backend {
+            VadBackend::Silero => {
+                let vad_path = app_handle
+                    .path()
+                    .resolve(
+                        "resources/models/silero_vad_v4.onnx",
+                        tauri::path::BaseDirectory::Resource,
+                    )
+                    .map_err(|e| anyhow::anyhow!("Failed to resolve VAD path: {e}"))?;
+                Ok(Box::new(
+                    SileroVad::new(vad_path, SILERO_VAD_THRESHOLD)
+                        .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {e}"))?,
+                ))
+            }
+            VadBackend::Earshot => Ok(Box::new(
+                EarshotVad::new(EARSHOT_VAD_THRESHOLD)
+                    .map_err(|e| anyhow::anyhow!("Failed to create EarshotVad: {e}"))?,
+            )),
         }
-        VadBackend::Earshot => Box::new(
-            EarshotVad::new(EARSHOT_VAD_THRESHOLD)
-                .map_err(|e| anyhow::anyhow!("Failed to create EarshotVad: {e}"))?,
-        ),
     };
+
+    let detector = make_detector()?;
 
     // Earshot uses 16 ms frames while Silero uses 30 ms. Convert the existing
     // time-based capture profile to each detector's frame size so selecting a
@@ -323,6 +343,29 @@ fn create_audio_recorder(
         "Initialized {:?} VAD backend ({} samples/frame)",
         backend, frame_samples
     );
+    let system_smoothed_vad = system_stream_router
+        .as_ref()
+        .map(|_| -> Result<_, anyhow::Error> {
+            let detector = make_detector()?;
+            let frame_samples = detector.frame_samples();
+            let prefill_frames = frames_for_duration_ms(VAD_PREFILL_MS, frame_samples);
+            let offline_hangover_frames =
+                frames_for_duration_ms(VAD_OFFLINE_HANGOVER_MS, frame_samples);
+            let streaming_hangover_frames =
+                frames_for_duration_ms(VAD_STREAMING_HANGOVER_MS, frame_samples);
+            let onset_frames = frames_for_duration_ms(VAD_ONSET_MS, frame_samples);
+            Ok((
+                SmoothedVad::new(
+                    detector,
+                    prefill_frames,
+                    offline_hangover_frames,
+                    onset_frames,
+                ),
+                offline_hangover_frames,
+                streaming_hangover_frames,
+            ))
+        })
+        .transpose()?;
 
     // Recorder with VAD, a spectrum-level callback that forwards level updates to
     // the frontend, and an audio-frame callback that feeds live streaming via a
@@ -347,6 +390,21 @@ fn create_audio_recorder(
                 router.feed(frame);
             }
         });
+
+    let recorder = match (recorder, system_smoothed_vad, system_stream_router) {
+        (
+            recorder,
+            Some((system_vad, offline_hangover_frames, streaming_hangover_frames)),
+            Some(router),
+        ) => recorder
+            .with_system_vad(
+                Box::new(system_vad),
+                offline_hangover_frames,
+                streaming_hangover_frames,
+            )
+            .with_system_audio_callback(move |frame| router.feed(frame)),
+        (recorder, _, _) => recorder,
+    };
 
     Ok(recorder)
 }
@@ -385,6 +443,7 @@ pub struct AudioRecordingManager {
     close_generation: Arc<AtomicU64>,
     cancel_generation: Arc<AtomicU64>,
     stream_router: Arc<StreamRouter>,
+    system_stream_router: Arc<Mutex<Option<Arc<StreamRouter>>>>,
     /// Lock-free mirror of "is the state in {Recording, Stopping}",
     /// maintained by `set_state()`. The hot-path `is_recording()` reads THIS
     /// instead of the std `state` mutex, so a UI poll can no longer deadlock
@@ -402,6 +461,14 @@ pub struct AudioRecordingManager {
     /// so the retry re-enumerates. The system-default case is never cached —
     /// the recorder resolves the current default itself, cheaply.
     cached_device: Arc<Mutex<Option<(String, cpal::Device)>>>,
+    pending_system_audio: Arc<Mutex<Option<PendingSystemAudioCapture>>>,
+    /// The configuration used for the currently open stream. This lets an
+    /// always-on microphone keep its stream when the active capture mode has
+    /// not changed, while still forcing a safe reopen at a mode boundary.
+    active_system_audio: Arc<Mutex<Option<PendingSystemAudioCapture>>>,
+    /// Whether the currently open recorder has a live system-audio lane.
+    system_audio_active: Arc<AtomicBool>,
+    loopback_open_outcome: Arc<Mutex<LoopbackOpenOutcome>>,
 }
 
 impl AudioRecordingManager {
@@ -410,6 +477,7 @@ impl AudioRecordingManager {
     pub fn new(
         app: &tauri::AppHandle,
         stream_router: Arc<StreamRouter>,
+        system_stream_router: Option<Arc<StreamRouter>>,
     ) -> Result<Self, anyhow::Error> {
         let settings = get_settings(app);
         let mode = if settings.always_on_microphone {
@@ -430,9 +498,14 @@ impl AudioRecordingManager {
             close_generation: Arc::new(AtomicU64::new(0)),
             cancel_generation: Arc::new(AtomicU64::new(0)),
             stream_router,
+            system_stream_router: Arc::new(Mutex::new(system_stream_router)),
             recording_active: Arc::new(AtomicBool::new(false)),
             capture_generation: Arc::new(AtomicU64::new(0)),
             cached_device: Arc::new(Mutex::new(None)),
+            pending_system_audio: Arc::new(Mutex::new(None)),
+            active_system_audio: Arc::new(Mutex::new(None)),
+            system_audio_active: Arc::new(AtomicBool::new(false)),
+            loopback_open_outcome: Arc::new(Mutex::new(LoopbackOpenOutcome::NotRequested)),
         };
 
         // Always-on?  Open immediately.
@@ -554,6 +627,88 @@ impl AudioRecordingManager {
         );
     }
 
+    fn get_effective_system_audio_device(
+        &self,
+        enabled: bool,
+        device_name: Option<&str>,
+    ) -> Option<SystemAudioCapture> {
+        if !enabled {
+            return None;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let device = crate::audio_toolkit::resolve_linux_system_audio_device(device_name);
+            if device.is_none() {
+                warn!("Configured system audio device is unavailable; continuing microphone-only");
+            }
+            device.map(|device| SystemAudioCapture { device })
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let device = if let Some(device_name) = device_name {
+                match list_output_devices() {
+                    Ok(devices) => devices
+                        .into_iter()
+                        .find(|candidate| candidate.name == device_name)
+                        .map(|candidate| candidate.device),
+                    Err(error) => {
+                        warn!("Failed to enumerate macOS system-audio devices: {error}");
+                        None
+                    }
+                }
+            } else {
+                crate::audio_toolkit::get_system_audio_host()?.default_output_device()
+            };
+
+            let device = device?;
+            // Mirrors CPAL's own `supports_input()`: it takes the loopback
+            // branch only for a device reporting no input configs, so one that
+            // reports any would silently capture its inputs instead of the
+            // system mix. An enumeration failure is treated as "no inputs",
+            // matching CPAL's `unwrap_or(false)`.
+            if device
+                .supported_input_configs()
+                .map(|mut configs| configs.next().is_some())
+                .unwrap_or(false)
+            {
+                let device_name = crate::audio_toolkit::audio::device_display_name(&device)
+                    .unwrap_or_else(|| "Unknown".to_string());
+                warn!(
+                    "Refusing macOS system-audio device '{device_name}': CPAL would capture its inputs rather than system output; continuing microphone-only"
+                );
+                return None;
+            }
+            Some(SystemAudioCapture { device })
+        }
+
+        #[cfg(windows)]
+        let device = if let Some(device_name) = device_name {
+            match list_output_devices() {
+                Ok(devices) => devices
+                    .into_iter()
+                    .find(|device| device.name == device_name)
+                    .map(|device| device.device),
+                Err(error) => {
+                    warn!("Failed to list system audio devices: {error}");
+                    None
+                }
+            }
+        } else {
+            crate::audio_toolkit::get_cpal_host().default_output_device()
+        };
+
+        #[cfg(windows)]
+        match device {
+            Some(device) => Some(SystemAudioCapture { device }),
+            None => {
+                warn!("Configured system audio device is unavailable; continuing microphone-only");
+                None
+            }
+        }
+    }
+
     fn schedule_lazy_close(&self) {
         let gen = self.close_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let app = self.app_handle.clone();
@@ -624,11 +779,17 @@ impl AudioRecordingManager {
         let mut recorder_opt = self.recorder.lock().unwrap();
         if recorder_opt.is_none() {
             let settings = get_settings(&self.app_handle);
+            // Bound to a local rather than passed inline: a `MutexGuard`
+            // temporary in an argument list lives until the whole call
+            // expression finishes, which would hold `system_stream_router`
+            // across the recorder build while `recorder` is already held.
+            let system_stream_router = self.system_stream_router.lock().unwrap().clone();
             *recorder_opt = Some(create_audio_recorder(
                 settings.vad_backend,
                 &self.app_handle,
                 settings.selected_channel,
                 Arc::clone(&self.stream_router),
+                system_stream_router,
             )?);
         }
         Ok(())
@@ -696,9 +857,20 @@ impl AudioRecordingManager {
         // recorder resolves the system default itself, and a machine with no
         // input devices at all fails inside open() with the same
         // "No input device found" error this used to check for.
-        let settings = get_settings(&self.app_handle);
+        // System-audio capture is per mode. The resolver keeps shared device
+        // settings intact while substituting the active mode's enabled flag.
+        let settings = crate::shorthand::dictation::resolve_settings(&self.app_handle);
         let resolve_started = Instant::now();
         let mut resolution = self.resolve_microphone_device(&settings);
+        let pending_system_audio = self.pending_system_audio.lock().unwrap().clone();
+        let requested_system_audio = pending_system_audio.unwrap_or(PendingSystemAudioCapture {
+            enabled: settings.system_audio_enabled,
+            device_name: settings.system_audio_device.clone(),
+        });
+        let system_audio = self.get_effective_system_audio_device(
+            requested_system_audio.enabled,
+            requested_system_audio.device_name.as_deref(),
+        );
         let resolve_elapsed = resolve_started.elapsed();
 
         // Ensure VAD is loaded if it wasn't for whatever reason
@@ -709,16 +881,31 @@ impl AudioRecordingManager {
         let open_started = Instant::now();
         let mut recorder_opt = self.recorder.lock().unwrap();
         if let Some(rec) = recorder_opt.as_mut() {
-            if let Err(first_err) = rec.open(resolution.device.clone()) {
-                // A cached device or config may have gone stale (unplugged,
-                // rate/format changed). Re-resolve from a fresh enumeration and
-                // retry once before surfacing the error.
-                warn!("Recorder open failed ({first_err}); re-resolving device and retrying once");
-                self.invalidate_device_cache();
-                resolution = self.resolve_microphone_device(&settings);
-                rec.open(resolution.device.clone())
-                    .map_err(|e| anyhow::anyhow!("Failed to open recorder: {}", e))?;
-            }
+            let system_audio_active =
+                match rec.open(resolution.device.clone(), system_audio.clone()) {
+                    Ok(system_audio_active) => system_audio_active,
+                    Err(first_err) => {
+                        // A cached device or config may have gone stale (unplugged,
+                        // rate/format changed). Re-resolve from a fresh enumeration and
+                        // retry once before surfacing the error.
+                        warn!(
+                        "Recorder open failed ({first_err}); re-resolving device and retrying once"
+                    );
+                        self.invalidate_device_cache();
+                        resolution = self.resolve_microphone_device(&settings);
+                        rec.open(resolution.device.clone(), system_audio)
+                            .map_err(|e| anyhow::anyhow!("Failed to open recorder: {}", e))?
+                    }
+                };
+            self.system_audio_active
+                .store(system_audio_active, Ordering::Release);
+            *self.loopback_open_outcome.lock().unwrap() = rec.loopback_open_outcome().clone();
+            *self.active_system_audio.lock().unwrap() = Some(requested_system_audio);
+            debug!(
+                "system audio open: active={}, outcome={:?}",
+                self.system_audio_active(),
+                self.loopback_open_outcome()
+            );
         }
         debug!(
             "mic stream breakdown: device_resolve={:?} vad_ensure={:?} open={:?}",
@@ -770,6 +957,9 @@ impl AudioRecordingManager {
         }
 
         *open_flag = false;
+        self.system_audio_active.store(false, Ordering::Release);
+        *self.loopback_open_outcome.lock().unwrap() = LoopbackOpenOutcome::NotRequested;
+        *self.active_system_audio.lock().unwrap() = None;
         debug!("Microphone stream stopped");
     }
 
@@ -874,11 +1064,13 @@ impl AudioRecordingManager {
         }
 
         let settings = get_settings(&self.app_handle);
+        let system_stream_router = self.system_stream_router.lock().unwrap().clone();
         let replacement = create_audio_recorder(
             backend,
             &self.app_handle,
             settings.selected_channel,
             Arc::clone(&self.stream_router),
+            system_stream_router,
         )?;
         let was_open = *self.is_open.lock().unwrap();
 
@@ -962,6 +1154,128 @@ impl AudioRecordingManager {
         Ok(())
     }
 
+    pub fn update_system_audio_capture(
+        &self,
+        enabled: bool,
+        device_name: Option<String>,
+        stream_router: Option<Arc<StreamRouter>>,
+    ) -> Result<(), anyhow::Error> {
+        let state = self.state.lock().unwrap();
+        if !matches!(*state, RecordingState::Idle) {
+            return Err(anyhow::anyhow!(
+                "Cannot change system audio capture while recording"
+            ));
+        }
+
+        let was_open = *self.is_open.lock().unwrap();
+        if was_open {
+            self.close_generation.fetch_add(1, Ordering::SeqCst);
+            self.stop_microphone_stream();
+        }
+        self.set_system_stream_router(stream_router);
+        *self.pending_system_audio.lock().unwrap() = Some(PendingSystemAudioCapture {
+            enabled,
+            device_name,
+        });
+        let restart_result = if was_open {
+            self.start_microphone_stream()
+        } else {
+            Ok(())
+        };
+        *self.pending_system_audio.lock().unwrap() = None;
+        restart_result?;
+        drop(state);
+        Ok(())
+    }
+
+    /// Aligns an already-open stream with the capture mode selected for the
+    /// next action. Meeting and Dictation each own an enabled flag, whereas
+    /// the physical loopback device is shared. Reopening only when the
+    /// resolved configuration changes avoids carrying a Meeting lane into a
+    /// Dictation action (or vice versa) without adding work to unchanged
+    /// always-on microphone starts.
+    pub fn prepare_system_audio_for_active_mode(&self) -> Result<(), anyhow::Error> {
+        let settings = crate::shorthand::dictation::resolve_settings(&self.app_handle);
+        // The clone must be bound to a local. A `MutexGuard` temporary inside
+        // an argument list is not dropped until the enclosing call expression
+        // completes, so passing it inline holds `system_stream_router` for the
+        // whole of `apply_system_audio_configuration` — which re-locks it in
+        // `set_system_stream_router`. `std::sync::Mutex` is not reentrant, so
+        // that self-deadlocks and hangs the app.
+        let stream_router = self.system_stream_router.lock().unwrap().clone();
+        self.apply_system_audio_configuration(
+            settings.system_audio_enabled,
+            settings.system_audio_device,
+            stream_router,
+        )
+    }
+
+    /// Apply a resolved mode's system-audio configuration without disturbing
+    /// an already-open stream whose configuration is identical. Settings
+    /// commands use this same serialized path after evaluating their candidate
+    /// mode configuration, so changing the inactive mode cannot restart the
+    /// active mode's capture.
+    pub fn apply_system_audio_configuration(
+        &self,
+        enabled: bool,
+        device_name: Option<String>,
+        stream_router: Option<Arc<StreamRouter>>,
+    ) -> Result<(), anyhow::Error> {
+        let desired = PendingSystemAudioCapture {
+            enabled,
+            device_name,
+        };
+        let was_open = *self.is_open.lock().unwrap();
+        let active = self.active_system_audio.lock().unwrap().clone();
+
+        if !was_open || active.as_ref() == Some(&desired) {
+            // No capture restart is needed, but the router still has to be
+            // recorded. It only exists while some mode wants system audio, so
+            // a mode that turns the lane on while the active mode's capture is
+            // unchanged would otherwise leave `None` here, and the next hotkey
+            // would hand `update_system_audio_capture` no router at all.
+            if self.store_system_stream_router(stream_router) && !was_open {
+                // Rebuilding the recorder is what adds or drops the system VAD
+                // lane. Swapping it out from under a live stream wedges
+                // `start_microphone_stream`, which then sees `is_open` set and
+                // no recorder, so only do it while the stream is closed — with
+                // the stream open the running configuration is unchanged
+                // anyway and the next open rebuilds.
+                *self.recorder.lock().unwrap() = None;
+            }
+            return Ok(());
+        }
+
+        self.update_system_audio_capture(desired.enabled, desired.device_name, stream_router)
+    }
+
+    /// Records the lane's router without disturbing an open stream. Returns
+    /// whether it actually changed.
+    fn store_system_stream_router(&self, router: Option<Arc<StreamRouter>>) -> bool {
+        let mut current = self.system_stream_router.lock().unwrap();
+        let changed = match (current.as_ref(), router.as_ref()) {
+            (None, None) => false,
+            (Some(existing), Some(new)) => !Arc::ptr_eq(existing, new),
+            _ => true,
+        };
+        *current = router;
+        changed
+    }
+
+    pub fn set_system_stream_router(&self, router: Option<Arc<StreamRouter>>) {
+        self.store_system_stream_router(router);
+        // Force a fresh recorder so VAD and callbacks match the lane's state.
+        *self.recorder.lock().unwrap() = None;
+    }
+
+    pub fn system_audio_active(&self) -> bool {
+        self.system_audio_active.load(Ordering::Acquire)
+    }
+
+    pub fn loopback_open_outcome(&self) -> LoopbackOpenOutcome {
+        self.loopback_open_outcome.lock().unwrap().clone()
+    }
+
     /// Invalidate pending first-sample UI and audio-feedback work immediately.
     /// Called at the beginning of stop, before the slower capture drain starts.
     pub fn invalidate_recording_readiness(&self) {
@@ -980,7 +1294,11 @@ impl AudioRecordingManager {
         self.cancel_generation.load(Ordering::Acquire) != generation
     }
 
-    pub fn stop_recording(&self, binding_id: &str, cancel_generation: u64) -> Option<Vec<f32>> {
+    pub fn stop_recording(
+        &self,
+        binding_id: &str,
+        cancel_generation: u64,
+    ) -> Option<RecordedAudio> {
         self.invalidate_recording_readiness();
         let mut state = self.state.lock().unwrap();
 
@@ -1018,12 +1336,18 @@ impl AudioRecordingManager {
                         Ok(buf) => buf,
                         Err(e) => {
                             error!("stop() failed: {e}");
-                            Vec::new()
+                            RecordedAudio {
+                                microphone: Vec::new(),
+                                system: Vec::new(),
+                            }
                         }
                     }
                 } else {
                     error!("Recorder not available");
-                    Vec::new()
+                    RecordedAudio {
+                        microphone: Vec::new(),
+                        system: Vec::new(),
+                    }
                 };
 
                 *self.is_recording.lock().unwrap() = false;
@@ -1044,12 +1368,12 @@ impl AudioRecordingManager {
                 }
 
                 // Pad if very short
-                let s_len = samples.len();
+                let s_len = samples.microphone.len();
                 // debug!("Got {} samples", s_len);
                 if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
-                    let mut padded = samples;
-                    padded.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
-                    Some(padded)
+                    let mut samples = samples;
+                    samples.microphone.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
+                    Some(samples)
                 } else {
                     Some(samples)
                 }

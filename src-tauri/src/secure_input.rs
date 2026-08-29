@@ -20,7 +20,7 @@
 
 use serde::Serialize;
 use specta::Type;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Type)]
 pub struct SecureInputStatus {
@@ -121,12 +121,16 @@ pub fn tray_warning_active(app: &AppHandle) -> bool {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;
+    // Emitter lives here, not at module scope: the only .emit() call is in this
+    // macOS-only module, so a top-level import is an unused-import warning on
+    // every other platform.
     use crate::settings::{self, KeyboardImplementation, ShortcutBinding};
     use log::{debug, error, info, warn};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
+    use tauri::Emitter;
 
     /// How often the monitor thread polls.
     const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -512,6 +516,23 @@ mod imp {
                     continue;
                 }
                 if id == "transcribe_with_post_process" && !settings.post_process_enabled {
+                    continue;
+                }
+                if id == "dictate" && !settings.dictation.enabled {
+                    continue;
+                }
+                if id == "dictate_with_post_process"
+                    && !(settings.dictation.enabled && settings.dictation.post_process_enabled)
+                {
+                    continue;
+                }
+                if id == "assisted_notes" && !settings.assisted_notes.enabled {
+                    continue;
+                }
+                if id == "assisted_notes_with_post_process"
+                    && !(settings.assisted_notes.enabled
+                        && settings.assisted_notes.post_process_enabled)
+                {
                     continue;
                 }
 

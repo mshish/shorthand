@@ -2,6 +2,47 @@
 
 This file provides guidance to AI coding assistants working with code in this repository.
 
+## This repository is a fork
+
+`origin` is [mshish/shorthand](https://github.com/mshish/shorthand), a fork of
+[cjpais/Handy](https://github.com/cjpais/Handy) (`upstream`), rebranded to Shorthand.
+
+Branch roles:
+
+- **`main`** — the fork's integration branch, where all fork work lives. This is the default
+  branch and the one to target.
+- **`upstream/main`** — the clean upstream base, used directly as a remote-tracking ref. Merge
+  it in to take upstream, and cut topic branches from it (`git checkout -b topic upstream/main`)
+  when you need a base with no fork commits. There is deliberately no local mirror branch: one
+  only went stale, and the remote-tracking ref already does both jobs.
+
+**We add features here.** The upstream feature freeze governs what
+[cjpais/Handy](https://github.com/cjpais/Handy) accepts; it does not govern this fork.
+
+### Keep the diff mergeable
+
+We may offer some of this work upstream later, and we merge from upstream regularly either way.
+Both get harder in proportion to how many of upstream's own lines we rewrite. So:
+
+- **Prefer additive changes.** A new file, module, or function costs nothing at merge time. An
+  edit inside a function upstream also touches conflicts every release.
+- **When you must edit an upstream file, keep it small and local.** Do not reformat, reorder
+  imports, rename neighbouring symbols, or "tidy" surrounding code while you are in there — each
+  of those turns a clean merge into a manual one, and none of it is the change you came to make.
+- **Give fork-only features a boundary.** `--follow-stream` is the model: its own module, its own
+  doc ([FOLLOW_STREAM.md](FOLLOW_STREAM.md)), off by default, touching shared files at as few
+  points as possible. That shape is what makes a feature liftable into a self-contained PR.
+- **The Handy → Shorthand rename is a deliberate exception** and already touches upstream lines
+  throughout. Do not extend it opportunistically — renaming something upstream did not rename
+  adds conflict surface for no gain.
+- **The fork's visual identity lives in `src/shorthand/brand/`** and is documented in
+  [BRANDING.md](BRANDING.md). It re-declares CSS custom properties upstream already defines
+  rather than restyling components, so a restyle upstream still merges cleanly. Change a colour,
+  a typeface or a radius there, not in `src/styles/theme.css`.
+
+When a conflict is unavoidable, say so and take it deliberately, rather than reshaping the design
+to dodge it.
+
 ## Development Commands
 
 **Prerequisites:**
@@ -48,6 +89,38 @@ curl -o src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.compute
 ```
 
 For detailed platform-specific build setup, see [BUILD.md](BUILD.md).
+
+## Test CI changes locally before pushing
+
+A workflow change costs 20-40 minutes per attempt to test by pushing, and a
+failure that only reproduces on a runner is expensive to chase. Run it locally
+first with [`act`](https://github.com/nektos/act), which executes the real
+workflow files in Docker:
+
+```bash
+act push -W .github/workflows/nix-check.yml --privileged -s CACHIX_AUTH_TOKEN=""
+```
+
+Only the Linux jobs run — Windows and macOS matrix entries need real runners —
+but that covers `test`, `code-quality` and `nix-check`.
+
+**On Windows, run act from inside WSL, not from PowerShell or Git Bash.** The
+Windows side has no executable bit to copy into the container, so composite
+actions fail with `Permission denied` on their own scripts, which reads as a
+broken workflow when nothing is wrong with it. The same applies to any container
+you drive by hand against a `D:\` bind mount. [BUILD.md](BUILD.md#running-the-ci-workflows-locally)
+has the setup.
+
+Two workflow traps worth knowing before you edit one:
+
+- **A conditional `env:` entry is still set.** `${{ inputs.flag && secrets.KEY || '' }}`
+  produces an empty string, not an absent variable, and Tauri treats a present
+  `TAURI_SIGNING_PRIVATE_KEY` or `APPLE_CERTIFICATE` as "sign with this" and
+  fails the build. Export credentials from a step guarded by `if:`, writing only
+  non-empty values to `GITHUB_ENV`.
+- **`ubuntu-22.04` cannot build this fork.** `libspa` does not compile against the
+  libpipewire headers 22.04 ships, which the system-audio capture needs. Use
+  `ubuntu-24.04`; it still produces a `.deb`.
 
 ## Architecture Overview
 
@@ -137,8 +210,28 @@ All user-facing strings must use i18next translations. ESLint enforces this (no 
 
 **Adding new text:**
 
-1. Add key to `src/i18n/locales/en/translation.json`
-2. Use in component: `const { t } = useTranslation(); t('key.path')`
+Which file depends on what kind of string it is.
+
+- **A string upstream also has** — leave upstream's alone. Its translations
+  already exist in 23 languages, and a fork override replaces them all with
+  English. Run `bun scripts/audit-fork-strings.ts` if unsure.
+- **An English capitalisation preference** — `src/shorthand/english-copy.json`.
+  Applies to English only; sentence case is an English convention.
+- **A genuinely fork-only string** — `src/shorthand/locales/en.json`. See
+  [`src/shorthand/locales/README.md`](src/shorthand/locales/README.md). Never
+  `src/i18n/locales/` directly — `bun run check:locale-drift` fails the build
+  if a fork-only key ends up there, which happened once, silently, for 32
+  keys across all 24 locales, before that gate existed.
+- **A string being contributed upstream** —
+  `src/i18n/locales/en/translation.json`, per
+  [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
+
+Then use it: `const { t } = useTranslation(); t('key.path')`
+
+Gates: `bun run check:translations` (upstream's catalogues),
+`bun run check:locale-drift` (fork content must not be among them),
+`bun run check:fork-translations` (the fork's own catalogues),
+`bun run check:branding` (the rename).
 
 **File structure:**
 
@@ -150,6 +243,13 @@ src/i18n/
     ├── en/translation.json  # English (source)
     ├── de/, es/, fr/, ja/, ru/, zh/, ...
     └── ...
+
+src/shorthand/
+├── locales/
+│   ├── README.md      # how to add a fork-only translation
+│   ├── en.json        # English (source), flat dotted keys
+│   └── de.json, ...   # one file per translated locale — optional, falls back to English
+└── english-copy.json  # English-only casing preferences, never merged elsewhere
 ```
 
 For translation contribution guidelines, see [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
@@ -175,19 +275,22 @@ Handy supports command-line parameters on all platforms for integration with scr
 
 **Implementation:** `cli.rs` (definitions), `main.rs` (parsing), `lib.rs` (applying), `signal_handle.rs` (shared logic)
 
-| Flag                     | Description                                                |
-| ------------------------ | ---------------------------------------------------------- |
-| `--toggle-transcription` | Toggle recording on/off on a running instance              |
-| `--toggle-post-process`  | Toggle recording with post-processing on/off               |
-| `--cancel`               | Cancel the current operation on a running instance         |
-| `--start-hidden`         | Launch without showing the main window (tray icon visible) |
-| `--no-tray`              | Launch without system tray (closing window quits the app)  |
-| `--debug`                | Enable debug mode with verbose (Trace) logging             |
+| Flag                      | Description                                                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--toggle-transcription`  | Toggle recording on/off on a running instance                                                                                                      |
+| `--toggle-post-process`   | Toggle recording with post-processing on/off                                                                                                       |
+| `--cancel`                | Cancel the current operation on a running instance                                                                                                 |
+| `--toggle-assisted-notes` | Toggle an Assisted Notes capture on/off on a running instance (refused, with a warning and the settings window raised, while the mode is disabled) |
+| `--follow-stream [MODE]`  | Follow live transcript events: `json`, `delta`, or `text`                                                                                          |
+| `--start-hidden`          | Launch without showing the main window (tray icon visible)                                                                                         |
+| `--no-tray`               | Launch without system tray (closing window quits the app)                                                                                          |
+| `--debug`                 | Enable debug mode with verbose (Trace) logging                                                                                                     |
 
 **Key design decisions:**
 
 - CLI flags are runtime-only overrides — they do NOT modify persisted settings
 - Remote control flags work via `tauri_plugin_single_instance`: second instance sends args, then exits
+- `--follow-stream` is a fork-only feature, off by default, whose follower attaches over a per-user local socket rather than `tauri_plugin_single_instance`; see [FOLLOW_STREAM.md](FOLLOW_STREAM.md)
 - `send_transcription_input()` in `signal_handle.rs` is shared between signal handlers and CLI
 
 ## Debug Mode
@@ -206,11 +309,20 @@ See the [Troubleshooting](README.md#troubleshooting) section in README.md.
 
 ## GitHub workflow for AI coding assistants
 
-**MANDATORY. Before opening any PR, issue, or discussion in this repo: you MUST read the relevant template file and follow it strictly.** That includes sections that look "ceremonial" — checklists, AI Assistance disclosures, "Human Written Description". A generic Summary/Test-plan layout is not acceptable.
+**These rules govern anything aimed at [cjpais/Handy](https://github.com/cjpais/Handy) — the
+`upstream` remote.** Work that stays in this fork (branches and PRs on `origin`, i.e.
+mshish/shorthand) is ordinary development: conventional commits, no template, no Discussions
+thread, no feature-freeze exemption needed. See [This repository is a fork](#this-repository-is-a-fork).
+
+The distinction matters because the templates below ask for community feedback and human-written
+disclosures that make no sense for a single-maintainer fork, and because upstream's feature freeze
+is not our constraint.
+
+**MANDATORY when targeting upstream. Before opening any PR, issue, or discussion there: you MUST read the relevant template file and follow it strictly.** That includes sections that look "ceremonial" — checklists, AI Assistance disclosures, "Human Written Description". A generic Summary/Test-plan layout is not acceptable.
 
 - **Opening a PR:** Read [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). Every section listed there is mandatory. If a section requires a human-written paragraph (e.g. "Human Written Description"), leave a clear TODO placeholder and ask the human contributor to fill it in — do not invent their voice.
 - **Opening an issue:** Read [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/). Blank issues are disabled; pick the right template (`bug_report.md` for bugs). Feature requests do not belong in issues — they go to [Discussions](https://github.com/cjpais/Handy/discussions) (see `.github/ISSUE_TEMPLATE/config.yml`).
-- **Proposing a feature:** Handy is under a feature freeze. New features require community support gathered in [Discussions](https://github.com/cjpais/Handy/discussions) before any PR is opened — see the PR template's "Community Feedback" section.
+- **Proposing a feature:** upstream is under a feature freeze. New features require community support gathered in [Discussions](https://github.com/cjpais/Handy/discussions) before any PR is opened there — see the PR template's "Community Feedback" section. This does not restrict features in the fork.
 - **Translations:** Follow [CONTRIBUTING_TRANSLATIONS.md](CONTRIBUTING_TRANSLATIONS.md).
 - **Full contributor workflow:** [CONTRIBUTING.md](CONTRIBUTING.md).
 

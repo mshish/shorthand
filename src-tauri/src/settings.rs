@@ -144,11 +144,18 @@ pub enum ModelUnloadTimeout {
     Sec15, // Debug mode only
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteMethod {
     CtrlV,
     Direct,
+    // This fork delivers transcripts to follower processes over a local
+    // socket rather than to the focused window, so keystroke injection
+    // (and the clipboard/script side effects the other variants carry)
+    // is off by default on every platform. The other variants stay
+    // reachable through the escape hatch for anyone who still wants
+    // Handy's original paste-into-focused-window behavior.
+    #[default]
     None,
     ShiftInsert,
     CtrlShiftV,
@@ -195,16 +202,6 @@ impl Default for KeyboardImplementation {
         return KeyboardImplementation::Tauri;
         #[cfg(not(target_os = "linux"))]
         return KeyboardImplementation::HandyKeys;
-    }
-}
-
-impl Default for PasteMethod {
-    fn default() -> Self {
-        // Default to CtrlV for macOS and Windows, Direct for Linux
-        #[cfg(target_os = "linux")]
-        return PasteMethod::Direct;
-        #[cfg(not(target_os = "linux"))]
-        return PasteMethod::CtrlV;
     }
 }
 
@@ -311,7 +308,7 @@ pub enum VadBackend {
 
 #[derive(Clone, Serialize, Deserialize, Type)]
 #[serde(transparent)]
-pub(crate) struct SecretMap(HashMap<String, String>);
+pub struct SecretMap(HashMap<String, String>);
 
 impl fmt::Debug for SecretMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -393,6 +390,12 @@ pub struct AppSettings {
     pub clamshell_microphone: Option<String>,
     #[serde(default)]
     pub selected_output_device: Option<String>,
+    #[serde(default)]
+    pub system_audio_enabled: bool,
+    #[serde(default)]
+    pub follow_stream_enabled: bool,
+    #[serde(default)]
+    pub system_audio_device: Option<String>,
     #[serde(default = "default_translate_to_english")]
     pub translate_to_english: bool,
     #[serde(default = "default_selected_language")]
@@ -413,6 +416,14 @@ pub struct AppSettings {
     pub history_limit: usize,
     #[serde(default = "default_recording_retention_period")]
     pub recording_retention_period: RecordingRetentionPeriod,
+    /// Whether the WAV of each transcription is written to the recordings
+    /// directory. Off by default: Shorthand treats stored audio as opt-in.
+    #[serde(default)]
+    pub save_recordings: bool,
+    /// Whether the transcript text of each transcription is stored in
+    /// history.db. Off by default, for the same reason.
+    #[serde(default)]
+    pub save_transcripts: bool,
     #[serde(default)]
     pub paste_method: PasteMethod,
     #[serde(default)]
@@ -492,6 +503,18 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    #[serde(default)]
+    pub show_all_settings: bool,
+    /// Dictation-mode settings, applied over the equivalent fields above when
+    /// the capture in flight is `shorthand::mode::Mode::Dictation`. See
+    /// `shorthand::dictation::apply_mode`.
+    #[serde(default)]
+    pub dictation: crate::shorthand::dictation::DictationSettings,
+    /// Assisted-notes settings, applied over the equivalent fields above when
+    /// the capture in flight is `shorthand::mode::Mode::AssistedNotes`. See
+    /// `shorthand::dictation::apply_mode`.
+    #[serde(default)]
+    pub assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
 }
 
 fn default_model() -> String {
@@ -505,7 +528,13 @@ fn default_settings_schema_version() -> u32 {
 }
 
 fn default_push_to_talk() -> bool {
-    true
+    // Meetings only. Dictation keeps its own `true` in DictationSettings.
+    //
+    // A meeting runs for an hour: holding a key for the duration is not a
+    // thing anyone does, so meetings toggle. Dictation is seconds long and is
+    // held. The two modes genuinely want opposite answers, which is why this
+    // field is per-mode at all.
+    false
 }
 
 fn default_always_on_microphone() -> bool {
@@ -547,12 +576,20 @@ fn default_overlay_position() -> OverlayPosition {
 }
 
 fn default_overlay_style() -> OverlayStyle {
-    // Linux hides the overlay by default; other platforms show the live overlay.
-    // Position is independent and only selects top vs. bottom placement.
+    // Meetings only; dictation keeps its own Minimal in DictationSettings.
+    //
+    // Minimal rather than Live. The live panel is a genuinely useful thing to
+    // be able to turn on, but as a default it puts a running transcript on
+    // screen for the entire length of a meeting, over whatever the user is
+    // actually working in. The compact pill says "recording" and gets out of
+    // the way, which is what a default should do.
+    //
+    // Linux still hides it entirely. Position is independent and only selects
+    // top versus bottom placement.
     #[cfg(target_os = "linux")]
     return OverlayStyle::None;
     #[cfg(not(target_os = "linux"))]
-    return OverlayStyle::Live;
+    return OverlayStyle::Minimal;
 }
 
 fn default_vad_enabled() -> bool {
@@ -621,7 +658,7 @@ fn default_show_tray_icon() -> bool {
     true
 }
 
-fn default_post_process_provider_id() -> String {
+pub(crate) fn default_post_process_provider_id() -> String {
     "openai".to_string()
 }
 
@@ -834,12 +871,15 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
+    // Dictation mode (below) takes Handy's original combos, so meeting mode
+    // moves off them — that lets this fork and a plain Handy install run
+    // side by side during a transition.
     #[cfg(target_os = "windows")]
-    let default_shortcut = "ctrl+space";
+    let default_shortcut = "ctrl+alt+space";
     #[cfg(target_os = "macos")]
-    let default_shortcut = "option+space";
+    let default_shortcut = "ctrl+shift+space";
     #[cfg(target_os = "linux")]
-    let default_shortcut = "ctrl+space";
+    let default_shortcut = "ctrl+alt+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let default_shortcut = "alt+space";
 
@@ -855,11 +895,11 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
     #[cfg(target_os = "windows")]
-    let default_post_process_shortcut = "ctrl+shift+space";
+    let default_post_process_shortcut = "ctrl+alt+shift+space";
     #[cfg(target_os = "macos")]
-    let default_post_process_shortcut = "option+shift+space";
+    let default_post_process_shortcut = "ctrl+shift+option+space";
     #[cfg(target_os = "linux")]
-    let default_post_process_shortcut = "ctrl+shift+space";
+    let default_post_process_shortcut = "ctrl+alt+shift+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let default_post_process_shortcut = "alt+shift+space";
 
@@ -885,6 +925,92 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
 
+    // Dictation takes the combos meeting mode used before this fork added
+    // dictation, so muscle memory from plain Handy transfers.
+    #[cfg(target_os = "windows")]
+    let default_dictate_shortcut = "ctrl+space";
+    #[cfg(target_os = "macos")]
+    let default_dictate_shortcut = "option+space";
+    #[cfg(target_os = "linux")]
+    let default_dictate_shortcut = "ctrl+space";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_dictate_shortcut = "ctrl+alt+space";
+
+    bindings.insert(
+        "dictate".to_string(),
+        ShortcutBinding {
+            id: "dictate".to_string(),
+            name: "Dictate".to_string(),
+            description: "Converts your speech into text and pastes it into the focused window."
+                .to_string(),
+            default_binding: default_dictate_shortcut.to_string(),
+            current_binding: default_dictate_shortcut.to_string(),
+        },
+    );
+    #[cfg(target_os = "windows")]
+    let default_dictate_post_process_shortcut = "ctrl+shift+space";
+    #[cfg(target_os = "macos")]
+    let default_dictate_post_process_shortcut = "option+shift+space";
+    #[cfg(target_os = "linux")]
+    let default_dictate_post_process_shortcut = "ctrl+shift+space";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_dictate_post_process_shortcut = "ctrl+alt+shift+space";
+
+    bindings.insert(
+        "dictate_with_post_process".to_string(),
+        ShortcutBinding {
+            id: "dictate_with_post_process".to_string(),
+            name: "Dictate with Post-Processing".to_string(),
+            description:
+                "Converts your speech into text, applies AI post-processing, and pastes it into the focused window."
+                    .to_string(),
+            default_binding: default_dictate_post_process_shortcut.to_string(),
+            current_binding: default_dictate_post_process_shortcut.to_string(),
+        },
+    );
+
+    // Assisted notes is "meeting, but solo": `space` is exhausted (every
+    // ctrl/alt/shift permutation of it already belongs to the four bindings
+    // above or the OS), so it takes the first free mnemonic letter instead.
+    #[cfg(target_os = "windows")]
+    let default_assisted_notes_shortcut = "ctrl+alt+n";
+    #[cfg(target_os = "macos")]
+    let default_assisted_notes_shortcut = "ctrl+option+n";
+    #[cfg(target_os = "linux")]
+    let default_assisted_notes_shortcut = "ctrl+alt+n";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_assisted_notes_shortcut = "alt+n";
+
+    bindings.insert(
+        "assisted_notes".to_string(),
+        ShortcutBinding {
+            id: "assisted_notes".to_string(),
+            name: "Assisted Notes".to_string(),
+            description: "Converts your speech into text and streams it to any process following the live transcript, without capturing system audio.".to_string(),
+            default_binding: default_assisted_notes_shortcut.to_string(),
+            current_binding: default_assisted_notes_shortcut.to_string(),
+        },
+    );
+    #[cfg(target_os = "windows")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+alt+shift+n";
+    #[cfg(target_os = "macos")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+shift+option+n";
+    #[cfg(target_os = "linux")]
+    let default_assisted_notes_post_process_shortcut = "ctrl+alt+shift+n";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_assisted_notes_post_process_shortcut = "alt+shift+n";
+
+    bindings.insert(
+        "assisted_notes_with_post_process".to_string(),
+        ShortcutBinding {
+            id: "assisted_notes_with_post_process".to_string(),
+            name: "Assisted Notes with Post-Processing".to_string(),
+            description: "Converts your speech into text and streams it to any process following the live transcript, without capturing system audio, and applies AI post-processing.".to_string(),
+            default_binding: default_assisted_notes_post_process_shortcut.to_string(),
+            current_binding: default_assisted_notes_post_process_shortcut.to_string(),
+        },
+    );
+
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
@@ -904,6 +1030,12 @@ pub fn get_default_settings() -> AppSettings {
         selected_channel: None,
         clamshell_microphone: None,
         selected_output_device: None,
+        system_audio_enabled: false,
+        // Meetings default this ON: streaming a meeting transcript to a
+        // follower (the Obsidian plugin) is the reason this fork exists.
+        // Dictation defaults it off in DictationSettings.
+        follow_stream_enabled: true,
+        system_audio_device: None,
         translate_to_english: false,
         selected_language: "auto".to_string(),
         overlay_position: default_overlay_position(),
@@ -914,6 +1046,8 @@ pub fn get_default_settings() -> AppSettings {
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
+        save_recordings: false,
+        save_transcripts: false,
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),
@@ -947,6 +1081,9 @@ pub fn get_default_settings() -> AppSettings {
         vad_enabled: default_vad_enabled(),
         vad_backend: VadBackend::default(),
         overlay_style: default_overlay_style(),
+        show_all_settings: false,
+        dictation: crate::shorthand::dictation::DictationSettings::default(),
+        assisted_notes: Default::default(),
     }
 }
 
@@ -1117,6 +1254,13 @@ fn apply_settings_migrations(
         // transcribe.cpp 0.2 replaced integer registry indices with opaque
         // process-local handles. Clear every old index once.
         settings.transcribe_gpu_device = default_transcribe_gpu_device();
+        // This fork delivers live transcripts to follower processes over a
+        // local socket instead of typing them into the focused window. Reset
+        // an explicit legacy paste setting once so existing profiles receive
+        // the fork's `PasteMethod::None` default as well as fresh installs.
+        if !matches!(settings.paste_method, PasteMethod::None) {
+            settings.paste_method = PasteMethod::None;
+        }
         settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
         updated = true;
     }
@@ -1197,25 +1341,33 @@ mod tests {
     fn empty_store_parses_with_defaults() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
             .expect("all AppSettings fields need serde defaults");
-        assert!(settings.push_to_talk);
+        // Meetings toggle rather than hold; dictation is the one that holds.
+        assert!(!settings.push_to_talk);
+        assert!(settings.dictation.push_to_talk);
         assert!(!settings.audio_feedback);
         assert!(settings.filler_word_removal_enabled);
         // Bindings default to empty; the load path merges the real defaults in.
         assert!(settings.bindings.is_empty());
+        assert!(!settings.save_recordings);
+        assert!(!settings.save_transcripts);
+        assert!(settings.assisted_notes.follow_stream_enabled);
+        assert!(settings.assisted_notes.save_recordings);
+        assert!(settings.assisted_notes.save_transcripts);
     }
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to
     /// disk. This pins backwards compatibility: it must always parse strictly
     /// (no salvage). Schema migrations may then rewrite fields whose native
-    /// meaning changed.
+    /// meaning changed: legacy paste delivery and transcribe.cpp's device
+    /// identity both changed in schema version 2.
     ///
     /// If a schema change breaks this test, do NOT just update the fixture —
     /// it stands in for the stores on users' machines. Add a
     /// `#[serde(alias)]`/`#[serde(other)]` or a one-time migration in
     /// `apply_settings_migrations` so old values keep loading, and only extend
-    /// the fixture alongside that.
+    /// the fixture (and its migration-blast-radius assertion) alongside that.
     #[test]
-    fn frozen_v0_9_store_parses_strictly_then_migrates_device_index() {
+    fn frozen_v0_9_store_parses_strictly_then_migrates_schema_two_fields() {
         // Note "log_level": 2 — the legacy numeric format, kept deliberately.
         let stored: serde_json::Value = serde_json::from_str(
             r##"{
@@ -1319,11 +1471,13 @@ mod tests {
         assert_eq!(settings.log_level, LogLevel::Debug);
         assert_eq!(settings.sound_theme, SoundTheme::Pop);
         assert!(settings.filler_word_removal_enabled);
+        assert!(matches!(settings.paste_method, PasteMethod::CtrlV));
         assert_eq!(settings.vad_backend, VadBackend::Silero);
 
-        // The 0.1 integer device index is cleared once for transcribe.cpp 0.2.
-        // Without an exact device, the retired generic GPU choice becomes Auto.
+        // The 0.1 integer device index is cleared once for transcribe.cpp 0.2;
+        // the fork also moves legacy profiles to no automatic paste delivery.
         assert!(apply_settings_migrations(&mut settings, &stored));
+        assert!(matches!(settings.paste_method, PasteMethod::None));
         assert_eq!(
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
@@ -1333,6 +1487,10 @@ mod tests {
             TranscribeAcceleratorSetting::Auto
         );
         assert_eq!(settings.transcribe_gpu_device, None);
+
+        // Schema migrations are one-time only.
+        let migrated_value = serde_json::to_value(&settings).unwrap();
+        assert!(!apply_settings_migrations(&mut settings, &migrated_value));
     }
 
     #[test]
@@ -1441,11 +1599,117 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_settings_disable_saving_recordings_and_transcripts() {
+        let settings = get_default_settings();
+        assert!(!settings.save_recordings);
+        assert!(!settings.save_transcripts);
+    }
+
+    /// The seven default bindings must not collide with each other on this
+    /// platform. `cfg` means this only covers the host platform; the other
+    /// two are a review-time reading of the `cfg` branches in
+    /// `get_default_settings`, not a test.
+    #[test]
+    fn default_bindings_have_distinct_shortcuts_on_this_platform() {
+        let bindings = get_default_settings().bindings;
+        let ids = [
+            "transcribe",
+            "transcribe_with_post_process",
+            "dictate",
+            "dictate_with_post_process",
+            "assisted_notes",
+            "assisted_notes_with_post_process",
+            "cancel",
+        ];
+        let mut shortcuts: Vec<&str> = ids
+            .iter()
+            .map(|id| {
+                bindings
+                    .get(*id)
+                    .unwrap_or_else(|| panic!("missing default binding '{id}'"))
+                    .current_binding
+                    .as_str()
+            })
+            .collect();
+        let before_dedup = shortcuts.len();
+        shortcuts.sort_unstable();
+        shortcuts.dedup();
+        assert_eq!(
+            shortcuts.len(),
+            before_dedup,
+            "default shortcuts must be pairwise distinct on this platform"
+        );
+    }
+
+    /// Both settings are opt-in: a store that explicitly enabled them must
+    /// keep them enabled through migration, not get silently reset to the
+    /// off-by-default value.
+    #[test]
+    fn migration_preserves_explicitly_enabled_saving_recordings_and_transcripts() {
+        let mut stored = default_settings_json();
+        let map = stored.as_object_mut().unwrap();
+        map.insert("save_recordings".into(), serde_json::json!(true));
+        map.insert("save_transcripts".into(), serde_json::json!(true));
+
+        let mut settings: AppSettings = serde_json::from_value(stored.clone())
+            .expect("a store with both fields explicitly true must still parse");
+        assert!(settings.save_recordings);
+        assert!(settings.save_transcripts);
+
+        apply_settings_migrations(&mut settings, &stored);
+
+        assert!(settings.save_recordings);
+        assert!(settings.save_transcripts);
+    }
+
+    /// Minimal, not Live. The live panel is worth being able to turn on, but
+    /// as a default it puts a running transcript over whatever the user is
+    /// working in for the whole length of a meeting.
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn default_overlay_style_is_live_when_overlay_defaults_on() {
+    fn default_overlay_style_is_minimal() {
         let settings = get_default_settings();
-        assert_eq!(settings.overlay_style, OverlayStyle::Live);
+        assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
+        assert_eq!(settings.dictation.overlay_style, OverlayStyle::Minimal);
+        assert_eq!(settings.assisted_notes.overlay_style, OverlayStyle::Minimal);
+    }
+
+    /// The four settings that became per-mode, asserted as a pair so a future
+    /// edit cannot quietly collapse them back onto one shared value.
+    #[test]
+    fn per_mode_defaults_differ_where_the_modes_differ() {
+        let settings = get_default_settings();
+
+        // Streaming a meeting to a follower is the reason this fork exists.
+        // Dictated text has already arrived where it was wanted.
+        assert!(settings.follow_stream_enabled);
+        assert!(!settings.dictation.follow_stream_enabled);
+
+        // A meeting may want the other participants; dictation does not want
+        // whatever happens to be playing.
+        assert!(!settings.system_audio_enabled);
+        assert!(!settings.dictation.system_audio_enabled);
+
+        // Same provider until someone chooses otherwise, and no per-mode model
+        // override, so behaviour is unchanged for anyone who never sets one.
+        assert_eq!(
+            settings.dictation.post_process_provider_id,
+            settings.post_process_provider_id
+        );
+        assert_eq!(settings.dictation.post_process_model, None);
+
+        // A follower filling the note is the entire reason assisted notes
+        // exists, so it defaults on like meeting, unlike dictation.
+        assert!(settings.assisted_notes.follow_stream_enabled);
+        // A note-taking session runs as long as the thinking does; like
+        // meeting, and unlike dictation, nobody holds a key for that.
+        assert!(!settings.assisted_notes.push_to_talk);
+        assert_eq!(
+            settings.assisted_notes.post_process_provider_id,
+            settings.post_process_provider_id
+        );
+        assert_eq!(settings.assisted_notes.post_process_model, None);
     }
 
     #[test]
@@ -1568,6 +1832,48 @@ mod tests {
             settings.transcribe_gpu_device.as_deref(),
             Some("[\"vulkan\",\"id\",\"0000:01:00.0\"]")
         );
+    }
+
+    #[test]
+    fn paste_method_migration_resets_legacy_explicit_selection_to_none() {
+        let mut settings = get_default_settings();
+        settings.paste_method = PasteMethod::CtrlV;
+
+        // An old profile that had already run Handy before this fork
+        // changed `PasteMethod`'s default: `paste_method` is explicitly on
+        // disk as "ctrl_v" at the pre-migration schema version.
+        let raw = serde_json::json!({
+            "settings_schema_version": 1,
+            "paste_method": "ctrl_v"
+        });
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert!(matches!(settings.paste_method, PasteMethod::None));
+        assert_eq!(
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn paste_method_migration_leaves_current_schema_selection_untouched() {
+        let mut settings = get_default_settings();
+        settings.paste_method = PasteMethod::CtrlV;
+
+        // A profile already at the current schema version has, by
+        // definition, already been through this one-time reset (or was
+        // created after it existed). A deliberate selection made through
+        // the escape hatch must survive being read again.
+        let raw = serde_json::json!({
+            "settings_schema_version": CURRENT_SETTINGS_SCHEMA_VERSION,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+            "paste_method": "ctrl_v"
+        });
+
+        assert!(!apply_settings_migrations(&mut settings, &raw));
+        assert!(matches!(settings.paste_method, PasteMethod::CtrlV));
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { commands, events } from "@/bindings";
 import type {
   StreamPhase,
   StreamPhaseEvent,
+  StreamSource,
   StreamTextEvent,
   StreamWorkKind,
 } from "@/bindings";
@@ -18,6 +19,12 @@ type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
 const WAVE_BARS = 9;
 
+const emptyStreamText = (source: StreamSource): StreamTextEvent => ({
+  source,
+  committed: "",
+  tentative: "",
+});
+
 const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
@@ -27,10 +34,12 @@ const RecordingOverlay: React.FC = () => {
   // actual microphone sample chunk.
   const [captureReady, setCaptureReady] = useState(false);
   const [levels, setLevels] = useState<number[]>(Array(WAVE_BARS).fill(0));
-  const [streamText, setStreamText] = useState<StreamTextEvent>({
-    committed: "",
-    tentative: "",
-  });
+  const [micStreamText, setMicStreamText] = useState<StreamTextEvent>(() =>
+    emptyStreamText("mic"),
+  );
+  const [systemStreamText, setSystemStreamText] = useState<StreamTextEvent>(
+    () => emptyStreamText("system"),
+  );
   const [phase, setPhase] = useState<StreamPhase>("listening");
   const [workKind, setWorkKind] = useState<StreamWorkKind>("transcribing");
   const [elapsed, setElapsed] = useState(0);
@@ -63,7 +72,8 @@ const RecordingOverlay: React.FC = () => {
           setCaptureReady(false);
           smoothedLevelsRef.current = Array(16).fill(0);
           setLevels(Array(WAVE_BARS).fill(0));
-          setStreamText({ committed: "", tentative: "" });
+          setMicStreamText(emptyStreamText("mic"));
+          setSystemStreamText(emptyStreamText("system"));
         }
 
         await syncLanguageFromSettings();
@@ -112,11 +122,16 @@ const RecordingOverlay: React.FC = () => {
       });
 
       const unlistenStream = await events.streamTextEvent.listen((event) => {
-        setStreamText(event.payload);
+        if (event.payload.source === "mic") {
+          setMicStreamText(event.payload);
+        } else {
+          setSystemStreamText(event.payload);
+        }
       });
 
       const unlistenPhase = await events.streamPhaseEvent.listen((event) => {
         const payload: StreamPhaseEvent = event.payload;
+        if (payload.source !== "mic") return;
         setPhase(payload.phase);
         if (payload.kind) setWorkKind(payload.kind);
       });
@@ -149,7 +164,7 @@ const RecordingOverlay: React.FC = () => {
     // Fade the top edge only once text actually overflows the cap.
     setOverflowing(el.scrollHeight > el.clientHeight + 1);
     if (pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [streamText]);
+  }, [micStreamText, systemStreamText]);
 
   // Each fresh streaming session starts pinned to the bottom, fade cleared.
   useEffect(() => {
@@ -229,8 +244,11 @@ const RecordingOverlay: React.FC = () => {
 
   // ---- Live overlay: a pill that sculpts open into a panel ----
   if (state === "streaming") {
-    const hasText =
-      streamText.committed.length > 0 || streamText.tentative.length > 0;
+    const laneHasText = (text: StreamTextEvent) =>
+      text.committed.length > 0 || text.tentative.length > 0;
+    const micHasText = laneHasText(micStreamText);
+    const systemHasText = laneHasText(systemStreamText);
+    const hasText = micHasText || systemHasText;
     const working = phase === "working";
     // Keep the panel open whenever there's text — even while finalizing — so the
     // transcript stays put under a working spinner instead of collapsing and
@@ -250,19 +268,59 @@ const RecordingOverlay: React.FC = () => {
           <div className="stext">
             <div className="stext-clip">
               <div
-                className={`stext-cap ${overflowing ? "overflowing" : ""}`}
+                className={`stext-cap ${overflowing ? "overflowing" : ""} ${
+                  systemHasText ? "dual-lane" : ""
+                }`}
                 ref={capRef}
                 onScroll={handleStreamScroll}
               >
-                <p>
-                  <span className="committed">
-                    {streamText.committed ? streamText.committed + " " : ""}
-                  </span>
-                  <span className="tentative">{streamText.tentative}</span>
-                  {/* Drop the blinking caret once finalizing — it's no longer
-                      capturing, and a static spinner conveys the work. */}
-                  {!working && <span className="scaret" />}
-                </p>
+                {!systemHasText && (
+                  <p>
+                    <span className="committed">
+                      {micStreamText.committed
+                        ? micStreamText.committed + " "
+                        : ""}
+                    </span>
+                    <span className="tentative">{micStreamText.tentative}</span>
+                    {!working && <span className="scaret" />}
+                  </p>
+                )}
+                {systemHasText && micHasText && (
+                  <div className="stream-lane mic-lane">
+                    <span className="stream-lane-label">
+                      {t("transcript.speakerMic")}
+                    </span>
+                    <p>
+                      <span className="committed">
+                        {micStreamText.committed
+                          ? micStreamText.committed + " "
+                          : ""}
+                      </span>
+                      <span className="tentative">
+                        {micStreamText.tentative}
+                      </span>
+                      {!working && <span className="scaret" />}
+                    </p>
+                  </div>
+                )}
+                {systemHasText && (
+                  <div className="stream-lane system-lane">
+                    <span className="stream-lane-label">
+                      {t("transcript.speakerSystem")}
+                    </span>
+                    <p>
+                      <span className="committed">
+                        {systemStreamText.committed
+                          ? systemStreamText.committed + " "
+                          : ""}
+                      </span>
+                      <span className="tentative">
+                        {systemStreamText.tentative}
+                      </span>
+                      {!working && <span className="scaret" />}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>

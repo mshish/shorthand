@@ -27,6 +27,23 @@ pub fn init_shortcuts(app: &AppHandle) {
         if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
             continue;
         }
+        if id == "dictate" && !user_settings.dictation.enabled {
+            continue;
+        }
+        if id == "dictate_with_post_process"
+            && !(user_settings.dictation.enabled && user_settings.dictation.post_process_enabled)
+        {
+            continue;
+        }
+        if id == "assisted_notes" && !user_settings.assisted_notes.enabled {
+            continue;
+        }
+        if id == "assisted_notes_with_post_process"
+            && !(user_settings.assisted_notes.enabled
+                && user_settings.assisted_notes.post_process_enabled)
+        {
+            continue;
+        }
         let binding = user_settings
             .bindings
             .get(&id)

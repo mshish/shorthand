@@ -29,6 +29,17 @@ on:
         type: boolean
         default: false
       sign-binaries:
+        # Platform code signing (Authenticode / Apple Developer ID). Off: this
+        # fork has no certificates, so installers are unsigned and SmartScreen
+        # warns once on first run.
+        required: false
+        type: boolean
+        default: false
+      sign-updates:
+        # Minisign signing of updater artifacts. Independent of sign-binaries:
+        # without it tauri-action emits no signatures and latest.json, so the
+        # in-app updater silently never offers anything. Free and self-managed,
+        # so it stays on even while code signing is off.
         required: false
         type: boolean
         default: false
@@ -107,6 +118,15 @@ jobs:
           # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
           targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      # cpal 0.18's CoreAudio ProcessTap path requires the macOS 14.6 SDK
+      # baseline that the app declares in tauri.conf.json. Bundle metadata does
+      # not control Rust/C compilation, so set the compiler deployment target
+      # explicitly for every native macOS build.
+      - name: Set macOS deployment target
+        if: contains(inputs.platform, 'macos')
+        shell: bash
+        run: echo "MACOSX_DEPLOYMENT_TARGET=14.6" >> "$GITHUB_ENV"
+
       - name: Rust cache
         # Release builds skip the cache (no-cache: true) so the artifact is
         # always compiled clean — no risk of a stale cached native lib being
@@ -121,7 +141,7 @@ jobs:
         if: contains(inputs.platform, 'ubuntu-24.04') && !contains(inputs.platform, 'arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev \
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -133,13 +153,13 @@ jobs:
         if: contains(inputs.platform, 'ubuntu-24.04-arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev xdg-utils
 
       - name: install dependencies (ubuntu 22.04)
         if: contains(inputs.platform, 'ubuntu-22.04') && !contains(inputs.platform, 'arm')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpipewire-0.3-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libgtk-layer-shell0 libgtk-layer-shell-dev
 
       - name: Verify gtk-layer-shell runtime dependency (Ubuntu)
         if: contains(inputs.platform, 'ubuntu')
@@ -511,22 +531,71 @@ jobs:
           chmod +x "$tools_dir/linuxdeploy-${arch}.AppImage"
           "$tools_dir/linuxdeploy-${arch}.AppImage" --appimage-extract-and-run --version
 
+      # Credentials are exported here rather than in the Tauri step's env: block,
+      # because an env: entry is always created -- `${{ inputs.sign-x &&
+      # secrets.KEY || '' }}` yields a variable that is set and empty, not
+      # absent. Tauri reads every one of these as "set means sign with this" and
+      # fails the whole build: an empty TAURI_SIGNING_PRIVATE_KEY dies on
+      # "Missing comment in secret key", an empty APPLE_CERTIFICATE dies in
+      # `security import`. Writing to GITHUB_ENV under an `if` is the only way to
+      # leave a variable genuinely unset.
+      #
+      # The heredoc form of GITHUB_ENV is used because a certificate or key
+      # secret may legitimately contain newlines.
+      - name: Enable code signing
+        if: inputs.sign-binaries
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          names="APPLE_ID APPLE_ID_PASSWORD APPLE_PASSWORD APPLE_TEAM_ID"
+          names="$names APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD"
+          names="$names APPLE_SIGNING_IDENTITY"
+          names="$names AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID"
+          for name in $names; do
+            value="${!name}"
+            # A credential with no value must stay absent, not become empty.
+            [ -n "$value" ] || continue
+            {
+              echo "$name<<__GH_ENV_EOF__"
+              echo "$value"
+              echo "__GH_ENV_EOF__"
+            } >> "$GITHUB_ENV"
+          done
+
+      - name: Enable updater signing
+        if: inputs.sign-updates
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "ERROR: sign-updates is on but TAURI_SIGNING_PRIVATE_KEY is empty." >&2
+            exit 1
+          fi
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<__GH_ENV_EOF__"
+            echo "$KEY"
+            echo "__GH_ENV_EOF__"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<__GH_ENV_EOF__"
+            echo "$KEY_PASSWORD"
+            echo "__GH_ENV_EOF__"
+          } >> "$GITHUB_ENV"
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_ID: ${{ inputs.sign-binaries && secrets.APPLE_ID || '' }}
-          APPLE_ID_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_ID_PASSWORD || '' }}
-          APPLE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ inputs.sign-binaries && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_CERTIFICATE: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '' }}
-          AZURE_CLIENT_ID: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_ID || '' }}
-          AZURE_CLIENT_SECRET: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_SECRET || '' }}
-          AZURE_TENANT_ID: ${{ inputs.sign-binaries && secrets.AZURE_TENANT_ID || '' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
           # The Vulkan loader and Wayland client library must come from the host
           # graphics stack. Bundling Ubuntu's copies ahead of the system libraries can
           # prevent a newer distro's Vulkan ICD or Mesa stack from loading.
@@ -586,10 +655,10 @@ jobs:
           echo "=== Frameworks contents ==="
           ls -la "$APP/Contents/Frameworks/" | grep onnx || true
           echo "=== Binary linked libs ==="
-          otool -L "$APP/Contents/MacOS/handy" | grep onnx || true
+          otool -L "$APP/Contents/MacOS/$(basename "$APP" .app)" | grep onnx || true
           echo "=== Checking all @rpath deps are satisfied ==="
           # Extract every @rpath lib the binary needs
-          otool -L "$APP/Contents/MacOS/handy" | grep '@rpath/' | awk '{print $1}' | while read dep; do
+          otool -L "$APP/Contents/MacOS/$(basename "$APP" .app)" | grep '@rpath/' | awk '{print $1}' | while read dep; do
             libname=$(basename "$dep")
             if [ ! -f "$APP/Contents/Frameworks/$libname" ]; then
               echo "MISSING: $libname not found in Frameworks/"
@@ -661,8 +730,8 @@ jobs:
             fi
             HANDY_NO_GTK_LAYER_SHELL=1 \
             LD_LIBRARY_PATH="${root}/usr/lib/Handy:${root}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-              xvfb-run -a "${root}/usr/bin/handy" --list-devices \
-                >/tmp/handy-package-smoke.log 2>&1
+              xvfb-run -a "${root}/usr/bin/shorthand" --list-devices \
+                >/tmp/shorthand-package-smoke.log 2>&1
             echo "${label} --list-devices smoke passed"
           }
 
@@ -671,7 +740,7 @@ jobs:
               echo "Auditing deb package: ${deb}"
               listing="$(mktemp)"
               dpkg-deb -c "$deb" > "$listing"
-              require_pattern "$listing" 'usr/bin/handy$' "handy binary"
+              require_pattern "$listing" 'usr/bin/shorthand$' "shorthand binary"
               require_pattern "$listing" 'usr/lib/Handy/libtranscribe\.so(\.[0-9]+)+$' "transcribe runtime library (SONAME)"
               require_pattern "$listing" 'usr/lib/Handy/libggml-cpu.*\.so' "ggml CPU backend module"
               if [[ "${{ inputs.platform }}" == *"ubuntu-22.04"* && "${{ inputs.target }}" == "x86_64-unknown-linux-gnu" ]]; then
@@ -701,7 +770,7 @@ jobs:
               echo "Auditing rpm package: ${rpm_pkg}"
               listing="$(mktemp)"
               rpm -qpl "$rpm_pkg" > "$listing"
-              require_pattern "$listing" '/usr/bin/handy$' "handy binary"
+              require_pattern "$listing" '/usr/bin/shorthand$' "shorthand binary"
               require_pattern "$listing" '/usr/lib/Handy/libtranscribe\.so(\.[0-9]+)+$' "transcribe runtime library (SONAME)"
               require_pattern "$listing" '/usr/lib/Handy/libggml-cpu.*\.so' "ggml CPU backend module"
               # Same /usr/lib pollution guard as the deb audit (issue #1639).
@@ -723,7 +792,7 @@ jobs:
               (
                 cd "$workdir"
                 ./Handy.AppImage --appimage-extract >/dev/null
-                require_path "squashfs-root/usr/bin/handy" "AppImage handy binary"
+                require_path "squashfs-root/usr/bin/shorthand" "AppImage shorthand binary"
                 # Gear Lever and other integration tools consume the root entry;
                 # appimagetool does not update the copy under usr/share/applications.
                 desktop_file="$(find squashfs-root -maxdepth 1 -type f -name '*.desktop' -print -quit)"
@@ -769,9 +838,9 @@ jobs:
                 # llvmpipe is intentionally not exposed as a compute device by
                 # ggml, but reaching this log proves the module loaded against a
                 # usable system Vulkan loader/ICD instead of failing silently.
-                if ! grep -q 'load_backend: loaded Vulkan backend' /tmp/handy-package-smoke.log; then
+                if ! grep -q 'load_backend: loaded Vulkan backend' /tmp/shorthand-package-smoke.log; then
                   echo "ERROR: AppImage could not initialize its Vulkan backend with a usable system ICD" >&2
-                  cat /tmp/handy-package-smoke.log >&2
+                  cat /tmp/shorthand-package-smoke.log >&2
                   exit 1
                 fi
               )
@@ -831,9 +900,9 @@ jobs:
           function Assert-PackageContents {
             param([string]$Root, [string]$Label)
 
-            $handy = Get-ChildItem $Root -Filter "handy.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $handy = Get-ChildItem $Root -Filter "shorthand.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $handy) {
-              throw "$Label package is missing handy.exe"
+              throw "$Label package is missing shorthand.exe"
             }
             foreach ($dll in $stagedDlls) {
               if (-not (Get-ChildItem $Root -Filter $dll.Name -Recurse -ErrorAction SilentlyContinue)) {
@@ -844,7 +913,7 @@ jobs:
             $deviceOutput = (& $handy.FullName --list-devices | Out-String)
             $deviceOutput | Write-Host
             if ($LASTEXITCODE -ne 0) {
-              throw "$Label handy.exe --list-devices failed"
+              throw "$Label shorthand.exe --list-devices failed"
             }
             if ("${{ inputs.target }}" -like "aarch64*" -and $deviceOutput -match "kind=(vulkan|cuda|metal|gpu)") {
               throw "$Label Windows ARM64 package unexpectedly exposed a GPU compute device"

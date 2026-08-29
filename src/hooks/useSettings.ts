@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
-import type { AppSettings as Settings, AudioDevice } from "@/bindings";
+import type {
+  AppSettings as Settings,
+  AudioDevice,
+  SystemAudioAvailability,
+  SystemAudioDevice,
+} from "@/bindings";
 
 interface UseSettingsReturn {
   // State
@@ -9,6 +14,9 @@ interface UseSettingsReturn {
   isUpdating: (key: string) => boolean;
   audioDevices: AudioDevice[];
   outputDevices: AudioDevice[];
+  systemAudioDevices: SystemAudioDevice[];
+  systemAudioAvailability: SystemAudioAvailability | null;
+  isProbingSystemAudio: boolean;
   audioFeedbackEnabled: boolean;
   postProcessModelOptions: Record<string, string[]>;
 
@@ -21,6 +29,8 @@ interface UseSettingsReturn {
   refreshSettings: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
+  refreshSystemAudioDevices: () => Promise<void>;
+  refreshSystemAudioAvailability: () => Promise<void>;
 
   // Binding-specific actions
   updateBinding: (id: string, binding: string) => Promise<void>;
@@ -59,6 +69,9 @@ export const useSettings = (): UseSettingsReturn => {
     isUpdating: store.isUpdatingKey,
     audioDevices: store.audioDevices,
     outputDevices: store.outputDevices,
+    systemAudioDevices: store.systemAudioDevices,
+    systemAudioAvailability: store.systemAudioAvailability,
+    isProbingSystemAudio: store.isProbingSystemAudio,
     audioFeedbackEnabled: store.settings?.audio_feedback || false,
     postProcessModelOptions: store.postProcessModelOptions,
     updateSetting: store.updateSetting,
@@ -66,6 +79,8 @@ export const useSettings = (): UseSettingsReturn => {
     refreshSettings: store.refreshSettings,
     refreshAudioDevices: store.refreshAudioDevices,
     refreshOutputDevices: store.refreshOutputDevices,
+    refreshSystemAudioDevices: store.refreshSystemAudioDevices,
+    refreshSystemAudioAvailability: store.refreshSystemAudioAvailability,
     updateBinding: store.updateBinding,
     resetBinding: store.resetBinding,
     getSetting: store.getSetting,

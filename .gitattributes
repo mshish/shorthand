@@ -1,0 +1,46 @@
+# Normalise line endings so a Windows checkout cannot commit CRLF.
+#
+# There was no .gitattributes here, so what got stored depended on whoever
+# committed and how their core.autocrlf happened to be set. Prettier is
+# configured with endOfLine: "lf" and CI checks it, so a single CRLF file is a
+# red build — and on a Windows working tree the failure is invisible locally,
+# because the checkout has CRLF either way.
+#
+# text=auto lets git decide what is text; eol=lf pins what text is stored and
+# checked out as. The explicit binary list below is not decoration: `text=auto`
+# guesses, and a wrong guess on an image or a model file corrupts it silently
+# by rewriting bytes that happen to look like line endings.
+
+* text=auto eol=lf
+
+# Images and icons
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+
+# Audio and models
+*.wav binary
+*.onnx binary
+*.gguf binary
+
+# Fonts
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+
+# Archives and compiled artefacts
+*.zip binary
+*.gz binary
+*.dll binary
+*.dylib binary
+*.so binary
+*.lib binary
+*.pdf binary
+
+# SVG is text and benefits from normalisation, so it is deliberately not listed
+# above — it is XML, and diffs of it are worth reading.

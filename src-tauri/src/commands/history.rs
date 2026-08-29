@@ -6,6 +6,17 @@ use crate::managers::{
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
+/// Rejects a retry attempt for a history entry that has no saved recording
+/// (an empty `file_name`, e.g. because the save-recordings toggle was off
+/// when it was created) — there is no audio file to re-transcribe.
+fn require_recording(file_name: &str) -> Result<(), String> {
+    if file_name.is_empty() {
+        Err("This entry has no saved recording to re-transcribe".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_history_entries(
@@ -73,6 +84,14 @@ pub async fn retry_history_entry_transcription(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("History entry {} not found", id))?;
 
+    require_recording(&entry.file_name)?;
+
+    if let Some(message) =
+        crate::tray_i18n::merged_transcript_retry_error_for_app(&app, &entry.transcription_text)
+    {
+        return Err(message);
+    }
+
     let audio_path = history_manager.get_audio_file_path(&entry.file_name);
     let samples = crate::audio_toolkit::read_wav_samples(&audio_path)
         .map_err(|e| format!("Failed to load audio: {}", e))?;
@@ -95,6 +114,11 @@ pub async fn retry_history_entry_transcription(
 
     let processed =
         process_transcription_output(&app, &transcription, entry.post_process_requested).await;
+    // Deliberately not gated on save_transcripts: retry is an explicit,
+    // user-initiated request to produce this exact transcript, and a retry
+    // that silently discarded its own result would be worse than the toggle
+    // being momentarily overridden. Unlike the normal save path, the user
+    // asked for this text by name.
     history_manager
         .update_transcription(
             id,
@@ -151,4 +175,20 @@ pub async fn update_recording_retention_period(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_recording_rejects_empty_file_name() {
+        let err = require_recording("").expect_err("empty file_name must be rejected");
+        assert_eq!(err, "This entry has no saved recording to re-transcribe");
+    }
+
+    #[test]
+    fn require_recording_accepts_non_empty_file_name() {
+        assert!(require_recording("handy-123.wav").is_ok());
+    }
 }

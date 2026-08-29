@@ -1,5 +1,5 @@
 use crate::managers::audio::AudioRecordingManager;
-use crate::managers::transcription::TranscriptionManager;
+use crate::managers::transcription::{cancel_active_streams, transcription_managers};
 use crate::shortcut;
 use crate::TranscriptionCoordinator;
 use log::info;
@@ -95,15 +95,19 @@ pub fn cancel_current_operation(app: &AppHandle) {
     audio_manager.cancel_recording();
 
     // Abandon any live streaming transcription
-    let tm = app.state::<Arc<TranscriptionManager>>();
-    tm.cancel_stream();
+    if let Some(hub) = crate::follow_stream::hub(app) {
+        hub.cancel();
+    }
+    cancel_active_streams(app);
 
     // Update tray icon and hide overlay
     set_tray_state(app, crate::tray::TrayIconState::Idle);
     hide_recording_overlay(app);
 
     // Unload model if immediate unload is enabled
-    tm.maybe_unload_immediately("cancellation");
+    for manager in transcription_managers(app) {
+        manager.maybe_unload_immediately("cancellation");
+    }
 
     // Notify coordinator so it can keep lifecycle state coherent.
     if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {

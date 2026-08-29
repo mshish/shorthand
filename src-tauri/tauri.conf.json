@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Handy",
-  "version": "0.9.6",
-  "identifier": "com.pais.handy",
+  "productName": "Shorthand",
+  "version": "0.1.1",
+  "identifier": "com.mshish.shorthand",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -39,13 +39,13 @@
     "macOS": {
       "files": {},
       "hardenedRuntime": true,
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "14.6",
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist"
     },
     "linux": {
       "deb": {
-        "depends": ["libgtk-layer-shell0", "libopenblas0"],
+        "depends": ["libgtk-layer-shell0", "libopenblas0", "libpipewire-0.3-0"],
         "files": {
           "/usr/lib/Handy": "transcribe-libs"
         }
@@ -53,7 +53,8 @@
       "rpm": {
         "depends": [
           "libgtk-layer-shell.so.0()(64bit)",
-          "libopenblas.so.0()(64bit)"
+          "libopenblas.so.0()(64bit)",
+          "libpipewire-0.3.so.0()(64bit)"
         ],
         "compression": {
           "type": "none"
@@ -70,7 +71,6 @@
       }
     },
     "windows": {
-      "signCommand": "trusted-signing-cli -e https://eus.codesigning.azure.net/ -a CJ-Signing -c cjpais-dev -d Handy %1",
       "nsis": {
         "template": "nsis/installer.nsi"
       }
@@ -78,9 +78,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBQjcyMDk1MjA2NjAxRjkKUldUNUFXWWdsU0MzdXRRZi8zYzhqV2FaNUVDbDd2Rk5VM1IvWWowVXdmRFNKQ1BrMXF5RFFsLy8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGODRCRTYyQzE2MTdDNTYKUldSV2ZHSEJZcjZFci9qQ0E2OW40TzM2TkRqV29CcU5FSnpjNk9Dc0pqbzRrMjZXVFduN0pOQmgK",
       "endpoints": [
-        "https://github.com/cjpais/Handy/releases/latest/download/latest.json"
+        "https://github.com/mshish/shorthand/releases/latest/download/latest.json"
       ]
     }
   }

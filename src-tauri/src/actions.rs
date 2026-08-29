@@ -2,14 +2,18 @@
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
+use crate::follow_stream::Speaker;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
-use crate::managers::transcription::StreamWorkKind;
-use crate::managers::transcription::TranscriptionManager;
+use crate::managers::transcription::{
+    cancel_active_streams, has_dual_speaker_output, transcription_managers, ActiveStreamManagers,
+    StreamTranscriptMerger, StreamWorkKind, TranscriptionManager,
+};
 use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
 use crate::tray::{set_tray_state, TrayIconState};
+use crate::tray_i18n::get_app_transcript_translations;
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
 };
@@ -44,6 +48,19 @@ impl Drop for FinishGuard {
         // WAV copy, engine scratch); hand the cached pages back to the OS so
         // they don't sit in malloc arenas until they get swapped out (#1792).
         crate::memory::trim_freed_memory();
+    }
+}
+
+/// Publishes a terminal follow-stream event if the transcription pipeline ended
+/// without one — a panic, or any future early return that forgets its terminal.
+/// A no-op on every normal path, because the real terminal already cleared the
+/// hub's active session.
+struct FollowStreamSessionGuard(AppHandle);
+impl Drop for FollowStreamSessionGuard {
+    fn drop(&mut self) {
+        if let Some(hub) = crate::follow_stream::hub(&self.0) {
+            hub.error("transcription ended unexpectedly");
+        }
     }
 }
 
@@ -116,6 +133,67 @@ where
 
 fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool {
     style == OverlayStyle::Live && is_streaming
+}
+
+/// Builds the message logged when a transcription finishes.
+///
+/// The file log target runs at `LogLevel::Debug` by default (see
+/// `default_log_level` in settings.rs), so an unconditional `debug!` of the
+/// transcript text would still write it to `<app data dir>/logs/handy.log`
+/// even when the user has turned `save_transcripts` off — defeating the
+/// setting through the log file instead of `history.db`. When it's off,
+/// keep the useful diagnostics (elapsed time, character count) but withhold
+/// the text itself, and say so explicitly so the absence reads as
+/// intentional rather than as an empty transcription.
+fn transcription_completed_message(
+    save_transcripts: bool,
+    elapsed: Duration,
+    transcription: &str,
+) -> String {
+    if save_transcripts {
+        format!("Transcription completed in {elapsed:?}: '{transcription}'")
+    } else {
+        format!(
+            "Transcription completed in {elapsed:?}: <withheld, save_transcripts is off> ({} chars)",
+            transcription.chars().count()
+        )
+    }
+}
+
+/// Decides what the post-processed transcript and its prompt should look
+/// like in a history row, given the `save_transcripts` setting.
+///
+/// `post_processed_text` is itself a transcript — in the post-processing
+/// case it is the text that actually gets pasted — so it must be gated by
+/// `save_transcripts` exactly like the raw transcript is, or the setting
+/// leaks the transcript into `history.db` through a side door. The prompt
+/// that produced it is gated alongside it: it's the user's own template
+/// rather than their speech, but a saved prompt on a row with no saved text
+/// would be a dangling half-guarantee.
+fn gated_post_processed_fields(
+    save_transcripts: bool,
+    post_processed_text: Option<String>,
+    post_process_prompt: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if save_transcripts {
+        (post_processed_text, post_process_prompt)
+    } else {
+        (None, None)
+    }
+}
+
+fn combine_finalize_results<M, S>(
+    mic: anyhow::Result<M>,
+    system: anyhow::Result<Option<S>>,
+) -> (anyhow::Result<M>, Option<S>) {
+    let system = match system {
+        Ok(result) => result,
+        Err(err) => {
+            error!("System-audio stream finalize failed; continuing with microphone: {err}");
+            None
+        }
+    };
+    (mic, system)
 }
 
 async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
@@ -424,7 +502,7 @@ pub(crate) async fn process_transcription_output(
     transcription: &str,
     post_process: bool,
 ) -> ProcessedTranscription {
-    let settings = get_settings(app);
+    let settings = crate::shorthand::dictation::resolve_settings(app);
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
     let mut post_process_prompt: Option<String> = None;
@@ -469,14 +547,29 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+        crate::shorthand::mode::set_active(app, binding_id);
 
-        // Load model in the background
-        let tm = app.state::<Arc<TranscriptionManager>>();
+        // An always-on microphone can still be open from the previous mode.
+        // Align its shared loopback lane before either stream managers are
+        // selected or microphone capture is allowed to start. Otherwise a
+        // Meeting's system stream could leak into a Dictation action that has
+        // explicitly disabled system audio.
         let rm = app.state::<Arc<AudioRecordingManager>>();
+        // A broken system-audio lane must never break dictation. This fails
+        // whenever the recorder is not Idle -- a push-to-talk retrigger, or a
+        // hotkey pressed while the previous capture is still Stopping -- and
+        // returning here would leave the user with an error toast and no
+        // dictation at all. Microphone capture is unaffected either way, so
+        // log and carry on into a microphone-only session.
+        if let Err(error) = rm.prepare_system_audio_for_active_mode() {
+            warn!("Failed to configure system audio for active mode, continuing microphone-only: {error}");
+        }
 
         // Load ASR model and VAD model in parallel
         let kickoff_started = Instant::now();
-        tm.initiate_model_load();
+        for manager in transcription_managers(app) {
+            manager.initiate_model_load();
+        }
         let rm_clone = Arc::clone(&rm);
         std::thread::spawn(move || {
             if let Err(e) = rm_clone.preload_vad() {
@@ -513,8 +606,31 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
+        // Which captures reach the follow-stream hub is the *resolved*
+        // `follow_stream_enabled` value, not the mode: that is the switch the
+        // Modes pane shows per mode, and gating on anything else makes the UI
+        // describe a capture it is not governing. Meeting ships true,
+        // dictation false, assisted notes true. Skipping `begin` alone is
+        // sufficient: every terminal hub call and `partial` check for an
+        // active session first and silently no-op without one (pinned in
+        // follow_stream::hub::tests).
+        if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
+            if let Some(hub) = crate::follow_stream::hub(app) {
+                hub.begin(model_supports_streaming);
+            }
+        }
         if model_supports_streaming {
-            tm.start_stream();
+            let managers = transcription_managers(app);
+            if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
+                merger.begin_session(managers.len() > 1);
+            }
+            app.state::<ActiveStreamManagers>()
+                .capture(managers.clone());
+            // Each manager guards its own worker. The optional system lane is
+            // independently started and can refuse/fail without affecting mic.
+            for manager in managers {
+                manager.start_stream();
+            }
         }
         let plan_elapsed = plan_started.elapsed();
 
@@ -522,10 +638,12 @@ impl ShortcutAction for TranscribeAction {
         // doesn't stream (or whose capability is not known yet) gets the compact
         // pill instead of an oversized transparent live window.
         let overlay_started = Instant::now();
-        match settings.overlay_style {
+        match crate::shorthand::dictation::resolve_settings(app).overlay_style {
             OverlayStyle::Live if model_supports_streaming => utils::show_streaming_overlay(app),
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
-            OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
+            // show_overlay_state no-ops on None and never runs, so this arm
+            // must update the capture-events cache itself.
+            OverlayStyle::None => utils::set_capture_overlay_events_enabled(false),
         }
         // Everything above runs before capture can begin, so each span here is
         // added keypress->capture latency.
@@ -592,6 +710,9 @@ impl ShortcutAction for TranscribeAction {
             }
             Err(e) => {
                 debug!("Failed to start recording: {}", e);
+                if let Some(hub) = crate::follow_stream::hub(app) {
+                    hub.error(&e);
+                }
                 recording_error = Some(e);
             }
         }
@@ -602,7 +723,7 @@ impl ShortcutAction for TranscribeAction {
         } else {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
-            tm.cancel_stream();
+            cancel_active_streams(app);
             utils::hide_recording_overlay(app);
             set_tray_state(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
@@ -651,10 +772,11 @@ impl ShortcutAction for TranscribeAction {
         // the larger panel, but it still switches from listening to a working
         // spinner while the stream finalizes. Non-streaming paths use the
         // compact transcribing pill (None no-ops in show_*).
-        let style = get_settings(app).overlay_style;
+        let style = crate::shorthand::dictation::resolve_settings(app).overlay_style;
         // Capture this before finalizing the stream so every later working state
         // targets the same overlay that was shown for this transcription.
         let use_streaming_overlay = should_use_streaming_overlay(style, tm.is_streaming());
+        let transcript_labels = get_app_transcript_translations(app);
         if use_streaming_overlay {
             tm.emit_stream_working(StreamWorkKind::Transcribing);
         } else {
@@ -673,22 +795,25 @@ impl ShortcutAction for TranscribeAction {
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
+            let follow_stream_guard = FollowStreamSessionGuard(ah.clone());
             debug!(
                 "Starting async transcription task for binding: {}",
                 binding_id
             );
 
             let stop_recording_time = Instant::now();
-            if let Some(samples) = rm.stop_recording(&binding_id, cancel_generation) {
+            if let Some(recorded_audio) = rm.stop_recording(&binding_id, cancel_generation) {
+                let samples = recorded_audio.microphone;
                 debug!(
-                    "Recording stopped and samples retrieved in {:?}, sample count: {}",
+                    "Recording stopped and samples retrieved in {:?}, mic samples: {}, system samples: {}",
                     stop_recording_time.elapsed(),
-                    samples.len()
+                    samples.len(),
+                    recorded_audio.system.len()
                 );
 
                 if rm.was_cancelled_since(cancel_generation) {
                     debug!("Transcription operation cancelled after recording stop");
-                    tm.cancel_stream();
+                    cancel_active_streams(&ah);
                     utils::hide_recording_overlay(&ah);
                     set_tray_state(&ah, TrayIconState::Idle);
                     return;
@@ -696,60 +821,136 @@ impl ShortcutAction for TranscribeAction {
 
                 if samples.is_empty() {
                     debug!("Recording produced no audio samples; skipping persistence");
+                    if let Some(hub) = crate::follow_stream::hub(&ah) {
+                        hub.no_speech();
+                    }
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
-                    tm.cancel_stream();
+                    for manager in ah.state::<ActiveStreamManagers>().take() {
+                        manager.cancel_stream();
+                    }
+                    ah.state::<StreamTranscriptMerger>().cancel_session();
                     utils::hide_recording_overlay(&ah);
                     set_tray_state(&ah, TrayIconState::Idle);
                 } else {
+                    // Persistence toggles: whether to keep the WAV on disk and
+                    // whether to keep the transcript text in history. These
+                    // govern persistence only; delivery (paste/clipboard/
+                    // follow-stream) happens unconditionally below regardless
+                    // of either flag.
+                    let persistence_settings = crate::shorthand::dictation::resolve_settings(&ah);
+                    let save_recordings = persistence_settings.save_recordings;
+                    let save_transcripts = persistence_settings.save_transcripts;
+
                     // Save WAV concurrently with transcription
                     let sample_count = samples.len();
-                    let file_name = format!("handy-{}.wav", chrono::Utc::now().timestamp());
-                    let wav_path = hm.recordings_dir().join(&file_name);
-                    let wav_path_for_verify = wav_path.clone();
-                    let samples_for_wav = samples.clone();
-                    let wav_handle = tauri::async_runtime::spawn_blocking(move || {
-                        crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
-                    });
+                    let file_name = if save_recordings {
+                        format!("handy-{}.wav", chrono::Utc::now().timestamp())
+                    } else {
+                        String::new()
+                    };
+                    let wav_handle = if save_recordings {
+                        let wav_path = hm.recordings_dir().join(&file_name);
+                        let wav_path_for_verify = wav_path.clone();
+                        let samples_for_wav = samples.clone();
+                        Some((
+                            tauri::async_runtime::spawn_blocking(move || {
+                                crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
+                            }),
+                            wav_path_for_verify,
+                        ))
+                    } else {
+                        None
+                    };
 
                     // Transcribe concurrently with WAV save. If a live stream was
                     // running, finalize it and use its text (all audio was already
                     // fed to the stream); otherwise batch-transcribe the samples.
                     let transcription_time = Instant::now();
-                    let transcription_result = match tm.finalize_stream() {
+                    // Finalize mic first because it owns the paste/batch fallback
+                    // path. Then independently finalize the optional loopback
+                    // lane; its failure must never fail or wedge the mic result.
+                    let active_managers = ah.state::<ActiveStreamManagers>().take();
+                    let system_manager = active_managers.get(1).cloned();
+                    // Queue loopback finalize first so its decoder flush overlaps
+                    // the mic finalize wait. The captured Arc remains valid even
+                    // if settings or the managed optional slot change meanwhile.
+                    let system_pending = system_manager
+                        .as_ref()
+                        .and_then(|manager| manager.begin_finalize_stream());
+                    let mic_stream_result = tm.finalize_stream_detailed();
+                    let system_stream_result = match (system_manager, system_pending) {
+                        (Some(manager), Some(pending)) => manager.finish_finalize_stream(pending),
+                        _ => Ok(None),
+                    };
+                    let (mic_stream_result, system_stream) =
+                        combine_finalize_results(mic_stream_result, system_stream_result);
+                    let transcription_result = match mic_stream_result {
                         // A finalized stream with usable text wins. An empty result
                         // (no active stream, produced nothing, or a finalize error
                         // after the engine was returned) falls back to a full batch
                         // transcription of the same audio. A finalize timeout is
                         // surfaced instead — the worker may still hold the engine,
                         // so a batch fallback would contend with it.
-                        Ok(Some(text)) if !text.trim().is_empty() => Ok(text),
-                        Ok(_) => tm.transcribe(samples),
+                        Ok(Some(result)) if !result.filtered.trim().is_empty() => {
+                            Ok((result.filtered.clone(), Some(result)))
+                        }
+                        Ok(_) => tm.transcribe(samples).map(|text| (text, None)),
                         Err(err) => Err(err),
-                    };
+                    }
+                    .map(|(mic_text, mic_stream)| {
+                        let settings = get_settings(&ah);
+                        let merged_dual_speaker = has_dual_speaker_output(system_stream.as_ref());
+                        let rendered = ah.state::<StreamTranscriptMerger>().render(
+                            &mic_text,
+                            mic_stream.as_ref(),
+                            system_stream.as_ref(),
+                            &settings,
+                            &transcript_labels.speaker_mic,
+                            &transcript_labels.speaker_system,
+                        );
+                        (rendered, merged_dual_speaker)
+                    });
 
-                    // Await WAV save and verify
-                    let wav_saved = match wav_handle.await {
-                        Ok(Ok(())) => {
-                            match crate::audio_toolkit::verify_wav_file(
-                                &wav_path_for_verify,
-                                sample_count,
-                            ) {
-                                Ok(()) => true,
-                                Err(e) => {
-                                    error!("WAV verification failed: {}", e);
-                                    false
+                    // Await WAV save and verify (only when save_recordings is on)
+                    let wav_saved = match wav_handle {
+                        Some((handle, wav_path_for_verify)) => match handle.await {
+                            Ok(Ok(())) => {
+                                match crate::audio_toolkit::verify_wav_file(
+                                    &wav_path_for_verify,
+                                    sample_count,
+                                ) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        error!("WAV verification failed: {}", e);
+                                        // The file is on disk but unusable and,
+                                        // since wav_saved stays false below, no
+                                        // history row will reference it — leaving
+                                        // it in place would orphan it from every
+                                        // retention policy. Remove it now.
+                                        if let Err(remove_err) =
+                                            std::fs::remove_file(&wav_path_for_verify)
+                                        {
+                                            error!(
+                                                "Failed to remove unverified WAV file {}: {}",
+                                                wav_path_for_verify.display(),
+                                                remove_err
+                                            );
+                                        }
+                                        false
+                                    }
                                 }
                             }
-                        }
-                        Ok(Err(e)) => {
-                            error!("Failed to save WAV file: {}", e);
-                            false
-                        }
-                        Err(e) => {
-                            error!("WAV save task panicked: {}", e);
-                            false
-                        }
+                            Ok(Err(e)) => {
+                                error!("Failed to save WAV file: {}", e);
+                                false
+                            }
+                            Err(e) => {
+                                error!("WAV save task panicked: {}", e);
+                                false
+                            }
+                        },
+                        None => false,
                     };
 
                     if rm.was_cancelled_since(cancel_generation) {
@@ -759,8 +960,12 @@ impl ShortcutAction for TranscribeAction {
                         return;
                     }
 
+                    // Shared by both branches below: the WAV's file name when
+                    // one was actually saved, otherwise empty.
+                    let history_file_name = if wav_saved { file_name } else { String::new() };
+
                     match transcription_result {
-                        Ok(transcription) => {
+                        Ok((transcription, merged_dual_speaker)) => {
                             debug!(
                                 "Transcription completed in {:?}: '{}'",
                                 transcription_time.elapsed(),
@@ -793,20 +998,36 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
-                            if wav_saved {
+                            // Save to history when either artifact is being kept:
+                            // the WAV (wav_saved) or the transcript text
+                            // (save_transcripts). The unkept side is stored empty.
+                            if wav_saved || save_transcripts {
+                                let history_text = if save_transcripts {
+                                    transcription
+                                } else {
+                                    String::new()
+                                };
+                                let (history_post_processed, history_prompt) =
+                                    gated_post_processed_fields(
+                                        save_transcripts,
+                                        processed.post_processed_text.clone(),
+                                        processed.post_process_prompt.clone(),
+                                    );
                                 if let Err(err) = hm.save_entry(
-                                    file_name,
-                                    transcription,
+                                    history_file_name,
+                                    history_text,
                                     post_process,
-                                    processed.post_processed_text.clone(),
-                                    processed.post_process_prompt.clone(),
+                                    history_post_processed,
+                                    history_prompt,
                                 ) {
                                     error!("Failed to save history entry: {}", err);
                                 }
                             }
 
                             if processed.final_text.is_empty() {
+                                if let Some(hub) = crate::follow_stream::hub(&ah) {
+                                    hub.no_speech();
+                                }
                                 utils::hide_recording_overlay(&ah);
                                 set_tray_state(&ah, TrayIconState::Idle);
                             } else {
@@ -814,7 +1035,29 @@ impl ShortcutAction for TranscribeAction {
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
                                 let rm_for_paste = Arc::clone(&rm);
+                                // The mode cell records "the mode of the most recently
+                                // started capture" and is never cleared (see
+                                // shorthand::mode), so it is only guaranteed correct for
+                                // the capture in flight at the moment it is read.
+                                // run_on_main_thread only *queues* this closure. The
+                                // FinishGuard is still alive here, but it drops as soon as
+                                // this async block returns — which is right after the
+                                // queueing call below, not after the closure runs. So by
+                                // the time the closure reaches the main thread the
+                                // coordinator may already have accepted a new capture of
+                                // the other mode, and the cell would describe that one
+                                // instead. Resolving now, while the guard still holds the
+                                // coordinator and the cell still reflects this capture,
+                                // and moving the snapshot into the
+                                // closure avoids `paste()` re-reading a cell that may by
+                                // then belong to a different capture.
+                                let paste_settings =
+                                    crate::shorthand::dictation::resolve_settings(&ah);
+                                // run_on_main_thread queues the closure, so keep the
+                                // wire backstop alive until final can be published.
+                                let follow_stream_guard = follow_stream_guard;
                                 ah.run_on_main_thread(move || {
+                                    let _follow_stream_guard = follow_stream_guard;
                                     if rm_for_paste.was_cancelled_since(cancel_generation) {
                                         debug!("Transcription operation cancelled before paste");
                                         utils::hide_recording_overlay(&ah_clone);
@@ -822,7 +1065,12 @@ impl ShortcutAction for TranscribeAction {
                                         return;
                                     }
 
-                                    match utils::paste(final_text, ah_clone.clone()) {
+                                    if let Some(hub) = crate::follow_stream::hub(&ah_clone) {
+                                        let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
+                                        hub.finish(speaker, &final_text);
+                                    }
+                                    match utils::paste(final_text, ah_clone.clone(), paste_settings)
+                                    {
                                         Ok(()) => debug!(
                                             "Text pasted successfully in {:?}",
                                             paste_time.elapsed()
@@ -853,13 +1101,17 @@ impl ShortcutAction for TranscribeAction {
                             }
 
                             error!("Transcription failed: {}", err);
+                            let error_message = err.to_string();
+                            if let Some(hub) = crate::follow_stream::hub(&ah) {
+                                hub.error(&error_message);
+                            }
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
-                            let _ = ah.emit("transcription-error", err.to_string());
+                            let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
-                            if wav_saved {
+                            if wav_saved || save_transcripts {
                                 if let Err(save_err) = hm.save_entry(
-                                    file_name,
+                                    history_file_name,
                                     String::new(),
                                     post_process,
                                     None,
@@ -875,8 +1127,11 @@ impl ShortcutAction for TranscribeAction {
                 }
             } else {
                 debug!("No samples retrieved from recording stop");
+                if let Some(hub) = crate::follow_stream::hub(&ah) {
+                    hub.no_speech();
+                }
                 // Tear down any streaming worker so its channel doesn't leak.
-                tm.cancel_stream();
+                cancel_active_streams(&ah);
                 utils::hide_recording_overlay(&ah);
                 set_tray_state(&ah, TrayIconState::Idle);
             }
@@ -939,6 +1194,26 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
+        "dictate".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "dictate_with_post_process".to_string(),
+        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "assisted_notes".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "assisted_notes_with_post_process".to_string(),
+        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
         "cancel".to_string(),
         Arc::new(CancelAction) as Arc<dyn ShortcutAction>,
     );
@@ -952,8 +1227,9 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_unless_cancelled, is_blank_transcription, should_use_streaming_overlay,
-        strip_think_block,
+        combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
+        is_blank_transcription, should_use_streaming_overlay, strip_think_block,
+        transcription_completed_message,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1035,5 +1311,59 @@ mod tests {
         assert!(!should_use_streaming_overlay(OverlayStyle::Live, false));
         assert!(!should_use_streaming_overlay(OverlayStyle::Minimal, true));
         assert!(!should_use_streaming_overlay(OverlayStyle::None, true));
+    }
+
+    #[test]
+    fn loopback_finalize_error_preserves_successful_mic_result() {
+        let (mic, system) = combine_finalize_results::<_, String>(
+            Ok("microphone text"),
+            Err(anyhow::anyhow!("loopback failed")),
+        );
+        assert_eq!(mic.unwrap(), "microphone text");
+        assert_eq!(system, None);
+    }
+
+    #[test]
+    fn post_processed_fields_pass_through_when_transcripts_are_saved() {
+        let (text, prompt) = gated_post_processed_fields(
+            true,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text.as_deref(), Some("polished"));
+        assert_eq!(prompt.as_deref(), Some("prompt template"));
+    }
+
+    #[test]
+    fn post_processed_fields_are_emptied_when_transcripts_are_off() {
+        let (text, prompt) = gated_post_processed_fields(
+            false,
+            Some("polished".to_string()),
+            Some("prompt template".to_string()),
+        );
+        assert_eq!(text, None);
+        assert_eq!(prompt, None);
+    }
+
+    #[test]
+    fn completed_message_includes_transcript_when_transcripts_are_saved() {
+        let message = transcription_completed_message(
+            true,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(message.contains("a secret transcript"));
+    }
+
+    #[test]
+    fn completed_message_withholds_transcript_when_transcripts_are_off() {
+        let message = transcription_completed_message(
+            false,
+            Duration::from_millis(250),
+            "a secret transcript",
+        );
+        assert!(!message.contains("a secret transcript"));
+        // The absence should read as intentional, not as an empty result.
+        assert!(message.contains("save_transcripts"));
     }
 }

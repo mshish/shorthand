@@ -37,7 +37,9 @@ pub fn handle_shortcut_event(
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
-            coordinator.send_input(binding_id, hotkey_string, is_pressed, settings.push_to_talk);
+            let push_to_talk =
+                crate::shorthand::dictation::resolve_push_to_talk(&settings, binding_id);
+            coordinator.send_input(binding_id, hotkey_string, is_pressed, push_to_talk);
         } else {
             warn!("TranscriptionCoordinator is not initialized");
         }

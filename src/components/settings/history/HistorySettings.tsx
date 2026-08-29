@@ -11,6 +11,7 @@ import {
   type HistoryUpdatePayload,
 } from "@/bindings";
 import { useOsType } from "@/hooks/useOsType";
+import { useSettings } from "@/hooks/useSettings";
 import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
@@ -62,6 +63,8 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
 export const HistorySettings: React.FC = () => {
   const { t } = useTranslation();
   const osType = useOsType();
+  const { getSetting } = useSettings();
+  const saveTranscriptsEnabled = getSetting("save_transcripts") ?? false;
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(true);
@@ -257,6 +260,7 @@ export const HistorySettings: React.FC = () => {
               <HistoryEntryComponent
                 key={entry.id}
                 entry={entry}
+                saveTranscriptsEnabled={saveTranscriptsEnabled}
                 onToggleSaved={() => toggleSaved(entry.id)}
                 onCopyText={() => copyToClipboard(entry.transcription_text)}
                 getAudioUrl={getAudioUrl}
@@ -296,6 +300,7 @@ export const HistorySettings: React.FC = () => {
 
 interface HistoryEntryProps {
   entry: HistoryEntry;
+  saveTranscriptsEnabled: boolean;
   onToggleSaved: () => void;
   onCopyText: () => void;
   getAudioUrl: (fileName: string) => Promise<string | null>;
@@ -305,6 +310,7 @@ interface HistoryEntryProps {
 
 const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   entry,
+  saveTranscriptsEnabled,
   onToggleSaved,
   onCopyText,
   getAudioUrl,
@@ -316,6 +322,9 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   const [retrying, setRetrying] = useState(false);
 
   const hasTranscription = entry.transcription_text.trim().length > 0;
+  // An empty file_name means save_recordings was off for this entry (see
+  // managers/history.rs) — there is no WAV on disk to play or re-transcribe.
+  const hasAudio = entry.file_name !== "";
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
@@ -358,7 +367,16 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   return (
     <div className="px-4 py-2 pb-5 flex flex-col gap-3">
       <div className="flex justify-between items-center">
-        <p className="text-sm font-medium">{formattedDate}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium">{formattedDate}</p>
+          <span className="text-xs px-1.5 py-0.5 rounded-full bg-mid-gray/10 text-mid-gray uppercase tracking-wide">
+            {entry.source === "dictation"
+              ? t("settings.history.source.dictation")
+              : entry.source === "assisted_notes"
+                ? t("settings.history.source.assistedNotes")
+                : t("settings.history.source.meeting")}
+          </span>
+        </div>
         <div className="flex items-center">
           <IconButton
             onClick={handleCopyText}
@@ -389,7 +407,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </IconButton>
           <IconButton
             onClick={handleRetranscribe}
-            disabled={retrying}
+            disabled={retrying || !hasAudio}
             title={t("settings.history.retranscribe")}
           >
             <RotateCcw
@@ -438,10 +456,21 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           ? t("settings.history.transcribing")
           : hasTranscription
             ? entry.transcription_text
-            : t("settings.history.transcriptionFailed")}
+            : // Empty text is ambiguous: it's either a genuine transcription
+              // failure or transcripts simply weren't saved. There's no
+              // per-entry record of which, so this reads the *current*
+              // save_transcripts setting as a proxy — right for the common
+              // case (all-or-nothing use), wrong only if the setting was
+              // flipped between when this entry was recorded and now. A new
+              // DB column would resolve it exactly; not worth it for this.
+              saveTranscriptsEnabled
+              ? t("settings.history.transcriptionFailed")
+              : t("settings.history.transcriptNotSaved")}
       </p>
 
-      <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
+      {hasAudio && (
+        <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
+      )}
     </div>
   );
 };

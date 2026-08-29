@@ -38,6 +38,8 @@ use transcribe_rs::{
 
 const STREAM_PERF_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_TURN_GAP: Duration = Duration::from_millis(1500);
+const SUBSTANTIAL_TURN_CHARS: usize = 20;
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -57,11 +59,239 @@ pub struct ModelStateEvent {
     pub error: Option<String>,
 }
 
+/// Identifies the capture lane that produced a streaming event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamSource {
+    Mic,
+    System,
+}
+
+#[derive(Clone, Debug)]
+struct StreamCommit {
+    source: StreamSource,
+    arrived_at: Instant,
+    text: String,
+}
+
+#[derive(Default)]
+struct StreamTranscriptState {
+    active: bool,
+    mic_committed: String,
+    system_committed: String,
+    commits: Vec<StreamCommit>,
+}
+
+/// Session-scoped ordered log of append-only committed streaming text.
+///
+/// Decoder timing is intentionally not used here: VAD removes a different
+/// amount of silence from each lane, so decoder counters are not comparable.
+/// Capturing `Instant::now()` when each commit reaches this shared state keeps
+/// the two sources ordered by wall-clock arrival instead.
+#[derive(Default)]
+pub struct StreamTranscriptMerger {
+    state: Mutex<StreamTranscriptState>,
+}
+
+impl StreamTranscriptMerger {
+    pub fn begin_session(&self, dual_lane: bool) {
+        *self.state.lock().unwrap() = StreamTranscriptState {
+            active: dual_lane,
+            ..Default::default()
+        };
+    }
+
+    pub fn cancel_session(&self) {
+        *self.state.lock().unwrap() = StreamTranscriptState::default();
+    }
+
+    fn observe_committed(&self, source: StreamSource, committed: &str) {
+        self.observe_committed_at(source, Instant::now(), committed);
+    }
+
+    fn observe_committed_at(&self, source: StreamSource, arrived_at: Instant, committed: &str) {
+        let mut state = self.state.lock().unwrap();
+        if !state.active {
+            return;
+        }
+        let previous = match source {
+            StreamSource::Mic => &mut state.mic_committed,
+            StreamSource::System => &mut state.system_committed,
+        };
+
+        let Some(delta) = committed.strip_prefix(previous.as_str()) else {
+            warn!(
+                "stream committed prefix rewrote for {:?}; dropping non-append-only update",
+                source
+            );
+            *previous = committed.to_string();
+            return;
+        };
+        if delta.is_empty() {
+            return;
+        }
+
+        *previous = committed.to_string();
+        state.commits.push(StreamCommit {
+            source,
+            arrived_at,
+            text: delta.to_string(),
+        });
+    }
+
+    /// Render the ordered commit log. Mic-only runs deliberately return the
+    /// primary manager's final text unchanged, preserving existing output bytes.
+    pub fn render(
+        &self,
+        mic_final: &str,
+        mic_stream: Option<&FinalizedStreamResult>,
+        system_stream: Option<&FinalizedStreamResult>,
+        settings: &AppSettings,
+        mic_label: &str,
+        system_label: &str,
+    ) -> String {
+        let state = std::mem::take(&mut *self.state.lock().unwrap());
+        let Some(system_stream) = filter_dual_speaker(system_stream) else {
+            return mic_final.to_string();
+        };
+
+        let mut commits = state.commits;
+        if let Some(mic_stream) = mic_stream {
+            append_missing_final_tail(&mut commits, StreamSource::Mic, &mic_stream.raw);
+        }
+        append_missing_final_tail(&mut commits, StreamSource::System, &system_stream.raw);
+        let mut turns = coalesce_stream_commits(&commits);
+        if !mic_final.trim().is_empty()
+            && !turns.iter().any(|turn| turn.source == StreamSource::Mic)
+        {
+            turns.insert(0, StreamTurn::fallback(StreamSource::Mic, mic_final));
+        }
+        if !turns.iter().any(|turn| turn.source == StreamSource::System) {
+            turns.push(StreamTurn::fallback(
+                StreamSource::System,
+                &system_stream.filtered,
+            ));
+        }
+
+        let mut used_batch_mic = false;
+        turns
+            .into_iter()
+            .filter_map(|turn| {
+                let text = match turn.source {
+                    StreamSource::Mic => match mic_stream {
+                        Some(context) => context.post_process_turn(turn.text, settings),
+                        None if !used_batch_mic => {
+                            used_batch_mic = true;
+                            mic_final.to_string()
+                        }
+                        None => return None,
+                    },
+                    StreamSource::System => system_stream.post_process_turn(turn.text, settings),
+                };
+                let text = text.trim();
+                if text.is_empty() {
+                    None
+                } else {
+                    let label = match turn.source {
+                        StreamSource::Mic => mic_label,
+                        StreamSource::System => system_label,
+                    };
+                    Some(format!("{label}: {text}"))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StreamTurn {
+    source: StreamSource,
+    last_arrival: Instant,
+    text: String,
+}
+
+impl StreamTurn {
+    fn fallback(source: StreamSource, text: &str) -> Self {
+        let now = Instant::now();
+        Self {
+            source,
+            last_arrival: now,
+            text: text.to_string(),
+        }
+    }
+}
+
+fn is_substantial_commit(text: &str) -> bool {
+    text.trim().chars().count() >= SUBSTANTIAL_TURN_CHARS
+}
+
+fn append_missing_final_tail(
+    commits: &mut Vec<StreamCommit>,
+    source: StreamSource,
+    final_raw: &str,
+) {
+    let observed = commits
+        .iter()
+        .filter(|commit| commit.source == source)
+        .map(|commit| commit.text.as_str())
+        .collect::<String>();
+    if let Some(tail) = final_raw.strip_prefix(&observed) {
+        if !tail.is_empty() {
+            commits.push(StreamCommit {
+                source,
+                arrived_at: Instant::now(),
+                text: tail.to_string(),
+            });
+        }
+    } else if observed != final_raw {
+        warn!(
+            "final stream text did not extend observed {:?} commits",
+            source
+        );
+    }
+}
+
+fn coalesce_stream_commits(commits: &[StreamCommit]) -> Vec<StreamTurn> {
+    let mut turns: Vec<StreamTurn> = Vec::new();
+    for commit in commits {
+        if let Some(last) = turns.last_mut() {
+            if last.source == commit.source {
+                last.text.push_str(&commit.text);
+                last.last_arrival = commit.arrived_at;
+                continue;
+            }
+        }
+
+        let previous_quiet = turns.last().is_none_or(|turn| {
+            commit.arrived_at.duration_since(turn.last_arrival) >= STREAM_TURN_GAP
+        });
+        if !previous_quiet && !is_substantial_commit(&commit.text) {
+            if let Some(existing) = turns.iter_mut().rev().find(|turn| {
+                turn.source == commit.source
+                    && commit.arrived_at.duration_since(turn.last_arrival) < STREAM_TURN_GAP
+            }) {
+                existing.text.push_str(&commit.text);
+                existing.last_arrival = commit.arrived_at;
+                continue;
+            }
+        }
+
+        turns.push(StreamTurn {
+            source: commit.source,
+            last_arrival: commit.arrived_at,
+            text: commit.text.clone(),
+        });
+    }
+    turns
+}
+
 /// Live transcription snapshot emitted to the overlay during a streaming run.
 /// `committed` is the append-only, flicker-free prefix; `tentative` is the
 /// volatile suffix the model may still rewrite.
 #[derive(Clone, Debug, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct StreamTextEvent {
+    pub source: StreamSource,
     pub committed: String,
     pub tentative: String,
 }
@@ -89,6 +319,7 @@ pub enum StreamWorkKind {
 /// Emitted to switch the streaming overlay to a working spinner.
 #[derive(Clone, Debug, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct StreamPhaseEvent {
+    pub source: StreamSource,
     pub phase: StreamPhase,
     /// Present only when `phase` is `Working`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +342,39 @@ struct FinalizedStreamText {
     output_language: OutputLanguageEvidence,
     /// The streaming model's supported languages, for text-based detection.
     supported_languages: Vec<String>,
+}
+
+pub struct FinalizedStreamResult {
+    raw: String,
+    pub filtered: String,
+    output_language: OutputLanguageEvidence,
+    supported_languages: Vec<String>,
+}
+
+impl FinalizedStreamResult {
+    fn post_process_turn(&self, raw: String, settings: &AppSettings) -> String {
+        post_process_transcription_text(
+            raw,
+            settings,
+            false,
+            &self.output_language,
+            &self.supported_languages,
+        )
+    }
+}
+
+fn filter_dual_speaker(
+    system_stream: Option<&FinalizedStreamResult>,
+) -> Option<&FinalizedStreamResult> {
+    system_stream.filter(|result| !result.filtered.trim().is_empty())
+}
+
+pub(crate) fn has_dual_speaker_output(system_stream: Option<&FinalizedStreamResult>) -> bool {
+    filter_dual_speaker(system_stream).is_some()
+}
+
+pub struct PendingStreamFinalize {
+    reply_rx: mpsc::Receiver<Option<FinalizedStreamText>>,
 }
 
 /// Routes real-time audio frames to the active streaming worker. Shared between
@@ -246,6 +510,7 @@ impl Drop for StreamWorkerGuard {
 
 #[derive(Clone)]
 pub struct TranscriptionManager {
+    source: StreamSource,
     engine: Arc<Mutex<Option<LoadedEngine>>>,
     model_manager: Arc<ModelManager>,
     app_handle: AppHandle,
@@ -279,9 +544,143 @@ pub struct TranscriptionManager {
     active_engine_lease: Arc<AtomicU64>,
 }
 
+/// Type-keyed Tauri state for the system-audio transcription lane.
+///
+/// The manager exists ahead of a capture so either active mode can opt into
+/// the lane without racing a hotkey. It does not load a model until streaming
+/// actually starts.
+pub struct SystemAudioTranscription(pub Mutex<Option<Arc<TranscriptionManager>>>);
+
+struct CapturedHandles<T>(Mutex<Vec<Arc<T>>>);
+
+impl<T> Default for CapturedHandles<T> {
+    fn default() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+}
+
+impl<T> CapturedHandles<T> {
+    fn capture(&self, handles: Vec<Arc<T>>) {
+        *self.0.lock().unwrap() = handles;
+    }
+
+    fn take(&self) -> Vec<Arc<T>> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+#[derive(Default)]
+pub struct ActiveStreamManagers(CapturedHandles<TranscriptionManager>);
+
+impl ActiveStreamManagers {
+    pub fn capture(&self, managers: Vec<Arc<TranscriptionManager>>) {
+        self.0.capture(managers);
+    }
+
+    pub fn take(&self) -> Vec<Arc<TranscriptionManager>> {
+        self.0.take()
+    }
+}
+
+/// Process-wide gate serializing native engine loads.
+///
+/// See the call site in `load_model_with_device`: ggml backend device
+/// initialization is not thread-safe, and the dual-lane design loads two models
+/// from two threads. This is deliberately a plain `Mutex` over the native load
+/// only — it does not cover inference, so concurrent streaming is untouched.
+fn native_model_load_lock() -> &'static Mutex<()> {
+    static NATIVE_MODEL_LOAD: OnceLock<Mutex<()>> = OnceLock::new();
+    NATIVE_MODEL_LOAD.get_or_init(|| Mutex::new(()))
+}
+
+fn dual_lane_enabled(system_audio_enabled: bool, model_supports_streaming: bool) -> bool {
+    system_audio_enabled && model_supports_streaming
+}
+
+pub fn system_audio_streaming_enabled(app: &AppHandle) -> bool {
+    let settings = crate::shorthand::dictation::resolve_settings(app);
+    let supports_streaming = app
+        .try_state::<Arc<ModelManager>>()
+        .and_then(|manager| manager.get_model_info(&settings.selected_model))
+        .is_some_and(|model| model.supports_streaming);
+    dual_lane_enabled(settings.system_audio_enabled, supports_streaming)
+}
+
+pub fn cancel_active_streams(app: &AppHandle) {
+    let managers = app
+        .try_state::<ActiveStreamManagers>()
+        .map(|active| active.take())
+        .unwrap_or_default();
+    for manager in managers {
+        manager.cancel_stream();
+    }
+    if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
+        merger.cancel_session();
+    }
+}
+
+/// Return the transcription managers actually in service. Headless mode and
+/// the disabled system-audio path deliberately expose only the primary lane.
+pub fn transcription_managers(app: &AppHandle) -> Vec<Arc<TranscriptionManager>> {
+    let mut managers = Vec::new();
+    if let Some(primary) = app.try_state::<Arc<TranscriptionManager>>() {
+        managers.push(Arc::clone(&primary));
+    }
+    if system_audio_streaming_enabled(app) {
+        if let Some(system) = app.try_state::<SystemAudioTranscription>() {
+            if let Some(manager) = system.0.lock().unwrap().as_ref() {
+                managers.push(Arc::clone(manager));
+            }
+        }
+    }
+    managers
+}
+
+fn model_ids_match<I>(model_ids: I) -> bool
+where
+    I: IntoIterator<Item = Option<String>>,
+{
+    let mut model_ids = model_ids.into_iter();
+    let Some(expected) = model_ids.next() else {
+        return true;
+    };
+    model_ids.all(|model_id| model_id == expected)
+}
+
+fn claim_model_load(
+    is_loading: &Mutex<bool>,
+    current_model_id: &Mutex<Option<String>>,
+    reload_model_on_next_use: &AtomicBool,
+    selected_model: &str,
+) -> Option<bool> {
+    let mut loading = is_loading.lock().unwrap();
+    if *loading {
+        return None;
+    }
+    let reload_pending = reload_model_on_next_use.load(Ordering::Acquire);
+    if !reload_pending && current_model_id.lock().unwrap().as_deref() == Some(selected_model) {
+        return None;
+    }
+    *loading = true;
+    Some(reload_pending)
+}
+
+pub fn transcription_models_are_coherent(app: &AppHandle) -> bool {
+    model_ids_match(
+        transcription_managers(app)
+            .into_iter()
+            .map(|manager| manager.get_current_model()),
+    )
+}
+
 impl TranscriptionManager {
-    pub fn new(app_handle: &AppHandle, model_manager: Arc<ModelManager>) -> Result<Self> {
+    pub fn new(
+        app_handle: &AppHandle,
+        model_manager: Arc<ModelManager>,
+        source: StreamSource,
+    ) -> Result<Self> {
         let manager = Self {
+            source,
             engine: Arc::new(Mutex::new(None)),
             model_manager,
             app_handle: app_handle.clone(),
@@ -425,15 +824,12 @@ impl TranscriptionManager {
         }
 
         // Emit unloaded event
-        let _ = self.app_handle.emit(
-            "model-state-changed",
-            ModelStateEvent {
-                event_type: "unloaded".to_string(),
-                model_id: None,
-                model_name: None,
-                error: None,
-            },
-        );
+        self.emit_model_state(ModelStateEvent {
+            event_type: "unloaded".to_string(),
+            model_id: None,
+            model_name: None,
+            error: None,
+        });
 
         let unload_duration = unload_start.elapsed();
         debug!(
@@ -488,15 +884,12 @@ impl TranscriptionManager {
         debug!("Starting to load model: {}", model_id);
 
         // Emit loading started event
-        let _ = self.app_handle.emit(
-            "model-state-changed",
-            ModelStateEvent {
-                event_type: "loading_started".to_string(),
-                model_id: Some(model_id.to_string()),
-                model_name: None,
-                error: None,
-            },
-        );
+        self.emit_model_state(ModelStateEvent {
+            event_type: "loading_started".to_string(),
+            model_id: Some(model_id.to_string()),
+            model_name: None,
+            error: None,
+        });
 
         let model_info = self
             .model_manager
@@ -505,15 +898,12 @@ impl TranscriptionManager {
 
         if !model_info.is_downloaded {
             let error_msg = "Model not downloaded";
-            let _ = self.app_handle.emit(
-                "model-state-changed",
-                ModelStateEvent {
-                    event_type: "loading_failed".to_string(),
-                    model_id: Some(model_id.to_string()),
-                    model_name: Some(model_info.name.clone()),
-                    error: Some(error_msg.to_string()),
-                },
-            );
+            self.emit_model_state(ModelStateEvent {
+                event_type: "loading_failed".to_string(),
+                model_id: Some(model_id.to_string()),
+                model_name: Some(model_info.name.clone()),
+                error: Some(error_msg.to_string()),
+            });
             return Err(anyhow::anyhow!(error_msg));
         }
 
@@ -534,15 +924,12 @@ impl TranscriptionManager {
 
         // Create appropriate engine based on model type
         let emit_loading_failed = |error_msg: &str| {
-            let _ = self.app_handle.emit(
-                "model-state-changed",
-                ModelStateEvent {
-                    event_type: "loading_failed".to_string(),
-                    model_id: Some(model_id.to_string()),
-                    model_name: Some(model_info.name.clone()),
-                    error: Some(error_msg.to_string()),
-                },
-            );
+            self.emit_model_state(ModelStateEvent {
+                event_type: "loading_failed".to_string(),
+                model_id: Some(model_id.to_string()),
+                model_name: Some(model_info.name.clone()),
+                error: Some(error_msg.to_string()),
+            });
         };
 
         let loaded_engine = match model_info.engine_type {
@@ -579,7 +966,25 @@ impl TranscriptionManager {
                     .map(transcribe_device_label)
                     .unwrap_or_else(|| "automatic".to_string());
                 let model_options = ModelOptions { backend, device };
-                let model = Model::load_with(&model_path, &model_options).map_err(|e| {
+                // Serialize native model loads across ALL managers.
+                //
+                // ggml's backend device initialization is not thread-safe. Since
+                // `initiate_model_load` spawns a thread per manager, the dual-lane
+                // path would otherwise run two `Model::load_with` calls
+                // concurrently, racing ggml-vulkan's device setup. Measured on an
+                // RTX 3060: two concurrent loads abort the process 2 runs in 3 with
+                // `vkCreateFence: Invalid device` followed by
+                // STATUS_STACK_BUFFER_OVERRUN (0xC0000409); serializing them is
+                // clean 6/6. Loading is a startup-latency cost, not a steady-state
+                // one, and concurrent *streaming* on already-loaded models is
+                // unaffected — that path stays fully parallel.
+                let model = {
+                    let _load_guard = native_model_load_lock()
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    Model::load_with(&model_path, &model_options)
+                }
+                .map_err(|e| {
                     let error_msg = format!("Failed to load whisper model {}: {}", model_id, e);
                     emit_loading_failed(&error_msg);
                     anyhow::anyhow!(error_msg)
@@ -711,15 +1116,12 @@ impl TranscriptionManager {
         self.touch_activity();
 
         // Emit loading completed event
-        let _ = self.app_handle.emit(
-            "model-state-changed",
-            ModelStateEvent {
-                event_type: "loading_completed".to_string(),
-                model_id: Some(model_id.to_string()),
-                model_name: Some(model_info.name.clone()),
-                error: None,
-            },
-        );
+        self.emit_model_state(ModelStateEvent {
+            event_type: "loading_completed".to_string(),
+            model_id: Some(model_id.to_string()),
+            model_name: Some(model_info.name.clone()),
+            error: None,
+        });
 
         let load_duration = load_start.elapsed();
         debug!(
@@ -731,18 +1133,17 @@ impl TranscriptionManager {
     }
 
     /// Kicks off the model loading in a background thread if it's not already loaded
-    pub fn initiate_model_load(&self) {
-        let mut is_loading = self.is_loading.lock().unwrap();
-        if *is_loading {
-            return;
-        }
+    pub fn initiate_model_load(&self) -> bool {
+        let selected_model = get_settings(&self.app_handle).selected_model;
+        let Some(reload_pending) = claim_model_load(
+            &self.is_loading,
+            &self.current_model_id,
+            &self.reload_model_on_next_use,
+            &selected_model,
+        ) else {
+            return false;
+        };
 
-        let reload_pending = self.reload_model_on_next_use.load(Ordering::Acquire);
-        if !reload_pending && self.is_model_loaded() {
-            return;
-        }
-
-        *is_loading = true;
         let self_clone = self.clone();
         thread::spawn(move || {
             if reload_pending {
@@ -750,14 +1151,14 @@ impl TranscriptionManager {
                     .reload_model_on_next_use
                     .store(false, Ordering::Release);
             }
-            let settings = get_settings(&self_clone.app_handle);
-            if let Err(e) = self_clone.load_model(&settings.selected_model) {
+            if let Err(e) = self_clone.load_model(&selected_model) {
                 error!("Failed to load model: {}", e);
             }
             let mut is_loading = self_clone.is_loading.lock().unwrap();
             *is_loading = false;
             self_clone.loading_condvar.notify_all();
         });
+        true
     }
 
     pub fn get_current_model(&self) -> Option<String> {
@@ -992,7 +1393,11 @@ impl TranscriptionManager {
                                 if update.committed_changed || update.tentative_changed {
                                     let text = stream.text();
                                     perf.record_emit();
-                                    self.emit_stream_text(&text.committed, &text.tentative);
+                                    self.emit_stream_text(
+                                        &text.committed,
+                                        &text.tentative,
+                                        update.committed_changed,
+                                    );
                                 }
                                 perf.maybe_log();
                             }
@@ -1014,6 +1419,15 @@ impl TranscriptionManager {
                                     update.input_received_ms,
                                     update.audio_committed_ms,
                                     update.buffered_ms,
+                                );
+                                // Finalize can commit the last volatile suffix.
+                                // Emit and record it before replying so the merge
+                                // cannot lose the tail of either lane.
+                                let final_text = stream.text();
+                                self.emit_stream_text(
+                                    &final_text.committed,
+                                    &final_text.tentative,
+                                    true,
                                 );
                                 // In auto mode the model's own LID is the best
                                 // remaining evidence; the snapshot is only
@@ -1102,15 +1516,20 @@ impl TranscriptionManager {
     /// to batch transcription. `Err` means finalize itself failed or timed out.
     /// A timeout may still leave the worker holding the engine, so callers
     /// should surface it instead of immediately starting a batch fallback.
-    pub fn finalize_stream(&self) -> Result<Option<String>> {
-        let Some(tx) = self.router.take() else {
-            return Ok(None);
-        };
+    pub fn begin_finalize_stream(&self) -> Option<PendingStreamFinalize> {
+        let tx = self.router.take()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         if tx.send(StreamCmd::Finalize(reply_tx)).is_err() {
-            return Ok(None);
+            return None;
         }
-        let finalized = match reply_rx.recv_timeout(STREAM_FINALIZE_REPLY_TIMEOUT) {
+        Some(PendingStreamFinalize { reply_rx })
+    }
+
+    pub fn finish_finalize_stream(
+        &self,
+        pending: PendingStreamFinalize,
+    ) -> Result<Option<FinalizedStreamResult>> {
+        let finalized = match pending.reply_rx.recv_timeout(STREAM_FINALIZE_REPLY_TIMEOUT) {
             Ok(Some(finalized)) => finalized,
             Ok(None) => return Ok(None),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
@@ -1127,7 +1546,7 @@ impl TranscriptionManager {
         // Streaming models do not receive a decode prompt, so custom words
         // always go through the shared fuzzy post-correction path.
         let filtered = post_process_transcription_text(
-            finalized.text,
+            finalized.text.clone(),
             &settings,
             false,
             &finalized.output_language,
@@ -1135,7 +1554,19 @@ impl TranscriptionManager {
         );
 
         self.maybe_unload_immediately("streaming transcription");
-        Ok(Some(filtered))
+        Ok(Some(FinalizedStreamResult {
+            raw: finalized.text,
+            filtered,
+            output_language: finalized.output_language,
+            supported_languages: finalized.supported_languages,
+        }))
+    }
+
+    pub fn finalize_stream_detailed(&self) -> Result<Option<FinalizedStreamResult>> {
+        let Some(pending) = self.begin_finalize_stream() else {
+            return Ok(None);
+        };
+        self.finish_finalize_stream(pending)
     }
 
     /// Abandon any active stream without producing text (e.g. on cancel).
@@ -1144,19 +1575,42 @@ impl TranscriptionManager {
             let _ = tx.send(StreamCmd::Cancel);
         }
         self.stream_active.store(false, Ordering::Release);
+        if let Some(merger) = self.app_handle.try_state::<StreamTranscriptMerger>() {
+            merger.cancel_session();
+        }
+    }
+
+    fn emit_model_state(&self, event: ModelStateEvent) {
+        if self.source == StreamSource::Mic {
+            let _ = self.app_handle.emit("model-state-changed", event);
+        }
     }
 
     /// Emit a working-phase event to the streaming overlay (spinner + label).
     pub fn emit_stream_working(&self, kind: StreamWorkKind) {
         let _ = StreamPhaseEvent {
+            source: self.source,
             phase: StreamPhase::Working,
             kind: Some(kind),
         }
         .emit(&self.app_handle);
     }
 
-    fn emit_stream_text(&self, committed: &str, tentative: &str) {
+    fn emit_stream_text(&self, committed: &str, tentative: &str, committed_changed: bool) {
+        if committed_changed {
+            if let Some(merger) = self.app_handle.try_state::<StreamTranscriptMerger>() {
+                merger.observe_committed(self.source, committed);
+            }
+        }
+        // A timed-out or cancelled stream is marked inactive before its worker can
+        // emit a stale tail. Normal feed and finalize emissions occur while active.
+        if self.stream_active.load(Ordering::Acquire) {
+            if let Some(hub) = crate::follow_stream::hub(&self.app_handle) {
+                hub.partial(self.source, committed, tentative);
+            }
+        }
         let _ = StreamTextEvent {
+            source: self.source,
             committed: committed.to_string(),
             tentative: tentative.to_string(),
         }
@@ -1224,12 +1678,6 @@ impl TranscriptionManager {
             );
         }
 
-        // Whether the loaded transcribe-cpp model advertises
-        // Feature::InitialPrompt. Informational (logged below); the whisper
-        // run extension and the fuzzy-correction skip are gated on
-        // `model_is_whisper` instead, since non-whisper archs can advertise
-        // the feature while rejecting the whisper-kind extension.
-        let mut model_takes_initial_prompt = false;
         // Whether the loaded model is actually whisper-family (arch string).
         // Non-whisper archs (e.g. Voxtral Small) can advertise
         // Feature::InitialPrompt yet reject the whisper-kind run extension
@@ -1275,7 +1723,11 @@ impl TranscriptionManager {
             if let LoadedEngine::TranscribeCpp(session) = &engine {
                 let model = session.model();
                 let caps = model.capabilities();
-                model_takes_initial_prompt = model.supports(Feature::InitialPrompt);
+                // Informational only: the whisper run extension and the fuzzy-
+                // correction skip are gated on the architecture below, because
+                // non-whisper models can advertise this feature while rejecting
+                // the whisper-kind extension.
+                let model_takes_initial_prompt = model.supports(Feature::InitialPrompt);
                 model_is_whisper = model.arch() == "whisper";
                 model_supports_translate = caps.supports_translate;
                 model_languages = caps.languages;
@@ -1447,15 +1899,12 @@ impl TranscriptionManager {
                         *current_model = None;
                     }
 
-                    let _ = self.app_handle.emit(
-                        "model-state-changed",
-                        ModelStateEvent {
-                            event_type: "unloaded".to_string(),
-                            model_id: None,
-                            model_name: None,
-                            error: Some(format!("Engine panicked: {}", panic_msg)),
-                        },
-                    );
+                    self.emit_model_state(ModelStateEvent {
+                        event_type: "unloaded".to_string(),
+                        model_id: None,
+                        model_name: None,
+                        error: Some(format!("Engine panicked: {}", panic_msg)),
+                    });
 
                     return Err(anyhow::anyhow!(
                         "Transcription engine panicked: {}. The model has been unloaded and will reload on next attempt.",
@@ -2140,12 +2589,292 @@ pub fn get_available_accelerators() -> AvailableAccelerators {
     }
 }
 
+impl Drop for TranscriptionManager {
+    fn drop(&mut self) {
+        // Skip shutdown unless this is the very last clone. TranscriptionManager
+        // is cloned by initiate_model_load() and the watcher thread — those
+        // clones dropping must not kill the watcher. The watcher thread holds
+        // its own clone, so engine's strong_count is always >= 2 while the
+        // watcher is alive. When it reaches 1, only this instance remains
+        // and we can safely shut down.
+        if Arc::strong_count(&self.engine) > 1 {
+            return;
+        }
+
+        // Signal the watcher thread to shutdown
+        self.shutdown_signal.store(true, Ordering::Relaxed);
+
+        // Wait for the thread to finish gracefully.
+        // Use match instead of unwrap to avoid panicking if the mutex is
+        // poisoned — a panic inside Drop calls abort().
+        let mut guard = match self.watcher_handle.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("Recovered poisoned watcher_handle mutex during TranscriptionManager drop — a panic occurred earlier this session");
+                e.into_inner()
+            }
+        };
+        if let Some(handle) = guard.take() {
+            if let Err(e) = handle.join() {
+                warn!("Failed to join idle watcher thread: {:?}", e);
+            } else {
+                debug!("Idle watcher thread joined successfully");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    fn finalized(raw: &str, settings: &AppSettings) -> FinalizedStreamResult {
+        let output_language = OutputLanguageEvidence::UserSelected("en".to_string());
+        let supported_languages = languages(&["en"]);
+        FinalizedStreamResult {
+            raw: raw.to_string(),
+            filtered: post_process_transcription_text(
+                raw.to_string(),
+                settings,
+                false,
+                &output_language,
+                &supported_languages,
+            ),
+            output_language,
+            supported_languages,
+        }
+    }
+
+    #[test]
+    fn dual_speaker_predicate_matches_render_system_branch() {
+        let settings = AppSettings::default();
+        let whitespace_only = finalized(" \t\n", &settings);
+        let contributing = finalized("system speech", &settings);
+
+        assert!(!has_dual_speaker_output(None));
+        assert!(!has_dual_speaker_output(Some(&whitespace_only)));
+        assert!(has_dual_speaker_output(Some(&contributing)));
+
+        for stream in [None, Some(&whitespace_only), Some(&contributing)] {
+            assert_eq!(
+                filter_dual_speaker(stream).is_some(),
+                has_dual_speaker_output(stream)
+            );
+        }
+    }
+
+    #[test]
+    fn merge_appends_only_new_committed_delta() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        merger.observe_committed(StreamSource::Mic, "hello");
+        merger.observe_committed(StreamSource::Mic, "hello world");
+
+        let state = merger.state.lock().unwrap();
+        assert_eq!(state.commits.len(), 2);
+        assert_eq!(state.commits[0].text, "hello");
+        assert_eq!(state.commits[1].text, " world");
+    }
+
+    #[test]
+    fn non_append_only_committed_rewrite_is_dropped_instead_of_duplicated() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        merger.observe_committed(StreamSource::Mic, "original prefix");
+        merger.observe_committed(StreamSource::Mic, "rewritten prefix");
+
+        let state = merger.state.lock().unwrap();
+        assert_eq!(state.commits.len(), 1);
+        assert_eq!(state.commits[0].text, "original prefix");
+        assert_eq!(state.mic_committed, "rewritten prefix");
+    }
+
+    #[test]
+    fn cancel_deactivates_merge_until_a_new_dual_session_begins() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        merger.observe_committed(StreamSource::Mic, "first session");
+        merger.cancel_session();
+        merger.observe_committed(StreamSource::Mic, "ignored after cancel");
+        assert!(merger.state.lock().unwrap().commits.is_empty());
+
+        merger.begin_session(true);
+        merger.observe_committed(StreamSource::Mic, "second session");
+
+        let state = merger.state.lock().unwrap();
+        assert_eq!(state.mic_committed, "second session");
+        assert_eq!(state.commits.len(), 1);
+        assert_eq!(state.commits[0].text, "second session");
+    }
+
+    #[test]
+    fn mic_only_merge_is_byte_identical_to_primary_text() {
+        let merger = StreamTranscriptMerger::default();
+        let primary = "  Existing mic output. \n";
+
+        assert_eq!(
+            merger
+                .render(
+                    primary,
+                    None,
+                    None,
+                    &AppSettings::default(),
+                    "You",
+                    "System",
+                )
+                .as_bytes(),
+            primary.as_bytes()
+        );
+    }
+
+    #[test]
+    fn dual_mode_post_processes_each_raw_turn_before_labelling() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        let settings = AppSettings {
+            custom_words: vec!["Handy".to_string()],
+            custom_filler_words: Some(vec!["um".to_string()]),
+            filler_word_removal_enabled: true,
+            ..AppSettings::default()
+        };
+        merger.observe_committed(StreamSource::Mic, "um handy works");
+        merger.observe_committed(StreamSource::System, "yes it does");
+        let mic = finalized("um handy works", &settings);
+        let system = finalized("yes it does", &settings);
+
+        let rendered = merger.render(
+            &mic.filtered,
+            Some(&mic),
+            Some(&system),
+            &settings,
+            "You",
+            "System",
+        );
+        println!("dual_mode_rendered={rendered:?}");
+        assert_eq!(rendered, "You: Handy works\nSystem: yes it does");
+    }
+
+    #[test]
+    fn finalized_context_supplies_a_tail_not_seen_in_incremental_events() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        merger.observe_committed(StreamSource::Mic, "hello");
+        merger.observe_committed(StreamSource::System, "sending");
+        let settings = AppSettings::default();
+        let mic = finalized("hello", &settings);
+        let system = finalized("sending now", &settings);
+
+        let rendered = merger.render(
+            &mic.filtered,
+            Some(&mic),
+            Some(&system),
+            &settings,
+            "You",
+            "System",
+        );
+        assert!(rendered.contains("System: sending now"));
+    }
+
+    #[test]
+    fn rapidly_alternating_small_commits_coalesce_into_readable_lane_turns() {
+        let merger = StreamTranscriptMerger::default();
+        merger.begin_session(true);
+        let start = Instant::now();
+        let mut mic = String::new();
+        let mut system = String::new();
+        for (index, (source, delta)) in [
+            (StreamSource::Mic, "So "),
+            (StreamSource::System, "I "),
+            (StreamSource::Mic, "that "),
+            (StreamSource::System, "think "),
+            (StreamSource::Mic, "was "),
+            (StreamSource::System, "the "),
+            (StreamSource::Mic, "the point."),
+            (StreamSource::System, "same."),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let committed = match source {
+                StreamSource::Mic => &mut mic,
+                StreamSource::System => &mut system,
+            };
+            committed.push_str(delta);
+            merger.observe_committed_at(
+                source,
+                start + Duration::from_millis(index as u64 * 100),
+                committed,
+            );
+        }
+        let settings = AppSettings::default();
+        let mic_final = finalized(&mic, &settings);
+        let system_final = finalized(&system, &settings);
+        let rendered = merger.render(
+            &mic_final.filtered,
+            Some(&mic_final),
+            Some(&system_final),
+            &settings,
+            "You",
+            "System",
+        );
+        assert_eq!(
+            rendered,
+            "You: So that was the point.\nSystem: I think the same."
+        );
+    }
+
+    #[test]
+    fn stale_system_audio_setting_does_not_enable_dual_lane_for_batch_model() {
+        assert!(!dual_lane_enabled(true, false));
+        assert!(dual_lane_enabled(true, true));
+        assert!(!dual_lane_enabled(false, true));
+    }
+
+    #[test]
+    fn captured_session_handle_survives_optional_manager_slot_being_cleared() {
+        let captured = CapturedHandles::default();
+        let manager = Arc::new(7_u8);
+        let mut optional_slot = Some(Arc::clone(&manager));
+        captured.capture(vec![Arc::clone(&manager)]);
+
+        optional_slot.take();
+        drop(manager);
+
+        let handles = captured.take();
+        assert_eq!(*handles[0], 7);
+        assert_eq!(Arc::strong_count(&handles[0]), 1);
+    }
+
+    #[test]
+    fn both_manager_load_gates_claim_a_changed_selected_model() {
+        let primary_loading = Mutex::new(false);
+        let primary_model = Mutex::new(Some("old-model".to_string()));
+        let primary_reload = AtomicBool::new(false);
+        let system_loading = Mutex::new(false);
+        let system_model = Mutex::new(Some("old-model".to_string()));
+        let system_reload = AtomicBool::new(false);
+
+        let claims = [
+            claim_model_load(
+                &primary_loading,
+                &primary_model,
+                &primary_reload,
+                "selected-model",
+            ),
+            claim_model_load(
+                &system_loading,
+                &system_model,
+                &system_reload,
+                "selected-model",
+            ),
+        ];
+        assert_eq!(claims, [Some(false), Some(false)]);
+        assert!(*primary_loading.lock().unwrap());
+        assert!(*system_loading.lock().unwrap());
     }
 
     #[test]
@@ -2457,40 +3186,5 @@ mod tests {
         assert!(matches!(plan.task, Task::Transcribe));
         assert_eq!(plan.language.as_deref(), Some("es"));
         assert_eq!(plan.target_language, None);
-    }
-}
-
-impl Drop for TranscriptionManager {
-    fn drop(&mut self) {
-        // Skip shutdown unless this is the very last clone. TranscriptionManager
-        // is cloned by initiate_model_load() and the watcher thread — those
-        // clones dropping must not kill the watcher. The watcher thread holds
-        // its own clone, so engine's strong_count is always >= 2 while the
-        // watcher is alive. When it reaches 1, only this instance remains
-        // and we can safely shut down.
-        if Arc::strong_count(&self.engine) > 1 {
-            return;
-        }
-
-        // Signal the watcher thread to shutdown
-        self.shutdown_signal.store(true, Ordering::Relaxed);
-
-        // Wait for the thread to finish gracefully.
-        // Use match instead of unwrap to avoid panicking if the mutex is
-        // poisoned — a panic inside Drop calls abort().
-        let mut guard = match self.watcher_handle.lock() {
-            Ok(g) => g,
-            Err(e) => {
-                warn!("Recovered poisoned watcher_handle mutex during TranscriptionManager drop — a panic occurred earlier this session");
-                e.into_inner()
-            }
-        };
-        if let Some(handle) = guard.take() {
-            if let Err(e) = handle.join() {
-                warn!("Failed to join idle watcher thread: {:?}", e);
-            } else {
-                debug!("Idle watcher thread joined successfully");
-            }
-        }
     }
 }

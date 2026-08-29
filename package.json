@@ -1,5 +1,5 @@
 {
-  "name": "handy-app",
+  "name": "shorthand-app",
   "private": true,
   "version": "0.9.6",
   "type": "module",
@@ -17,9 +17,20 @@
     "test:playwright": "playwright test",
     "test:playwright:ui": "playwright test --ui",
     "check:translations": "bun scripts/check-translations.ts",
+    "check:branding": "bun scripts/check-branding.ts",
+    "check:locale-drift": "bun scripts/check-locale-drift.ts",
+    "check:fork-translations": "bun scripts/check-fork-translations.ts",
+    "check:settings": "bun scripts/check-settings-coverage.ts",
+    "test:unit": "bun test src/shorthand",
+    "golden:branding": "bun scripts/write-branding-golden.ts",
     "postinstall": "bun scripts/check-nix-deps.ts"
   },
   "dependencies": {
+    "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/ibm-plex-sans": "^5.3.0",
+    "@fontsource-variable/source-code-pro": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-autostart": "~2.5.1",

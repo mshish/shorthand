@@ -45,3 +45,6 @@ result
 
 # Python bytecode (scripts/)
 __pycache__/
+
+# Local git worktrees (SDD scratch)
+.worktrees/

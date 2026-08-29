@@ -15,6 +15,8 @@ import { PostProcessingToggle } from "../PostProcessingToggle";
 import { AppendTrailingSpace } from "../AppendTrailingSpace";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
+import { SaveRecordings } from "../SaveRecordings";
+import { SaveTranscripts } from "../SaveTranscripts";
 import { ExperimentalToggle } from "../ExperimentalToggle";
 import { useSettings } from "../../../hooks/useSettings";
 import { KeyboardImplementationSelector } from "../debug/KeyboardImplementationSelector";
@@ -22,6 +24,9 @@ import { VoiceActivityDetection } from "../VoiceActivityDetection";
 import { AccelerationSelector } from "../AccelerationSelector";
 import { LazyStreamClose } from "../LazyStreamClose";
 import { FillerWordRemoval } from "../FillerWordRemoval";
+import { SystemAudioCapture } from "./SystemAudioCapture";
+import { SystemAudioDeviceSelector } from "./SystemAudioDeviceSelector";
+import { FollowStreamOutput } from "./FollowStreamOutput";
 import { VadBackendSelector } from "../VadBackendSelector";
 
 export const AdvancedSettings: React.FC = () => {
@@ -45,13 +50,21 @@ export const AdvancedSettings: React.FC = () => {
         <TypingToolSetting descriptionMode="tooltip" grouped={true} />
         <ClipboardHandlingSetting descriptionMode="tooltip" grouped={true} />
         <AutoSubmit descriptionMode="tooltip" grouped={true} />
+        <FollowStreamOutput descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>
         <VoiceActivityDetection descriptionMode="tooltip" grouped={true} />
+        <SystemAudioCapture descriptionMode="tooltip" grouped={true} />
+        <SystemAudioDeviceSelector descriptionMode="tooltip" grouped={true} />
         <FillerWordRemoval descriptionMode="tooltip" grouped={true} />
         <CustomWords descriptionMode="tooltip" grouped />
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.privacy.title")}>
+        <SaveRecordings descriptionMode="tooltip" grouped={true} />
+        <SaveTranscripts descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.advanced.groups.history")}>

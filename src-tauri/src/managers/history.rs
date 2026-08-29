@@ -1,3 +1,4 @@
+use crate::shorthand::mode::{active, Mode};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local, Utc};
 use log::{debug, error, info};
@@ -6,7 +7,7 @@ use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_specta::Event;
 
@@ -31,6 +32,7 @@ static MIGRATIONS: &[M] = &[
     M::up("ALTER TABLE transcription_history ADD COLUMN post_processed_text TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_prompt TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_requested BOOLEAN NOT NULL DEFAULT 0;"),
+    M::up("ALTER TABLE transcription_history ADD COLUMN source TEXT NOT NULL DEFAULT 'meeting';"),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -63,12 +65,40 @@ pub struct HistoryEntry {
     pub post_processed_text: Option<String>,
     pub post_process_prompt: Option<String>,
     pub post_process_requested: bool,
+    pub source: String,
+}
+
+/// Maps the fork's mode cell to the value stored in
+/// `transcription_history.source`. Pure and independent of `AppHandle` so
+/// it's testable without a Tauri app instance — see this task's design note.
+fn source_for_mode(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Meeting => "meeting",
+        Mode::Dictation => "dictation",
+        Mode::AssistedNotes => "assisted_notes",
+    }
 }
 
 pub struct HistoryManager {
     app_handle: AppHandle,
     recordings_dir: PathBuf,
     db_path: PathBuf,
+}
+
+/// Resolves the WAV path for a history entry, if it has one to delete.
+///
+/// A history row can exist with an empty `file_name` when the
+/// save-recordings toggle was off for that transcription (only the
+/// transcript text was kept). `dir.join("")` yields `dir` itself, which
+/// exists on disk, so without this guard the cleanup paths would attempt
+/// `fs::remove_file` on the recordings directory. Returns `None` for an
+/// empty `file_name` so callers skip deletion entirely.
+fn recording_file_to_delete(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    if file_name.is_empty() {
+        None
+    } else {
+        Some(dir.join(file_name))
+    }
 }
 
 impl HistoryManager {
@@ -207,6 +237,7 @@ impl HistoryManager {
             post_processed_text: row.get("post_processed_text")?,
             post_process_prompt: row.get("post_process_prompt")?,
             post_process_requested: row.get("post_process_requested")?,
+            source: row.get("source")?,
         })
     }
 
@@ -226,6 +257,10 @@ impl HistoryManager {
     ) -> Result<HistoryEntry> {
         let timestamp = Utc::now().timestamp();
         let title = self.format_timestamp_title(timestamp);
+        // Reads the mode of the capture currently in flight rather than
+        // taking a parameter, per the fork's mode-cell design — see
+        // src-tauri/src/shorthand/mode.rs.
+        let source = source_for_mode(active(&self.app_handle));
 
         let conn = self.get_connection()?;
         conn.execute(
@@ -237,8 +272,9 @@ impl HistoryManager {
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
-                post_process_requested
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                post_process_requested,
+                source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &file_name,
                 timestamp,
@@ -248,6 +284,7 @@ impl HistoryManager {
                 &post_processed_text,
                 &post_process_prompt,
                 post_process_requested,
+                source,
             ],
         )?;
 
@@ -261,6 +298,7 @@ impl HistoryManager {
             post_processed_text,
             post_process_prompt,
             post_process_requested,
+            source: source.to_string(),
         };
 
         debug!("Saved history entry with id {}", entry.id);
@@ -308,7 +346,7 @@ impl HistoryManager {
 
         let entry = conn
             .query_row(
-                "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
                  FROM transcription_history WHERE id = ?1",
                 params![id],
                 Self::map_history_entry,
@@ -362,14 +400,15 @@ impl HistoryManager {
                 params![id],
             )?;
 
-            // Delete WAV file
-            let file_path = self.recordings_dir.join(file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete WAV file {}: {}", file_name, e);
-                } else {
-                    debug!("Deleted old WAV file: {}", file_name);
-                    deleted_count += 1;
+            // Delete WAV file, if this entry has one
+            if let Some(file_path) = recording_file_to_delete(&self.recordings_dir, file_name) {
+                if file_path.exists() {
+                    if let Err(e) = fs::remove_file(&file_path) {
+                        error!("Failed to delete WAV file {}: {}", file_name, e);
+                    } else {
+                        debug!("Deleted old WAV file: {}", file_name);
+                        deleted_count += 1;
+                    }
                 }
             }
         }
@@ -459,7 +498,7 @@ impl HistoryManager {
             (Some(cursor_id), Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
                 let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
                      FROM transcription_history
                      WHERE id < ?1
                      ORDER BY id DESC
@@ -473,7 +512,7 @@ impl HistoryManager {
             (None, Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
                 let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
                      FROM transcription_history
                      ORDER BY id DESC
                      LIMIT ?1",
@@ -485,7 +524,7 @@ impl HistoryManager {
             }
             (_, None) => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
                      FROM transcription_history
                      ORDER BY id DESC",
                 )?;
@@ -516,7 +555,8 @@ impl HistoryManager {
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
-                post_process_requested
+                post_process_requested,
+                source
              FROM transcription_history
              ORDER BY timestamp DESC
              LIMIT 1",
@@ -543,7 +583,8 @@ impl HistoryManager {
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
-                post_process_requested
+                post_process_requested,
+                source
              FROM transcription_history
              WHERE transcription_text != ''
              ORDER BY timestamp DESC
@@ -597,7 +638,8 @@ impl HistoryManager {
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
-                post_process_requested
+                post_process_requested,
+                source
              FROM transcription_history
              WHERE id = ?1",
         )?;
@@ -612,12 +654,15 @@ impl HistoryManager {
 
         // Get the entry to find the file name
         if let Some(entry) = self.get_entry_by_id(id).await? {
-            // Delete the audio file first
-            let file_path = self.get_audio_file_path(&entry.file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete audio file {}: {}", entry.file_name, e);
-                    // Continue with database deletion even if file deletion fails
+            // Delete the audio file first, if this entry has one
+            if let Some(file_path) =
+                recording_file_to_delete(&self.recordings_dir, &entry.file_name)
+            {
+                if file_path.exists() {
+                    if let Err(e) = fs::remove_file(&file_path) {
+                        error!("Failed to delete audio file {}: {}", entry.file_name, e);
+                        // Continue with database deletion even if file deletion fails
+                    }
                 }
             }
         }
@@ -666,7 +711,8 @@ mod tests {
                 transcription_text TEXT NOT NULL,
                 post_processed_text TEXT,
                 post_process_prompt TEXT,
-                post_process_requested BOOLEAN NOT NULL DEFAULT 0
+                post_process_requested BOOLEAN NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'meeting'
             );",
         )
         .expect("create transcription_history table");
@@ -674,6 +720,9 @@ mod tests {
     }
 
     fn insert_entry(conn: &Connection, timestamp: i64, text: &str, post_processed: Option<&str>) {
+        // Relies on the column's own DEFAULT 'meeting' — exercising that
+        // default is the point of source_round_trips_through_the_source_column
+        // below, not something to duplicate here.
         conn.execute(
             "INSERT INTO transcription_history (
                 file_name,
@@ -697,6 +746,34 @@ mod tests {
             ],
         )
         .expect("insert history entry");
+    }
+
+    fn insert_entry_with_source(conn: &Connection, timestamp: i64, text: &str, source: &str) {
+        conn.execute(
+            "INSERT INTO transcription_history (
+                file_name,
+                timestamp,
+                saved,
+                title,
+                transcription_text,
+                post_processed_text,
+                post_process_prompt,
+                post_process_requested,
+                source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                format!("handy-{}.wav", timestamp),
+                timestamp,
+                false,
+                format!("Recording {}", timestamp),
+                text,
+                Option::<String>::None,
+                Option::<String>::None,
+                false,
+                source,
+            ],
+        )
+        .expect("insert history entry with source");
     }
 
     #[test]
@@ -733,5 +810,75 @@ mod tests {
 
         assert_eq!(entry.timestamp, 100);
         assert_eq!(entry.transcription_text, "completed");
+    }
+
+    #[test]
+    fn recording_file_to_delete_skips_empty_file_name() {
+        // An empty file_name means save_recordings was off for this entry.
+        // dir.join("") resolves to the recordings directory itself, which
+        // exists, so this must return None rather than a path to delete.
+        let dir = std::path::Path::new("/recordings");
+        assert_eq!(recording_file_to_delete(dir, ""), None);
+    }
+
+    #[test]
+    fn recording_file_to_delete_joins_non_empty_file_name() {
+        let dir = std::path::Path::new("/recordings");
+        assert_eq!(
+            recording_file_to_delete(dir, "handy-123.wav"),
+            Some(dir.join("handy-123.wav"))
+        );
+    }
+
+    #[test]
+    fn source_for_mode_maps_every_mode() {
+        assert_eq!(source_for_mode(Mode::Meeting), "meeting");
+        assert_eq!(source_for_mode(Mode::Dictation), "dictation");
+        assert_eq!(source_for_mode(Mode::AssistedNotes), "assisted_notes");
+    }
+
+    #[test]
+    fn source_round_trips_through_the_source_column() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "meeting text", None);
+        insert_entry_with_source(&conn, 200, "dictated text", "dictation");
+
+        let latest = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+        assert_eq!(latest.timestamp, 200);
+        assert_eq!(latest.source, "dictation");
+
+        let meeting_source: String = conn
+            .query_row(
+                "SELECT source FROM transcription_history WHERE timestamp = 100",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read source column");
+        assert_eq!(meeting_source, "meeting");
+    }
+
+    #[test]
+    fn migrations_add_source_column_with_meeting_default() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        let migrations = Migrations::new(MIGRATIONS.to_vec());
+        migrations.to_latest(&mut conn).expect("run migrations");
+
+        conn.execute(
+            "INSERT INTO transcription_history (file_name, timestamp, title, transcription_text)
+             VALUES ('', 1, 'title', 'text')",
+            [],
+        )
+        .expect("insert without specifying source");
+
+        let source: String = conn
+            .query_row(
+                "SELECT source FROM transcription_history WHERE timestamp = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read source column");
+        assert_eq!(source, "meeting");
     }
 }

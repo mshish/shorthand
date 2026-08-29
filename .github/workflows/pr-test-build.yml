@@ -22,9 +22,10 @@ jobs:
           - platform: "macos-latest"
             args: "--target x86_64-apple-darwin"
             target: "x86_64-apple-darwin"
-          - platform: "ubuntu-22.04"
-            args: "--bundles deb"
-            target: "x86_64-unknown-linux-gnu"
+          # ubuntu-22.04 is out because libspa fails to compile against the
+          # libpipewire headers 22.04 ships (7 errors). The fork's system-audio
+          # capture needs a newer libpipewire; ubuntu-24.04 builds it fine and
+          # still produces a .deb.
           - platform: "ubuntu-24.04"
             args: "--bundles appimage,rpm"
             target: "x86_64-unknown-linux-gnu"

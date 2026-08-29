@@ -20,15 +20,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-26"
-            args: "--target aarch64-apple-darwin"
-            target: "aarch64-apple-darwin"
-          - platform: "macos-latest"
-            args: "--target x86_64-apple-darwin"
-            target: "x86_64-apple-darwin"
-          - platform: "ubuntu-22.04"
-            args: "--bundles deb"
-            target: "x86_64-unknown-linux-gnu"
+          # macOS is deliberately absent. This fork's repository is private, so
+          # Actions minutes come out of the account quota, and GitHub bills macOS
+          # runners at a 10x multiplier — two full Tauri release builds on every
+          # push to main is enough to exhaust a monthly allowance in a handful of
+          # merges. Build macOS on demand instead: run the "Build Test" workflow
+          # (build-test.yml), which covers all seven platforms via
+          # workflow_dispatch, or "PR Test Build" for a specific PR.
+          #
+          # This is a cost decision, not a support decision — macOS is a
+          # supported target and release.yml still builds it. If the repository
+          # becomes public, or a cheaper check-only macOS job lands (see
+          # docs/superpowers/plans/2026-08-28-plan-d-ci-verification-gaps.md),
+          # revisit this.
+          #
+          # ubuntu-22.04 is out because libspa fails to compile against the
+          # libpipewire headers 22.04 ships (7 errors). The fork's system-audio
+          # capture needs a newer libpipewire; ubuntu-24.04 builds it fine and
+          # still produces a .deb.
           - platform: "ubuntu-24.04"
             args: "--bundles appimage,rpm"
             target: "x86_64-unknown-linux-gnu"
@@ -48,5 +57,14 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       upload-artifacts: true
-      sign-binaries: true
+      # Off until Authenticode credentials exist. The Windows signing steps run
+      # before anything is compiled and fail hard when the Azure Trusted Signing
+      # secrets are unset, which would cost the whole build for a signature
+      # these artifacts do not need — main builds are 30-day testing artifacts,
+      # not releases. Installers are unsigned, so SmartScreen warns once.
+      sign-binaries: false
+      # On, so a main build is a genuine dry run of the release path: the
+      # updater artifacts and their minisign signatures are produced exactly as
+      # release.yml produces them. Costs nothing — the key is self-managed.
+      sign-updates: true
     secrets: inherit

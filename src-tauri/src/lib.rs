@@ -8,6 +8,7 @@ mod catalog;
 pub mod cli;
 mod clipboard;
 mod commands;
+pub mod follow_stream;
 mod helpers;
 mod input;
 mod llm_client;
@@ -19,13 +20,25 @@ pub mod portable;
 mod secure_input;
 mod settings;
 mod shortcut;
+pub mod shorthand;
 mod signal_handle;
+// Compiled on every platform, not just macOS, so the pure status mapping keeps
+// its unit tests on Windows and Linux — the FFI inside is the part nothing off
+// macOS can check, so the little that can be checked should be. Its callers are
+// all behind both gates, which leaves it dead code on every other target and on
+// macOS with the SPI feature off — the escape-hatch build nobody makes by
+// accident, and so exactly the one that would rot unnoticed.
+#[cfg_attr(
+    not(all(target_os = "macos", feature = "macos-tcc-spi")),
+    allow(dead_code)
+)]
+mod system_audio_permission;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
 mod utils;
 
-pub use cli::CliArgs;
+pub use cli::{CliArgs, FollowStreamMode};
 #[cfg(debug_assertions)]
 use specta_typescript::{BigIntExportBehavior, Typescript};
 use tauri_specta::{collect_commands, collect_events, Builder};
@@ -34,7 +47,11 @@ use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
-use managers::transcription::TranscriptionManager;
+use managers::transcription::SystemAudioTranscription;
+use managers::transcription::{
+    transcription_managers, ActiveStreamManagers, StreamSource, StreamTranscriptMerger,
+    TranscriptionManager,
+};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::image::Image;
@@ -158,15 +175,68 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     let model_manager =
         Arc::new(ModelManager::new(app_handle).expect("Failed to initialize model manager"));
     let transcription_manager = Arc::new(
-        TranscriptionManager::new(app_handle, model_manager.clone())
+        TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::Mic)
             .expect("Failed to initialize transcription manager"),
     );
+    // `mut` is load-bearing only for the Linux normalisation directly below.
+    // That block is compiled out everywhere else, leaving a binding that is
+    // never reassigned -- which `unused_mut` rejects under `-D warnings`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut initial_settings = settings::get_settings(app_handle);
+    // Linux has no ALSA-loopback fallback. If neither supported sound-server
+    // backend can be opened at startup, persist the same disabled state that
+    // the managers below will observe; do not write a clone after constructing
+    // them and leave the live process using stale enabled settings.
+    #[cfg(target_os = "linux")]
+    if crate::audio_toolkit::get_system_audio_host().is_none()
+        && (initial_settings.system_audio_enabled
+            || initial_settings.dictation.system_audio_enabled)
+    {
+        log::warn!("No supported Linux system-audio server is available; disabling system audio");
+        initial_settings.system_audio_enabled = false;
+        initial_settings.dictation.system_audio_enabled = false;
+        settings::write_settings(app_handle, initial_settings.clone());
+    }
+    // Meetings and Dictation each own a system-audio preference over one
+    // shared lane. Construct it when either wants it, so the active mode can
+    // select it at hotkey time; model loading remains lazy inside
+    // TranscriptionManager. Constructing it unconditionally would start its
+    // idle-watcher thread on every platform for every user, and the router it
+    // hands the recording manager is also what makes every recorder allocate a
+    // second Silero session. `ensure_system_audio_transcription` builds it
+    // later if the user turns the lane on.
+    let system_audio_transcription =
+        if commands::audio::system_audio_lane_required(&initial_settings) {
+            Some(Arc::new(
+                TranscriptionManager::new(app_handle, model_manager.clone(), StreamSource::System)
+                    .expect("Failed to initialize system audio transcription manager"),
+            ))
+        } else {
+            None
+        };
     let recording_manager = Arc::new(
-        AudioRecordingManager::new(app_handle, transcription_manager.stream_router())
-            .expect("Failed to initialize recording manager"),
+        AudioRecordingManager::new(
+            app_handle,
+            transcription_manager.stream_router(),
+            system_audio_transcription
+                .as_ref()
+                .map(|manager| manager.stream_router()),
+        )
+        .expect("Failed to initialize recording manager"),
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
+    // Retention normally runs as a side effect of save_entry, so it only ever
+    // fires while something is being saved. Turning save_recordings and
+    // save_transcripts off (the default) stops save_entry being reached at
+    // all — which means anything already on disk from a period when they were
+    // on would sit frozen forever, never aging out. Run cleanup once at
+    // startup so the retention policy still applies to an existing backlog
+    // while nothing new is being written. A cleanup failure must never
+    // prevent the app from starting.
+    if let Err(err) = history_manager.cleanup_old_entries() {
+        log::error!("Failed to run startup history cleanup: {}", err);
+    }
 
     // Initialize the transcribe-cpp native backend (logging + backend module
     // registration) once, before any whisper model is loaded.
@@ -178,9 +248,38 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // Add managers to Tauri's managed state
     app_handle.manage(recording_manager.clone());
     app_handle.manage(model_manager.clone());
+    app_handle.manage(StreamTranscriptMerger::default());
+    let follow_stream_hub = Arc::new(follow_stream::FollowStreamHub::default());
+    app_handle.manage(Arc::clone(&follow_stream_hub));
+    app_handle.manage(follow_stream::FollowStreamServer::default());
+    app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
+    app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
+        system_audio_transcription,
+    )));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
+
+    if follow_stream::listener_required(&initial_settings) {
+        let startup_app = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let server = startup_app.state::<follow_stream::FollowStreamServer>();
+            let _lifecycle_guard = server.lock_lifecycle().await;
+            // Re-read after acquiring the lifecycle lock so a settings command
+            // that won the race can cancel this queued startup attempt.
+            if !follow_stream::listener_required(&settings::get_settings(&startup_app)) {
+                return;
+            }
+
+            if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
+                log::error!("Failed to start configured follow-stream listener: {error}");
+                // No single toggle owns the listener any more — Meeting,
+                // Dictation, and Assisted Notes can all request it — so there
+                // is no truthful rollback beyond leaving every stored
+                // preference exactly as the user set it.
+            }
+        });
+    }
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -270,15 +369,18 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 tray::copy_last_transcript(app);
             }
             "unload_model" => {
-                let transcription_manager = app.state::<Arc<TranscriptionManager>>();
-                if !transcription_manager.is_model_loaded() {
+                let managers = transcription_managers(app);
+                if !managers.iter().any(|manager| manager.is_model_loaded()) {
                     log::warn!("No model is currently loaded.");
                     return;
                 }
-                match transcription_manager.unload_model() {
-                    Ok(()) => log::info!("Model unloaded via tray."),
-                    Err(e) => log::error!("Failed to unload model via tray: {}", e),
+                for manager in managers {
+                    if let Err(e) = manager.unload_model() {
+                        log::error!("Failed to unload model via tray: {}", e);
+                        return;
+                    }
                 }
+                log::info!("Model unloaded via tray.");
             }
             "cancel" => {
                 use crate::utils::cancel_current_operation;
@@ -376,21 +478,6 @@ where
             eprintln!("error: headless transcription panicked: {message}");
             1
         }
-    }
-}
-
-#[cfg(test)]
-mod headless_guard_tests {
-    use super::run_headless_guarded;
-
-    #[test]
-    fn preserves_normal_exit_codes() {
-        assert_eq!(run_headless_guarded(|| 2), 2);
-    }
-
-    #[test]
-    fn converts_worker_panics_to_runtime_failures() {
-        assert_eq!(run_headless_guarded(|| panic!("simulated failure")), 1);
     }
 }
 
@@ -668,6 +755,11 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_keyboard_implementation_setting,
             shortcut::get_keyboard_implementation,
             shortcut::change_show_tray_icon_setting,
+            shortcut::change_show_all_settings_setting,
+            shortcut::change_save_recordings_setting,
+            shortcut::change_save_transcripts_setting,
+            shortcut::change_dictation_settings,
+            shortcut::change_assisted_notes_settings,
             shortcut::change_transcribe_accelerator_setting,
             shortcut::change_ort_accelerator_setting,
             shortcut::change_transcribe_gpu_device,
@@ -683,6 +775,7 @@ pub fn run(cli_args: CliArgs) {
             commands::get_app_dir_path,
             commands::get_app_settings,
             commands::get_default_settings,
+            commands::change_follow_stream_enabled_setting,
             commands::get_log_dir_path,
             commands::set_log_level,
             commands::open_recordings_folder,
@@ -705,6 +798,7 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::get_microphone_mode,
             commands::audio::get_windows_microphone_permission_status,
             commands::audio::open_microphone_privacy_settings,
+            commands::audio::open_system_audio_privacy_settings,
             commands::audio::get_available_microphones,
             commands::audio::set_selected_microphone,
             commands::audio::get_selected_microphone,
@@ -718,6 +812,11 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::is_recording,
             commands::audio::get_microphone_channels,
             commands::audio::set_selected_channel,
+            commands::audio::get_system_audio_availability,
+            commands::audio::get_available_system_audio_devices,
+            commands::audio::change_system_audio_enabled_setting,
+            commands::audio::change_dictation_system_audio_enabled_setting,
+            commands::audio::set_system_audio_device,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,
@@ -821,6 +920,21 @@ pub fn run(cli_args: CliArgs) {
                 signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
             } else if args.iter().any(|a| a == "--cancel") {
                 crate::utils::cancel_current_operation(app);
+            } else if args.iter().any(|a| a == "--toggle-assisted-notes") {
+                // Unlike the two meeting flags, this one names a mode the user can
+                // have switched off. Firing it anyway would start a capture that
+                // `apply_mode` resolves straight back to meeting settings —
+                // including meeting's system-audio toggle — under a name that
+                // promises the opposite. The forwarding process has already
+                // exited by the time this runs, so its exit code cannot report
+                // this refusal. Raise the app as a courtesy; the follower-side
+                // bounded acknowledgement is the actual failure signal.
+                if settings::get_settings(app).assisted_notes.enabled {
+                    signal_handle::send_transcription_input(app, "assisted_notes", "CLI");
+                } else {
+                    log::warn!("--toggle-assisted-notes ignored: Assisted Notes is not enabled");
+                    show_main_window(app);
+                }
             } else {
                 // A second process was launched without remote-control flags
                 // (e.g. the binary run from a shell). On macOS, relaunching the
@@ -866,10 +980,16 @@ pub fn run(cli_args: CliArgs) {
                     ModelManager::new(&app_handle).expect("Failed to initialize model manager"),
                 );
                 let transcription_manager = Arc::new(
-                    TranscriptionManager::new(&app_handle, model_manager.clone())
-                        .expect("Failed to initialize transcription manager"),
+                    TranscriptionManager::new(
+                        &app_handle,
+                        model_manager.clone(),
+                        StreamSource::Mic,
+                    )
+                    .expect("Failed to initialize transcription manager"),
                 );
                 app_handle.manage(model_manager);
+                app_handle.manage(StreamTranscriptMerger::default());
+                app_handle.manage(ActiveStreamManagers::default());
                 app_handle.manage(transcription_manager);
                 managers::transcription::init_transcribe_backend();
                 managers::transcription::apply_accelerator_settings(&app_handle);
@@ -881,7 +1001,7 @@ pub fn run(cli_args: CliArgs) {
                     // Drop the loaded engine before teardown: ggml-metal's global
                     // device free asserts (SIGABRT) if a model's Metal resources
                     // are still alive at C++ static-destructor time.
-                    if let Some(tm) = handle.try_state::<Arc<TranscriptionManager>>() {
+                    for tm in transcription_managers(&handle) {
                         let _ = tm.unload_model();
                     }
                     // process::exit (not app.exit, which exits 0 regardless) so the
@@ -899,7 +1019,7 @@ pub fn run(cli_args: CliArgs) {
             // for portable mode (redirects WebView2 cache to portable Data dir)
             let mut win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
-                    .title("Handy")
+                    .title("Shorthand")
                     .inner_size(680.0, 570.0)
                     .min_inner_size(680.0, 570.0)
                     .resizable(true)
@@ -944,14 +1064,6 @@ pub fn run(cli_args: CliArgs) {
             // silently blocks keyed shortcuts, warns the user, and activates
             // the Carbon fallback. See secure_input.rs and issue #1578.
             secure_input::init(&app_handle);
-
-            // Populate the overlay-enabled cache from initial settings so the
-            // audio path (overlay::emit_levels, called ~24 Hz during recording)
-            // can do a single atomic load instead of reading the Tauri store.
-            // Kept in sync by shortcut::change_overlay_style_setting.
-            overlay::update_overlay_enabled_cache(
-                settings.overlay_style != settings::OverlayStyle::None,
-            );
 
             // Pre-warm GPU/accelerator enumeration on a background thread. The first
             // get_available_accelerators call enumerates ORT execution providers and
@@ -1034,10 +1146,30 @@ pub fn run(cli_args: CliArgs) {
             }
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
-                if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
+                if let Some(hub) = follow_stream::hub(app) {
+                    // Best-effort terminal event: server teardown aborts follower
+                    // tasks, so a follower may observe EOF instead of this cancel.
+                    hub.cancel();
+                }
+                for tm in transcription_managers(app) {
                     let _ = tm.unload_model();
                 }
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod headless_guard_tests {
+    use super::run_headless_guarded;
+
+    #[test]
+    fn preserves_normal_exit_codes() {
+        assert_eq!(run_headless_guarded(|| 2), 2);
+    }
+
+    #[test]
+    fn converts_worker_panics_to_runtime_failures() {
+        assert_eq!(run_headless_guarded(|| panic!("simulated failure")), 1);
+    }
 }

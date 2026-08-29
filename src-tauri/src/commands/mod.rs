@@ -43,6 +43,31 @@ pub fn get_default_settings() -> Result<AppSettings, String> {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn change_follow_stream_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    // `enabled` is Meeting's own publication preference, not a listener
+    // on/off switch: an enabled Dictation or Assisted Notes mode can still
+    // need the shared listener after this turns Meeting's publication off,
+    // and `reconcile` is what keeps it running for them. See
+    // `follow_stream::lifecycle`.
+    let mut settings = get_settings(&app);
+    settings.follow_stream_enabled = enabled;
+
+    let server = app.state::<crate::follow_stream::FollowStreamServer>();
+    let hub = crate::follow_stream::hub(&app)
+        .ok_or_else(|| "Follow-stream hub is unavailable".to_string())?;
+    crate::follow_stream::reconcile(&app, &server, hub, &settings).await?;
+
+    // Persist only after the listener transition succeeds so the stored
+    // toggle always describes the server state that was actually applied.
+    write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_log_dir_path(app: AppHandle) -> Result<String, String> {
     let log_dir = crate::portable::app_log_dir(&app)
         .map_err(|e| format!("Failed to get log directory: {}", e))?;

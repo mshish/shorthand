@@ -25,8 +25,13 @@ jobs:
           # libvulkan-dev + glslc + spirv-headers let transcribe-cpp-sys build
           # ggml's Vulkan backend (the Linux `vulkan` feature). Mirrors the apt
           # set transcribe.cpp's native-ci uses to build -DTRANSCRIBE_VULKAN=ON.
+          #
+          # libpipewire-0.3-dev is required by libspa-sys, pulled in by cpal's
+          # `pipewire` feature -- the fork's Linux system-audio capture. build.yml
+          # already installs it on every Ubuntu runner; this job did not, so it
+          # failed in that build script before compiling a line of our code.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libssl-dev libgtk-layer-shell-dev \
-            libvulkan-dev glslc spirv-headers
+            libpipewire-0.3-dev libvulkan-dev glslc spirv-headers
 
       - uses: swatinem/rust-cache@v2
         with:

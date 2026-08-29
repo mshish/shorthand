@@ -1,0 +1,558 @@
+//! Dictation-mode settings and the per-mode field resolver. See
+//! docs/superpowers/specs/2026-08-20-shorthand-dictation-mode-design.md.
+
+use super::mode::{self, Mode};
+use crate::settings::{
+    AppSettings, AutoSubmitKey, ClipboardHandling, OverlayStyle, PasteMethod, TypingTool,
+};
+use serde::{Deserialize, Serialize};
+use specta::Type;
+use tauri::AppHandle;
+
+/// Dictation's own copy of settings meeting mode also has, so enabling or
+/// configuring dictation never touches a meeting-mode value. See "Per-mode
+/// and shared settings" in the design doc for which fields live here versus
+/// staying shared on `AppSettings`.
+#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+#[serde(default)]
+pub struct DictationSettings {
+    pub enabled: bool,
+    pub push_to_talk: bool,
+    pub paste_method: PasteMethod,
+    pub clipboard_handling: ClipboardHandling,
+    pub auto_submit: bool,
+    pub auto_submit_key: AutoSubmitKey,
+    pub append_trailing_space: bool,
+    pub typing_tool: TypingTool,
+    pub overlay_style: OverlayStyle,
+    pub save_recordings: bool,
+    pub save_transcripts: bool,
+    pub post_process_enabled: bool,
+    pub post_process_selected_prompt_id: Option<String>,
+    /// Whether dictation also captures system audio. Meetings and dictation
+    /// want opposite answers often enough that one shared switch was wrong:
+    /// a meeting usually wants the other participants, and dictation almost
+    /// never wants whatever is playing.
+    ///
+    /// The *device* stays shared on `AppSettings` — which loopback endpoint
+    /// exists is a fact about the machine, not a preference about the mode.
+    pub system_audio_enabled: bool,
+    /// Whether this mode's transcript is published to `--follow-stream`
+    /// followers. Meetings default this on, because streaming a meeting to a
+    /// note-taker is the fork's whole reason to exist; dictation defaults it
+    /// off, because text going into the focused window has already arrived
+    /// where it was wanted.
+    pub follow_stream_enabled: bool,
+    /// Which post-processing provider this mode uses. Long meeting transcripts
+    /// and two-second dictations do not want the same model.
+    pub post_process_provider_id: String,
+    /// The model, when this mode wants one other than the provider's shared
+    /// choice. `None` falls back to `AppSettings::post_process_models`, so a
+    /// user who never sets it per mode sees no change in behaviour.
+    pub post_process_model: Option<String>,
+}
+
+impl Default for DictationSettings {
+    // `PasteMethod`'s own `#[default]` is `None` (see settings.rs) because
+    // this fork delivers meeting transcripts to follower processes instead
+    // of the focused window. Dictation is the opposite: pasting into the
+    // focused window is the entire feature, so it must NOT inherit that
+    // default — it needs Handy's original per-platform choice. Do not
+    // collapse this back into a derived `Default`; that would silently
+    // reintroduce `PasteMethod::None` here.
+    fn default() -> Self {
+        #[cfg(target_os = "linux")]
+        let paste_method = PasteMethod::Direct;
+        #[cfg(not(target_os = "linux"))]
+        let paste_method = PasteMethod::CtrlV;
+
+        Self {
+            enabled: false,
+            // Meetings run an hour and are toggled; dictation is seconds and
+            // is held.
+            push_to_talk: true,
+            paste_method,
+            clipboard_handling: ClipboardHandling::default(),
+            auto_submit: false,
+            auto_submit_key: AutoSubmitKey::default(),
+            append_trailing_space: false,
+            typing_tool: TypingTool::default(),
+            // The compact pill, not a live-transcript panel over the text
+            // field being dictated into.
+            overlay_style: OverlayStyle::Minimal,
+            // Dictation keeps its own audio and text by default. Meeting's
+            // top-level defaults stay off because a meeting recording can
+            // include other participants.
+            save_recordings: true,
+            save_transcripts: true,
+            post_process_enabled: false,
+            post_process_selected_prompt_id: None,
+            // Dictation types into the focused window; whatever is playing
+            // through the speakers is not part of what the user is saying.
+            system_audio_enabled: false,
+            // The text has already been delivered where it was wanted.
+            follow_stream_enabled: false,
+            post_process_provider_id: crate::settings::default_post_process_provider_id(),
+            post_process_model: None,
+        }
+    }
+}
+
+/// Whether push-to-talk applies to `binding_id`'s capture. Read at dispatch
+/// time in `shortcut::handler::handle_shortcut_event`, before
+/// `TranscribeAction::start` runs — so, unlike every other resolver in this
+/// module, it cannot go through the mode cell (`mode::active` isn't updated
+/// for this press yet). It derives the mode from `binding_id` directly
+/// instead, the same way `mode::set_active` will a moment later.
+pub fn resolve_push_to_talk(settings: &AppSettings, binding_id: &str) -> bool {
+    match mode::mode_for_binding(binding_id) {
+        Mode::Dictation => settings.dictation.push_to_talk,
+        Mode::AssistedNotes => settings.assisted_notes.push_to_talk,
+        Mode::Meeting => settings.push_to_talk,
+    }
+}
+
+/// Pure and unit-testable. Returns `settings` unchanged for `Mode::Meeting`;
+/// for `Mode::Dictation` or `Mode::AssistedNotes` returns a copy with the
+/// per-mode fields overridden from `settings.dictation` or
+/// `settings.assisted_notes` respectively. Because this returns a full
+/// `AppSettings`, its callers (`clipboard::paste`, `overlay::show_overlay_state`,
+/// and the reads in `actions.rs`) each change one line — `get_settings(x)`
+/// becomes `resolve_settings(x)` — instead of taking a narrower struct that
+/// would force real edits into their bodies.
+pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
+    match mode {
+        Mode::Meeting => settings,
+        // Defence in depth: even if a `dictate*` binding somehow gets
+        // registered while dictation is off (see the fix for the
+        // GlobalShortcutInput/HandyKeysShortcutInput disabled-row bug), a
+        // capture it starts must still behave exactly like meeting mode
+        // rather than delivering through dictation's paste method.
+        Mode::Dictation if !settings.dictation.enabled => settings,
+        Mode::Dictation => {
+            let dictation = settings.dictation.clone();
+            AppSettings {
+                push_to_talk: dictation.push_to_talk,
+                paste_method: dictation.paste_method,
+                clipboard_handling: dictation.clipboard_handling,
+                auto_submit: dictation.auto_submit,
+                auto_submit_key: dictation.auto_submit_key,
+                append_trailing_space: dictation.append_trailing_space,
+                typing_tool: dictation.typing_tool,
+                overlay_style: dictation.overlay_style,
+                save_recordings: dictation.save_recordings,
+                save_transcripts: dictation.save_transcripts,
+                post_process_enabled: dictation.post_process_enabled,
+                post_process_selected_prompt_id: dictation.post_process_selected_prompt_id,
+                system_audio_enabled: dictation.system_audio_enabled,
+                follow_stream_enabled: dictation.follow_stream_enabled,
+                post_process_provider_id: dictation.post_process_provider_id.clone(),
+                // The per-mode model is expressed as an override *into* the
+                // shared provider->model map rather than as a separate lookup,
+                // so every existing read of `post_process_models` keeps working
+                // untouched. `None` leaves the map exactly as it was.
+                post_process_models: {
+                    let mut models = settings.post_process_models.clone();
+                    if let Some(model) = dictation.post_process_model.clone() {
+                        models.insert(dictation.post_process_provider_id.clone(), model);
+                    }
+                    models
+                },
+                ..settings
+            }
+        }
+        // Defence in depth, exactly as for dictation: a binding registered while the
+        // mode is off must still behave like meeting mode rather than half like a
+        // mode the user has not switched on.
+        Mode::AssistedNotes if !settings.assisted_notes.enabled => settings,
+        Mode::AssistedNotes => {
+            let assisted = settings.assisted_notes.clone();
+            AppSettings {
+                push_to_talk: assisted.push_to_talk,
+                // Not a field on AssistedNotesSettings. Delivering to follower
+                // processes instead of the focused window is what *defines* this
+                // mode, so "never paste" is an invariant of the mode rather than a
+                // preference inside it. The top-level value is meeting mode's
+                // Advanced escape hatch; a user who flipped it there must not
+                // thereby make assisted notes type into whatever window has focus.
+                paste_method: PasteMethod::None,
+                clipboard_handling: assisted.clipboard_handling,
+                append_trailing_space: assisted.append_trailing_space,
+                overlay_style: assisted.overlay_style,
+                save_recordings: assisted.save_recordings,
+                save_transcripts: assisted.save_transcripts,
+                post_process_enabled: assisted.post_process_enabled,
+                post_process_selected_prompt_id: assisted.post_process_selected_prompt_id,
+                // Solo capture is a mode invariant, not a preference. Meeting's
+                // system-audio setting must never leak into Assisted Notes.
+                system_audio_enabled: false,
+                follow_stream_enabled: assisted.follow_stream_enabled,
+                post_process_provider_id: assisted.post_process_provider_id.clone(),
+                post_process_models: {
+                    let mut models = settings.post_process_models.clone();
+                    if let Some(model) = assisted.post_process_model.clone() {
+                        models.insert(assisted.post_process_provider_id.clone(), model);
+                    }
+                    models
+                },
+                ..settings
+            }
+        }
+    }
+}
+
+/// `apply_mode(get_settings(app), mode::active(app))` — the one call every
+/// per-mode resolver in the upstream call sites makes.
+pub fn resolve_settings(app: &AppHandle) -> AppSettings {
+    apply_mode(crate::settings::get_settings(app), mode::active(app))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shorthand::assisted_notes::AssistedNotesSettings;
+
+    #[test]
+    fn note_producing_modes_save_by_default() {
+        assert!(DictationSettings::default().save_recordings);
+        assert!(DictationSettings::default().save_transcripts);
+        assert!(AssistedNotesSettings::default().save_recordings);
+        assert!(AssistedNotesSettings::default().save_transcripts);
+        // Meeting is deliberately not part of this change.
+        let settings = crate::settings::get_default_settings();
+        assert!(!settings.save_recordings);
+        assert!(!settings.save_transcripts);
+    }
+
+    #[test]
+    fn default_paste_method_is_not_none() {
+        assert_ne!(DictationSettings::default().paste_method, PasteMethod::None);
+    }
+
+    #[test]
+    fn resolve_push_to_talk_reads_the_matching_mode_field() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.push_to_talk = false;
+        settings.dictation.push_to_talk = true;
+
+        assert!(!resolve_push_to_talk(&settings, "transcribe"));
+        assert!(!resolve_push_to_talk(&settings, "cancel"));
+        assert!(resolve_push_to_talk(&settings, "dictate"));
+        assert!(resolve_push_to_talk(&settings, "dictate_with_post_process"));
+
+        settings.assisted_notes.push_to_talk = false;
+        assert!(!resolve_push_to_talk(&settings, "assisted_notes"));
+        assert!(!resolve_push_to_talk(
+            &settings,
+            "assisted_notes_with_post_process"
+        ));
+    }
+
+    #[test]
+    fn apply_mode_leaves_every_field_unchanged_for_meeting() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.push_to_talk = false;
+        settings.paste_method = PasteMethod::CtrlV;
+        settings.clipboard_handling = ClipboardHandling::CopyToClipboard;
+        settings.auto_submit = true;
+        settings.auto_submit_key = AutoSubmitKey::CtrlEnter;
+        settings.append_trailing_space = true;
+        settings.typing_tool = TypingTool::Wtype;
+        settings.overlay_style = OverlayStyle::Live;
+        settings.save_recordings = true;
+        settings.save_transcripts = true;
+        settings.post_process_enabled = true;
+        settings.post_process_selected_prompt_id = Some("meeting-prompt".to_string());
+
+        // Deliberately different from every field above, so a leak from
+        // `dictation` into the Meeting-mode result would be visible.
+        settings.dictation.push_to_talk = false;
+        settings.dictation.paste_method = PasteMethod::None;
+        settings.dictation.clipboard_handling = ClipboardHandling::DontModify;
+        settings.dictation.auto_submit = false;
+        settings.dictation.auto_submit_key = AutoSubmitKey::Enter;
+        settings.dictation.append_trailing_space = false;
+        settings.dictation.typing_tool = TypingTool::Auto;
+        settings.dictation.overlay_style = OverlayStyle::Minimal;
+        settings.dictation.save_recordings = false;
+        settings.dictation.save_transcripts = false;
+        settings.dictation.post_process_enabled = false;
+        settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
+
+        settings.system_audio_enabled = true;
+        settings.follow_stream_enabled = true;
+        settings.post_process_provider_id = "meeting-provider".to_string();
+        settings.dictation.system_audio_enabled = false;
+        settings.dictation.follow_stream_enabled = false;
+        settings.dictation.post_process_provider_id = "dictation-provider".to_string();
+        settings.dictation.post_process_model = Some("dictation-model".to_string());
+
+        // Deliberately different from every top-level field above, so a leak
+        // from `assisted_notes` into the Meeting-mode result would be visible.
+        settings.assisted_notes.push_to_talk = true;
+        settings.assisted_notes.clipboard_handling = ClipboardHandling::DontModify;
+        settings.assisted_notes.append_trailing_space = true;
+        settings.assisted_notes.overlay_style = OverlayStyle::Live;
+        settings.assisted_notes.save_recordings = false;
+        settings.assisted_notes.save_transcripts = false;
+        settings.assisted_notes.post_process_enabled = false;
+        settings.assisted_notes.post_process_selected_prompt_id =
+            Some("assisted-notes-prompt".to_string());
+        settings.assisted_notes.follow_stream_enabled = false;
+        settings.assisted_notes.post_process_provider_id = "assisted-notes-provider".to_string();
+        settings.assisted_notes.post_process_model = Some("assisted-notes-model".to_string());
+
+        let result = apply_mode(settings, Mode::Meeting);
+
+        assert!(!result.push_to_talk);
+        assert_eq!(result.paste_method, PasteMethod::CtrlV);
+        assert_eq!(
+            result.clipboard_handling,
+            ClipboardHandling::CopyToClipboard
+        );
+        assert!(result.auto_submit);
+        assert_eq!(result.auto_submit_key, AutoSubmitKey::CtrlEnter);
+        assert!(result.append_trailing_space);
+        assert_eq!(result.typing_tool, TypingTool::Wtype);
+        assert_eq!(result.overlay_style, OverlayStyle::Live);
+        assert!(result.save_recordings);
+        assert!(result.save_transcripts);
+        assert!(result.post_process_enabled);
+        assert!(result.system_audio_enabled);
+        assert!(result.follow_stream_enabled);
+        assert_eq!(result.post_process_provider_id, "meeting-provider");
+        // The dictation model override must not reach the shared map.
+        assert_eq!(result.post_process_models.get("dictation-provider"), None);
+        assert_eq!(
+            result.post_process_selected_prompt_id,
+            Some("meeting-prompt".to_string())
+        );
+        // The assisted-notes model override must not reach the shared map either.
+        assert_eq!(
+            result.post_process_models.get("assisted-notes-provider"),
+            None
+        );
+    }
+
+    #[test]
+    fn apply_mode_overrides_every_per_mode_field_for_dictation() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.dictation.enabled = true;
+        settings.selected_model = "whisper-large-v3-turbo".to_string();
+        settings.push_to_talk = false;
+        settings.paste_method = PasteMethod::None;
+        settings.clipboard_handling = ClipboardHandling::DontModify;
+        settings.auto_submit = false;
+        settings.auto_submit_key = AutoSubmitKey::Enter;
+        settings.append_trailing_space = false;
+        settings.typing_tool = TypingTool::Auto;
+        settings.overlay_style = OverlayStyle::None;
+        settings.save_recordings = false;
+        settings.save_transcripts = false;
+        settings.post_process_enabled = false;
+        settings.post_process_selected_prompt_id = None;
+
+        settings.dictation.push_to_talk = true;
+        settings.dictation.paste_method = PasteMethod::CtrlV;
+        settings.dictation.clipboard_handling = ClipboardHandling::CopyToClipboard;
+        settings.dictation.auto_submit = true;
+        settings.dictation.auto_submit_key = AutoSubmitKey::CmdEnter;
+        settings.dictation.append_trailing_space = true;
+        settings.dictation.typing_tool = TypingTool::Ydotool;
+        settings.dictation.overlay_style = OverlayStyle::Minimal;
+        settings.dictation.save_recordings = true;
+        settings.dictation.save_transcripts = true;
+        settings.dictation.post_process_enabled = true;
+        settings.dictation.post_process_selected_prompt_id = Some("dictation-prompt".to_string());
+
+        settings.system_audio_enabled = false;
+        settings.follow_stream_enabled = false;
+        settings.post_process_provider_id = "meeting-provider".to_string();
+        settings.dictation.system_audio_enabled = true;
+        settings.dictation.follow_stream_enabled = true;
+        settings.dictation.post_process_provider_id = "dictation-provider".to_string();
+        settings.dictation.post_process_model = Some("dictation-model".to_string());
+
+        // Distinct assisted-notes values that must not leak into a dictation result.
+        settings.assisted_notes.push_to_talk = true;
+        settings.assisted_notes.overlay_style = OverlayStyle::Live;
+        settings.assisted_notes.follow_stream_enabled = true;
+        settings.assisted_notes.post_process_provider_id = "assisted-notes-provider".to_string();
+        settings.assisted_notes.post_process_model = Some("assisted-notes-model".to_string());
+
+        let result = apply_mode(settings, Mode::Dictation);
+
+        assert!(result.push_to_talk);
+        assert_eq!(result.paste_method, PasteMethod::CtrlV);
+        assert_eq!(
+            result.clipboard_handling,
+            ClipboardHandling::CopyToClipboard
+        );
+        assert!(result.auto_submit);
+        assert_eq!(result.auto_submit_key, AutoSubmitKey::CmdEnter);
+        assert!(result.append_trailing_space);
+        assert_eq!(result.typing_tool, TypingTool::Ydotool);
+        assert_eq!(result.overlay_style, OverlayStyle::Minimal);
+        assert!(result.save_recordings);
+        assert!(result.save_transcripts);
+        assert!(result.post_process_enabled);
+        assert_eq!(
+            result.post_process_selected_prompt_id,
+            Some("dictation-prompt".to_string())
+        );
+        assert!(result.system_audio_enabled);
+        assert!(result.follow_stream_enabled);
+        assert_eq!(result.post_process_provider_id, "dictation-provider");
+        // The per-mode model is expressed as an override into the shared
+        // provider->model map, so the resolved settings read it through the
+        // ordinary lookup rather than a second code path.
+        assert_eq!(
+            result
+                .post_process_models
+                .get("dictation-provider")
+                .map(String::as_str),
+            Some("dictation-model")
+        );
+        // The assisted-notes model override must not reach the shared map.
+        assert_eq!(
+            result.post_process_models.get("assisted-notes-provider"),
+            None
+        );
+        // A field `apply_mode` does not own must survive from the base settings.
+        assert_eq!(result.selected_model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn apply_mode_overrides_every_per_mode_field_for_assisted_notes() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.assisted_notes.enabled = true;
+        settings.selected_model = "whisper-large-v3-turbo".to_string();
+        settings.push_to_talk = true;
+        settings.paste_method = PasteMethod::CtrlV;
+        settings.clipboard_handling = ClipboardHandling::DontModify;
+        settings.append_trailing_space = false;
+        settings.overlay_style = OverlayStyle::None;
+        settings.save_recordings = false;
+        settings.save_transcripts = false;
+        settings.post_process_enabled = false;
+        settings.post_process_selected_prompt_id = None;
+
+        settings.assisted_notes.push_to_talk = false;
+        settings.assisted_notes.clipboard_handling = ClipboardHandling::CopyToClipboard;
+        settings.assisted_notes.append_trailing_space = true;
+        settings.assisted_notes.overlay_style = OverlayStyle::Minimal;
+        settings.assisted_notes.save_recordings = true;
+        settings.assisted_notes.save_transcripts = true;
+        settings.assisted_notes.post_process_enabled = true;
+        settings.assisted_notes.post_process_selected_prompt_id =
+            Some("assisted-notes-prompt".to_string());
+
+        settings.system_audio_enabled = true;
+        settings.follow_stream_enabled = false;
+        settings.post_process_provider_id = "meeting-provider".to_string();
+        settings.assisted_notes.follow_stream_enabled = true;
+        settings.assisted_notes.post_process_provider_id = "assisted-notes-provider".to_string();
+        settings.assisted_notes.post_process_model = Some("assisted-notes-model".to_string());
+
+        let result = apply_mode(settings, Mode::AssistedNotes);
+
+        assert!(!result.push_to_talk);
+        // Never pastes, regardless of the top-level Advanced escape hatch.
+        assert_eq!(result.paste_method, PasteMethod::None);
+        assert_eq!(
+            result.clipboard_handling,
+            ClipboardHandling::CopyToClipboard
+        );
+        assert!(result.append_trailing_space);
+        assert_eq!(result.overlay_style, OverlayStyle::Minimal);
+        assert!(result.save_recordings);
+        assert!(result.save_transcripts);
+        assert!(result.post_process_enabled);
+        assert_eq!(
+            result.post_process_selected_prompt_id,
+            Some("assisted-notes-prompt".to_string())
+        );
+        // Solo capture is a mode invariant: never system audio, regardless of
+        // the top-level meeting setting.
+        assert!(!result.system_audio_enabled);
+        assert!(result.follow_stream_enabled);
+        assert_eq!(result.post_process_provider_id, "assisted-notes-provider");
+        assert_eq!(
+            result
+                .post_process_models
+                .get("assisted-notes-provider")
+                .map(String::as_str),
+            Some("assisted-notes-model")
+        );
+        // A field `apply_mode` does not own must survive from the base settings.
+        assert_eq!(result.selected_model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn assisted_notes_never_pastes() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.paste_method = PasteMethod::CtrlV;
+        settings.assisted_notes.enabled = true;
+
+        let result = apply_mode(settings, Mode::AssistedNotes);
+
+        assert_eq!(result.paste_method, PasteMethod::None);
+    }
+
+    #[test]
+    fn assisted_notes_never_captures_system_audio() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.system_audio_enabled = true;
+        settings.assisted_notes.enabled = true;
+
+        let result = apply_mode(settings, Mode::AssistedNotes);
+
+        assert!(!result.system_audio_enabled);
+    }
+
+    #[test]
+    fn apply_mode_leaves_settings_unchanged_for_assisted_notes_when_disabled() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.assisted_notes.enabled = false;
+        // Give the per-mode fields values that would visibly leak through
+        // the meeting-mode fields below if the `enabled` guard were skipped.
+        settings.paste_method = PasteMethod::None;
+        settings.overlay_style = OverlayStyle::Live;
+        settings.assisted_notes.overlay_style = OverlayStyle::Minimal;
+
+        let before = serde_json::to_value(&settings).expect("settings must serialize");
+        let result = apply_mode(settings, Mode::AssistedNotes);
+        let after = serde_json::to_value(&result).expect("settings must serialize");
+
+        assert_eq!(
+            after, before,
+            "apply_mode must return settings unchanged for Mode::AssistedNotes while assisted_notes.enabled is false"
+        );
+    }
+
+    #[test]
+    fn apply_mode_leaves_settings_unchanged_for_dictation_when_disabled() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.dictation.enabled = false;
+        // Give the per-mode fields values that would visibly leak through
+        // the meeting-mode fields below if the `enabled` guard were skipped.
+        settings.paste_method = PasteMethod::None;
+        settings.overlay_style = OverlayStyle::Live;
+        settings.dictation.paste_method = PasteMethod::CtrlV;
+        settings.dictation.overlay_style = OverlayStyle::Minimal;
+
+        // AppSettings has no PartialEq (deriving it would ripple into every
+        // nested type upstream owns), so compare via serialization instead
+        // of a literal `==` — this is exactly the "unchanged" assertion the
+        // design calls for, just expressed without adding a trait bound to
+        // an upstream struct.
+        let before = serde_json::to_value(&settings).expect("settings must serialize");
+        let result = apply_mode(settings, Mode::Dictation);
+        let after = serde_json::to_value(&result).expect("settings must serialize");
+
+        assert_eq!(
+            after, before,
+            "apply_mode must return settings unchanged for Mode::Dictation while dictation.enabled is false"
+        );
+    }
+}

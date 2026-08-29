@@ -8,8 +8,14 @@
     # replacing the old FOD approach where a single hash covered the entire
     # node_modules directory (that hash would break on bun version changes).
     # See: https://github.com/nix-community/bun2nix
+    #
+    # Pinned at 2.1.2 or newer: 2.0.8's package derivation reaches back into its
+    # own flake-parts module system, which evaluates every system in
+    # nix-systems/default -- including x86_64-darwin, which nixpkgs 26.11
+    # removed. That made `nix eval .#packages.x86_64-linux.handy` fail on a
+    # platform this flake does not even build for.
     bun2nix = {
-      url = "github:nix-community/bun2nix/2.0.8";
+      url = "github:nix-community/bun2nix/2.1.2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -38,6 +44,7 @@
         glib
         libsoup_3
         alsa-lib
+        pipewire
         onnxruntime
         libayatana-appindicator
         libevdev

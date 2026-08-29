@@ -62,6 +62,31 @@ fn overlay_dimensions(state: &str) -> (f64, f64) {
 static LAST_MIC_LEVEL_EMIT: AtomicU64 = AtomicU64::new(0);
 const EMIT_THROTTLE_MS: u64 = 33; // ~30 FPS
 
+/// Bumped by every native visibility request (show or delayed hide). A
+/// delayed hide may perform its native `hide()` only while its captured token
+/// still matches this value, so an overlay shown during the fade window
+/// cannot be hidden by the lifecycle that preceded it. `Relaxed` ordering is
+/// enough: the value is an identity token and does not publish any other
+/// memory.
+static OVERLAY_VISIBILITY_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Bumps the process-wide visibility epoch and returns the new value. Every
+/// native show or hide request calls this before enqueueing its main-thread
+/// work, so whichever request runs last is identifiable as current no matter
+/// how the two main-thread closures end up interleaved.
+fn bump_visibility_epoch() -> u64 {
+    OVERLAY_VISIBILITY_EPOCH.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Pure rule applied inside a delayed hide's main-thread closure: the hide
+/// may proceed only when no other visibility request has bumped the epoch
+/// since this hide captured its token. This does not by itself prove thread
+/// ordering — it just pins the comparison the main-thread closure performs
+/// alongside the native `hide()` call.
+fn visibility_request_is_current(scheduled: u64, current: u64) -> bool {
+    scheduled == current
+}
+
 #[cfg(target_os = "macos")]
 const OVERLAY_TOP_OFFSET: f64 = 46.0;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -482,10 +507,24 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
     // Whether the overlay shows at all is governed by overlay_style; position
     // only chooses Top vs Bottom placement. Checked here (off the main thread)
     // so the common overlay-disabled case never pays for a main-thread hop.
-    let settings = settings::get_settings(app_handle);
+    //
+    // The cache is set from this resolved style before the None return, so it
+    // always reflects the capture actually being shown (or not shown) rather
+    // than any one mode's stored setting. A capture that resolves to
+    // OverlayStyle::None must not bump the visibility epoch below: doing so
+    // would let this no-op request race an already-scheduled delayed hide for
+    // a genuinely visible overlay and cancel it.
+    let settings = crate::shorthand::dictation::resolve_settings(app_handle);
+    set_capture_overlay_events_enabled(overlay_events_enabled(settings.overlay_style));
     if settings.overlay_style == OverlayStyle::None {
         return;
     }
+
+    // Claim the current epoch before enqueueing main-thread work. A hide that
+    // was scheduled before this show — or is scheduled concurrently — checks
+    // this epoch inside its own main-thread closure and becomes a no-op once
+    // it no longer matches.
+    bump_visibility_epoch();
 
     // The rest queries monitors and the cursor and mutates window geometry. On
     // Linux the monitor/cursor lookups hit GDK/Xlib on the process's shared X11
@@ -588,7 +627,8 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
 
 /// Notify the visible recording overlay that the input stream has delivered its
 /// first sample chunk. Audio feedback uses the same backend readiness signal,
-/// but this targeted event is skipped when overlays are disabled.
+/// but this targeted event is skipped when the active capture's resolved
+/// overlay style is `OverlayStyle::None`.
 pub fn emit_recording_ready(app_handle: &AppHandle) {
     if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -688,24 +728,47 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
         let scheduled_at = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
         // Emit event to trigger fade-out animation
         let _ = overlay_window.emit("hide-overlay", ());
-        // Hide the window after a short delay to allow animation to complete,
-        // unless a newer session has shown the overlay again by then.
-        let window_clone = overlay_window.clone();
+        // Claim this hide's identity before sleeping. If a later show bumps
+        // the epoch first, this token goes stale and the delayed native hide
+        // below becomes a no-op instead of hiding a window a newer capture
+        // just showed (the cancel-then-start race this fix closes).
+        let token = bump_visibility_epoch();
+        let handle = app_handle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            if OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) != scheduled_at {
-                log::debug!("Skipping stale overlay hide: a newer session is showing the overlay");
-                return;
-            }
-            let _ = window_clone.hide();
+
+            // The epoch comparison and the native hide() must happen inside
+            // the same main-thread closure. Checking on this worker thread
+            // and calling hide() afterward would leave the comparison and the
+            // mutation as separate steps, re-opening the time-of-check/
+            // time-of-use race a show could land in between. Tauri window
+            // mutation is also not safe to call directly from a non-main
+            // thread on some platforms (see show_overlay_state).
+            let main_thread_handle = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let current = OVERLAY_VISIBILITY_EPOCH.load(Ordering::Relaxed);
+                if visibility_request_is_current(token, current)
+                    && OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) == scheduled_at
+                {
+                    if let Some(overlay_window) =
+                        main_thread_handle.get_webview_window("recording_overlay")
+                    {
+                        let _ = overlay_window.hide();
+                    }
+                }
+            });
         });
     }
 }
 
-// Cached "overlay is enabled" flag, kept in sync with overlay_style. Avoids
-// reading the Tauri store on every audio callback (~24 Hz during recording).
-// Defaults to false so the audio path doesn't emit until lib.rs::setup
-// populates the cache from initial settings.
+// Cached "the active capture's overlay events are enabled" flag. Reflects the
+// resolved overlay style of whichever capture is currently being shown (set
+// by show_overlay_state, and by TranscribeAction::start's OverlayStyle::None
+// arm which does not call show_overlay_state) rather than any one mode's
+// stored setting, so Dictation/Meeting/AssistedNotes each get correct
+// waveform and readiness events regardless of what the others are set to.
+// Avoids reading the Tauri store on every audio callback (~24 Hz during
+// recording). Defaults to false: no capture is active at startup.
 static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Tracks whether gtk-layer-shell was successfully initialized (Linux only).
@@ -713,22 +776,30 @@ static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "linux")]
 static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Update the cached overlay-enabled flag. Called from `lib.rs` at
-/// startup after settings load, and from `change_overlay_style_setting`
-/// whenever the user changes whether the overlay is shown.
-pub fn update_overlay_enabled_cache(enabled: bool) {
+/// Pure predicate behind `set_capture_overlay_events_enabled`'s call sites:
+/// only `OverlayStyle::None` disables the active capture's overlay events.
+fn overlay_events_enabled(style: OverlayStyle) -> bool {
+    style != OverlayStyle::None
+}
+
+/// Update the cached "active capture's overlay events enabled" flag. Called
+/// from `show_overlay_state` whenever a capture shows a state, and from
+/// `TranscribeAction::start`'s `OverlayStyle::None` arm, which skips
+/// `show_overlay_state` entirely and so must update the cache itself.
+pub fn set_capture_overlay_events_enabled(enabled: bool) {
     OVERLAY_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 pub fn emit_levels(app_handle: &AppHandle, levels: &[f32]) {
-    // Skip emission when the overlay is disabled. The recording_overlay
-    // window is created at boot regardless of overlay_style, so without this
-    // guard a hidden overlay's WebKit subprocess still
-    // processes every event. Each event drives some kind of WebKit
-    // C++ allocation that accumulates without bound (mechanism not
-    // directly characterized; see issue #1279 for the investigation).
-    // For users with `overlay_style: none` (the Linux default) this skip
-    // eliminates the upstream driver of that accumulation.
+    // Skip emission when the active capture's resolved overlay style is
+    // `OverlayStyle::None`. The recording_overlay window is created at boot
+    // regardless of any mode's overlay_style, so without this guard a hidden
+    // overlay's WebKit subprocess still processes every event. Each event
+    // drives some kind of WebKit C++ allocation that accumulates without
+    // bound (mechanism not directly characterized; see issue #1279 for the
+    // investigation). For a capture resolving to `overlay_style: none` (the
+    // Linux default) this skip eliminates the upstream driver of that
+    // accumulation.
     if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -845,5 +916,32 @@ mod tests {
             ),
             (-1530, 1040, 500, 150)
         );
+    }
+
+    #[test]
+    fn visibility_request_is_current_matches_equal_tokens() {
+        assert!(visibility_request_is_current(5, 5));
+    }
+
+    #[test]
+    fn visibility_request_is_current_rejects_a_stale_hide() {
+        // The hide captured an older token; a later show has since bumped
+        // the epoch. The stale hide must not proceed.
+        assert!(!visibility_request_is_current(3, 5));
+    }
+
+    #[test]
+    fn visibility_request_is_current_rejects_any_other_token() {
+        // A token from a different request entirely (including one "ahead"
+        // of the current epoch, which should never happen but must not be
+        // treated as current either).
+        assert!(!visibility_request_is_current(5, 3));
+    }
+
+    #[test]
+    fn overlay_events_enabled_matches_none_only() {
+        assert!(!overlay_events_enabled(OverlayStyle::None));
+        assert!(overlay_events_enabled(OverlayStyle::Minimal));
+        assert!(overlay_events_enabled(OverlayStyle::Live));
     }
 }

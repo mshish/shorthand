@@ -1,0 +1,112 @@
+/*
+ * Fork-only. The active-tab indicator: the one motif that says "this is the
+ * tab you're looking at".
+ *
+ * Kept out of `theme.css` deliberately. That file's job is to re-declare token
+ * *values*, so an upstream restyle merges without conflict; the moment it grows
+ * a class it stops being only that. This file introduces a selector, so it
+ * lives on its own, imported alongside.
+ *
+ * This replaced a hand-drawn highlighter sweep — a gradient, four mismatched
+ * corner radii, a rotation and a companion pen line, meant to echo the "marked
+ * up transcript" motif from the wordmark's underline. It photographed well in
+ * isolation but read as visual noise on a plain settings tab bar, which is
+ * ordinary UI chrome rather than a piece of the brand's marked-paper metaphor.
+ * A tab bar wants a tab bar's indicator: a plain bar, in the brand's colour.
+ *
+ * One meaning, one motif. `.sh-tab-indicator` marks the active tab — and
+ * nothing else. If it starts appearing on things that are merely important
+ * rather than current, the idea is gone and this should be reverted, not
+ * extended.
+ */
+
+.sh-tab-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Sits on the tab list's own border-b, so the coral segment reads as that
+     line picking out the active tab rather than a second, separate rule. */
+  bottom: -1px;
+  height: 2px;
+  border-radius: 9999px;
+  background: var(--brand-highlighter);
+}
+
+/*
+ * The indicator is never the only signal — see the note in ui/Tabs.tsx.
+ * `aria-selected` and the label's own font-weight carry the state; the coral
+ * bar is confirmation, not the sole cue, which is also why a fade rather than
+ * a directional wipe is enough motion for it. A left-to-right wipe would also
+ * need mirroring for the app's RTL locales (Arabic, Hebrew); a fade needs
+ * nothing direction-specific.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .sh-tab-indicator {
+    animation: sh-tab-indicator-in 120ms ease-out;
+  }
+}
+
+@keyframes sh-tab-indicator-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * Wordmark theme selection.
+ *
+ * The wordmark is artwork rather than type (see brand/ShorthandWordmark.tsx),
+ * so its ink cannot follow `--color-text` the way live text did. Two variants
+ * are generated instead — navy on paper, cream on night — and CSS picks one.
+ *
+ * It has to be CSS rather than a React check on the settings store: the theme
+ * can come from the OS preference *or* from an explicit `data-theme` override,
+ * and only CSS sees both without the component subscribing to a store it has
+ * no other reason to know about. `<picture>` with a media query was the other
+ * candidate and cannot do it — it resolves `prefers-color-scheme` but is blind
+ * to the attribute, so an explicit override would show the wrong variant.
+ *
+ * The block order mirrors upstream's theme.css and brand/theme.css for the
+ * same reason they do: the attribute selectors must come after the media query
+ * so an explicit choice beats the OS preference.
+ *
+ * `display: none` rather than `visibility`/opacity, so the hidden variant is
+ * out of the accessibility tree — both <img> carry the same alt text, and two
+ * visible ones would announce the product name twice.
+ */
+.sh-wordmark-light {
+  display: block;
+}
+
+.sh-wordmark-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sh-wordmark-light {
+    display: none;
+  }
+
+  :root:not([data-theme]) .sh-wordmark-dark {
+    display: block;
+  }
+}
+
+:root[data-theme="light"] .sh-wordmark-light {
+  display: block;
+}
+
+:root[data-theme="light"] .sh-wordmark-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .sh-wordmark-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .sh-wordmark-dark {
+  display: block;
+}

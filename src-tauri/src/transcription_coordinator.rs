@@ -339,7 +339,15 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_with_post_process"
+    matches!(
+        id,
+        "transcribe"
+            | "transcribe_with_post_process"
+            | "dictate"
+            | "dictate_with_post_process"
+            | "assisted_notes"
+            | "assisted_notes_with_post_process"
+    )
 }
 
 impl TranscriptionCoordinator {
@@ -499,6 +507,18 @@ fn stop(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_transcribe_binding_recognises_meeting_and_dictation_bindings() {
+        assert!(is_transcribe_binding("transcribe"));
+        assert!(is_transcribe_binding("transcribe_with_post_process"));
+        assert!(is_transcribe_binding("dictate"));
+        assert!(is_transcribe_binding("dictate_with_post_process"));
+        assert!(is_transcribe_binding("assisted_notes"));
+        assert!(is_transcribe_binding("assisted_notes_with_post_process"));
+        assert!(!is_transcribe_binding("cancel"));
+        assert!(!is_transcribe_binding("test"));
+    }
 
     #[test]
     fn push_to_talk_release_while_recording_defers_release() {

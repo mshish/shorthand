@@ -63,6 +63,7 @@ struct MenuInputs {
     downloaded_models: Vec<(String, String)>,
     locale: String,
     update_checks_enabled: bool,
+    save_transcripts: bool,
 }
 
 /// Complete description of what the tray should look like.
@@ -334,6 +335,7 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             downloaded_models,
             locale: settings.app_language,
             update_checks_enabled: settings.update_checks_enabled,
+            save_transcripts: settings.save_transcripts,
         },
     }
 }
@@ -500,11 +502,18 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
         inputs.update_checks_enabled,
         None::<&str>,
     )?;
+    // get_latest_completed_entry() filters on transcription_text != '', so with
+    // save_transcripts off (the default) this item has nothing current to copy.
+    // Left enabled it either silently does nothing, or — if the setting was on
+    // earlier and rows survive from then — copies a transcript from whenever
+    // saving was last enabled, which the user pastes with no sign it is stale.
+    // Disable it instead, using the same enabled-flag pattern applied below to
+    // check_updates_i / unload_model_i.
     let copy_last_transcript_i = MenuItem::with_id(
         app,
         "copy_last_transcript",
         &strings.copy_last_transcript,
-        true,
+        inputs.save_transcripts,
         None::<&str>,
     )?;
     let quit_i = MenuItem::with_id(app, "quit", &strings.quit, true, quit_accelerator)?;
@@ -670,6 +679,7 @@ mod tests {
             post_processed_text: post_processed.map(|text| text.to_string()),
             post_process_prompt: None,
             post_process_requested: false,
+            source: "meeting".to_string(),
         }
     }
 
@@ -682,6 +692,7 @@ mod tests {
             downloaded_models: vec![("small".to_string(), "Small".to_string())],
             locale: "en".to_string(),
             update_checks_enabled: true,
+            save_transcripts: true,
         }
     }
 

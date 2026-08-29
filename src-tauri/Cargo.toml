@@ -1,11 +1,21 @@
 [package]
-name = "handy"
-version = "0.9.6"
-description = "Handy"
+name = "shorthand"
+version = "0.1.1"
+description = "Shorthand"
 authors = ["cjpais"]
 edition = "2021"
 license = "MIT"
-default-run = "handy"
+default-run = "shorthand"
+
+[features]
+default = ["macos-tcc-spi"]
+# Reads the system-audio permission through TCC's private preflight SPI. There
+# is no public API for this, and without it a denied tap is indistinguishable
+# from a silent room. Disqualifying for the Mac App Store, which this app
+# cannot target anyway — the flag exists so that decision stays reversible.
+# With the feature off, permission always reads NotGranted and the UI falls
+# back to offering the settings link unconditionally.
+macos-tcc-spi = []
 
 [profile.dev]
 incremental = true # Compile your binary in smaller steps.
@@ -16,7 +26,7 @@ incremental = true # Compile your binary in smaller steps.
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "handy_app_lib"
+name = "shorthand_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # [[bin]]
@@ -48,17 +58,21 @@ tauri-plugin-fs = "2.4.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
-cpal = "0.16.0"
+# Linux system-audio capture needs CPAL's sound-server backends in addition to
+# ALSA microphone capture. The optional dependencies are target-gated inside
+# CPAL, so enabling them here does not add Linux libraries to Windows/macOS.
+cpal = { version = "=0.18.2", features = ["pipewire", "pulseaudio"] }
 anyhow = "1.0.95"
 rubato = "0.16.2"
 hound = "3.5.1"
 log = "0.4.25"
 env_filter = "0.1.0"
-tokio = "1.43.0"
+tokio = { version = "1.43.0", features = ["sync", "rt", "net", "io-util", "time"] }
+interprocess = { version = "2.4.3", features = ["tokio"] }
 vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
 earshot = "1.2.2"
 enigo = "0.6.1"
-rodio = { git = "https://github.com/cjpais/rodio.git" }
+rodio = { git = "https://github.com/mshish/rodio.git", rev = "11a327a5e0b571bbd5e018508645abedc20adb2c" }
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "brotli", "deflate"] }
 futures-util = "0.3"
 rustfft = "6.4.0"
@@ -91,6 +105,7 @@ hf-hub = { git = "https://github.com/cjpais/hf-hub", branch = "cancellable-downl
 ] }
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 signal-hook = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -109,8 +124,12 @@ tauri-plugin-updater = "2.10.1"
 # with proper runtime CPU dispatch. Base `transcribe-rs` (features = ["onnx"])
 # is inherited here, so Parakeet/Moonshine/etc. still run on CPU.
 windows = { version = "0.61.3", features = [
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
   "Win32_Media_Audio_Endpoints",
   "Win32_System_Com_StructuredStorage",
+  "Win32_System_Console",
   "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
   "Win32_System_Ole",
@@ -121,6 +140,7 @@ windows = { version = "0.61.3", features = [
   "Win32_Graphics_Gdi",
   "Win32_UI_WindowsAndMessaging",
 ] }
+widestring = "1"
 winreg = "0.55"
 
 # Whisper backend per Windows arch. x86_64 ships the Vulkan GPU backend and
@@ -154,10 +174,16 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-service-management = "0.3.2"
+libloading = "0.8"
+objc2-core-foundation = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 gtk = "0.18"
+# Match CPAL's pure-Rust PulseAudio protocol client so monitor-source metadata
+# (rather than output-device names) determines valid loopback endpoints.
+pulseaudio = "0.3.1"
+futures = "0.3"
 libc = "0.2"
 transcribe-cpp = { version = "0.2.0", default-features = false, features = [
   "dynamic-backends",

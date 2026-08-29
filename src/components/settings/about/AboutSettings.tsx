@@ -10,6 +10,7 @@ import { AppLanguageSelector } from "../AppLanguageSelector";
 import { ShowWhatsNewOnUpdate } from "../ShowWhatsNewOnUpdate";
 import { ThemeSelector } from "../ThemeSelector";
 import { LogDirectory } from "../debug";
+import { ShowAllSettingsToggle } from "@/shorthand/ShowAllSettingsToggle";
 
 export const AboutSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -52,6 +53,8 @@ export const AboutSettings: React.FC = () => {
         </SettingContainer>
 
         <ShowWhatsNewOnUpdate descriptionMode="tooltip" grouped={true} />
+
+        <ShowAllSettingsToggle />
 
         <SettingContainer
           title={t("settings.about.supportDevelopment.title")}

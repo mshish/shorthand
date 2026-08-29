@@ -1,5 +1,8 @@
 use crate::managers::model::{ModelInfo, ModelManager};
-use crate::managers::transcription::{ModelStateEvent, TranscriptionManager};
+use crate::managers::transcription::{
+    transcription_managers, transcription_models_are_coherent, ModelStateEvent,
+    TranscriptionManager,
+};
 use crate::settings::{get_settings, write_settings, ModelUnloadTimeout};
 use log::error;
 use std::sync::Arc;
@@ -66,15 +69,16 @@ pub async fn download_model(
 pub async fn delete_model(
     app_handle: AppHandle,
     model_manager: State<'_, Arc<ModelManager>>,
-    transcription_manager: State<'_, Arc<TranscriptionManager>>,
     model_id: String,
 ) -> Result<(), String> {
     // If deleting the active model, unload it and clear the setting
     let settings = get_settings(&app_handle);
     if settings.selected_model == model_id {
-        transcription_manager
-            .unload_model()
-            .map_err(|e| format!("Failed to unload model: {}", e))?;
+        for manager in transcription_managers(&app_handle) {
+            manager
+                .unload_model()
+                .map_err(|e| format!("Failed to unload model: {}", e))?;
+        }
 
         let mut settings = get_settings(&app_handle);
         settings.selected_model = String::new();
@@ -146,13 +150,36 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
         return Ok(());
     }
 
-    // Load the model. On failure, revert the persisted selection.
-    if let Err(e) = transcription_manager.load_model(model_id) {
-        let mut settings = get_settings(app);
-        settings.selected_model = old_model;
-        settings.onboarding_completed = old_onboarding_completed;
-        write_settings(app, settings);
-        return Err(e.to_string());
+    // Load every in-service lane transactionally. If any lane fails, restore
+    // both the persisted selection and every manager to the previous model.
+    let managers = transcription_managers(app);
+    for manager in &managers {
+        if let Err(e) = manager.load_model(model_id) {
+            let mut settings = get_settings(app);
+            settings.selected_model = old_model.clone();
+            settings.onboarding_completed = old_onboarding_completed;
+            write_settings(app, settings);
+            let mut rollback_errors = Vec::new();
+            for rollback_manager in &managers {
+                let result = if old_model.is_empty() {
+                    rollback_manager.unload_model()
+                } else {
+                    rollback_manager.load_model(&old_model)
+                };
+                if let Err(rollback_error) = result {
+                    rollback_errors.push(rollback_error.to_string());
+                }
+            }
+            let rollback_detail = if rollback_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; rollback failed: {}", rollback_errors.join("; "))
+            };
+            return Err(format!("{e}{rollback_detail}"));
+        }
+    }
+    if !transcription_models_are_coherent(app) {
+        return Err("Transcription managers loaded incoherent model ids".to_string());
     }
 
     Ok(())
