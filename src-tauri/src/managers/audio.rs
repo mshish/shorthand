@@ -1064,11 +1064,13 @@ impl AudioRecordingManager {
         }
 
         let settings = get_settings(&self.app_handle);
+        let system_stream_router = self.system_stream_router.lock().unwrap().clone();
         let replacement = create_audio_recorder(
             backend,
             &self.app_handle,
             settings.selected_channel,
             Arc::clone(&self.stream_router),
+            system_stream_router,
         )?;
         let was_open = *self.is_open.lock().unwrap();
 

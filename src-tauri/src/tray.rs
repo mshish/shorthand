@@ -63,6 +63,7 @@ struct MenuInputs {
     downloaded_models: Vec<(String, String)>,
     locale: String,
     update_checks_enabled: bool,
+    save_transcripts: bool,
 }
 
 /// Complete description of what the tray should look like.
@@ -334,6 +335,7 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             downloaded_models,
             locale: settings.app_language,
             update_checks_enabled: settings.update_checks_enabled,
+            save_transcripts: settings.save_transcripts,
         },
     }
 }
@@ -511,7 +513,7 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
         app,
         "copy_last_transcript",
         &strings.copy_last_transcript,
-        settings.save_transcripts,
+        inputs.save_transcripts,
         None::<&str>,
     )?;
     let quit_i = MenuItem::with_id(app, "quit", &strings.quit, true, quit_accelerator)?;
@@ -690,6 +692,7 @@ mod tests {
             downloaded_models: vec![("small".to_string(), "Small".to_string())],
             locale: "en".to_string(),
             update_checks_enabled: true,
+            save_transcripts: true,
         }
     }
 
