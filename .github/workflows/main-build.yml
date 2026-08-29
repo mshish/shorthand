@@ -11,6 +11,16 @@ name: "Build"
 
 on:
   pull_request:
+    # A denylist, not an allowlist: the gap this trigger closes is platform-gated
+    # code reaching main uncompiled, and an allowlist reopens it the moment
+    # something builds that nobody thought to list. Only what provably cannot
+    # affect a build is skipped, and a pull request touching any of these
+    # alongside real code still builds — paths-ignore skips only when every
+    # changed file matches.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
   push:
     branches: [main]
 
