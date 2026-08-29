@@ -5,15 +5,15 @@ signing is not, on either platform.
 
 ## Where things stand
 
-| Thing                        | State                                                      | Consequence                                                    |
-| ---------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- |
-| `plugins.updater.endpoints`  | `mshish/shorthand` releases                                | the updater offers Shorthand's own releases                    |
-| `plugins.updater.pubkey`     | this fork's minisign public key                            | only this fork can produce updates the app will accept         |
-| `update_checks_enabled`      | defaults `true`                                            | the app checks on its own                                      |
-| `bundle.windows.signCommand` | removed                                                    | bundling succeeds; installers are unsigned, SmartScreen warns  |
-| macOS `signingIdentity`      | `"-"` (ad-hoc)                                             | runs on the machine that built it, nowhere else                |
-| GitHub Actions               | enabled; all nine inherited workflows active               | builds run on pull requests and pushes to main                 |
-| Repository visibility        | public                                                     | release assets are reachable by the updater without auth       |
+| Thing                        | State                                        | Consequence                                                   |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| `plugins.updater.endpoints`  | `mshish/shorthand` releases                  | the updater offers Shorthand's own releases                   |
+| `plugins.updater.pubkey`     | this fork's minisign public key              | only this fork can produce updates the app will accept        |
+| `update_checks_enabled`      | defaults `true`                              | the app checks on its own                                     |
+| `bundle.windows.signCommand` | removed                                      | bundling succeeds; installers are unsigned, SmartScreen warns |
+| macOS `signingIdentity`      | `"-"` (ad-hoc)                               | runs on the machine that built it, nowhere else               |
+| GitHub Actions               | enabled; all nine inherited workflows active | builds run on pull requests and pushes to main                |
+| Repository visibility        | public                                       | release assets are reachable by the updater without auth      |
 
 **The update-hijack risk this file used to open with is gone.** The endpoint and
 the public key both belong to this fork now, so an update prompt offers
