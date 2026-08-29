@@ -592,6 +592,32 @@ jobs:
             echo "__GH_ENV_EOF__"
           } >> "$GITHUB_ENV"
 
+      # Tauri refuses to bundle when tauri.conf.json declares an updater pubkey and
+      # TAURI_SIGNING_PRIVATE_KEY is absent -- "A public key has been found, but no
+      # private key" — and it refuses AFTER compiling and bundling, so the cost is a
+      # full build. That check keys off the config, not off this workflow's
+      # sign-updates input, so skipping the signing step above is not by itself
+      # enough to produce an unsigned build.
+      #
+      # An unsigned build therefore also has to stop emitting updater artifacts. That
+      # is the honest pairing rather than a workaround: an updater artifact nobody
+      # holds the key for cannot be verified by any installed app, so producing one
+      # would be producing garbage. Pull request builds want the compile and the
+      # installer, not a signed update.
+      - name: Compose Tauri build args
+        id: tauri-args
+        shell: bash
+        env:
+          BASE_ARGS: ${{ inputs.build-args }}
+          SIGN_UPDATES: ${{ inputs.sign-updates }}
+        run: |
+          set -euo pipefail
+          ARGS="$BASE_ARGS"
+          if [ "$SIGN_UPDATES" != "true" ]; then
+            ARGS="$ARGS --config {\"bundle\":{\"createUpdaterArtifacts\":false}}"
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -611,7 +637,7 @@ jobs:
           releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseId: ${{ inputs.release-id }}
           assetNamePattern: ${{ steps.patch-release-name.outputs.platform }}
-          args: ${{ inputs.build-args }}
+          args: ${{ steps.tauri-args.outputs.args }}
 
       # tauri-action uploads release assets before returning. All AppImage
       # filtering therefore happens inside linuxdeploy above; this verifies the
