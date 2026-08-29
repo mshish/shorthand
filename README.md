@@ -132,7 +132,7 @@ handy --follow-stream delta  # NDJSON, one record per newly-committed suffix
 handy --follow-stream text   # Plain `me: `/`them: ` text as it commits
 ```
 
-The flags above control a running Shorthand. This one reads from it: you get transcript events until you disconnect, and Shorthand carries on regardless. Turn on **Follow live transcript output** under Advanced first — it is off by default. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) has the protocol.
+The flags above control a running Shorthand. This one reads from it: you get transcript events until you disconnect, and Shorthand carries on regardless. **Follow live transcript output** under Advanced controls it: on by default for Meetings, off for Dictation. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) has the protocol.
 
 ## Known Issues & Current Limitations
 

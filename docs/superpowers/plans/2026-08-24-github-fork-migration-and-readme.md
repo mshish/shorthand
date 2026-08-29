@@ -1,8 +1,9 @@
 # GitHub Fork Migration & README Fork Notes — Implementation Plan
 
 > **SUPERSEDED 2026-08-28** by `2026-08-28-phase-b-fork-the-app.md`. Four of
-> this plan's facts and procedures are wrong or stale: the divergence counts
-> (95/14, now 136/25), the secret scan targets the working copy rather than the
+> this plan's facts and procedures are wrong or stale: its divergence counts (it
+> says 95 ahead / 14 behind; both have moved since and must be re-derived at run
+> time, never read from a plan), the secret scan targets the working copy rather than the
 > bare clone, the home-grown detector misses several credential shapes, and the
 > rollback cannot deliver its promised retry. Do not execute this document.
 
