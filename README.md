@@ -8,6 +8,7 @@ Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), a local speech-
 
 What it adds:
 
+- **Capture system audio** — what the other side of a call says is transcribed too, in its own speaker-labelled lane alongside your microphone.
 - **[`--follow-stream`](FOLLOW_STREAM.md)** — another program reads the transcript while you are still talking. The [Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin) uses this to keep meeting notes current during the meeting.
 - **A different look** — see [BRANDING.md](BRANDING.md).
 
