@@ -422,18 +422,39 @@ Expected: `{"isFork":true,"parent":"cjpais/Handy","visibility":"PUBLIC"}`.
 
 ---
 
-## Task 9: Mirror-push the full history into the fork
+## Task 9: Push the fork's history — selectively, never `--mirror`
 
 **Executed by Claude.**
 
-The fork currently holds upstream's history. This pushes the superset — every branch and tag from the legacy repository, including the 132 fork commits sitting on the shared merge base.
+The fork currently holds upstream's history. This pushes the superset — every branch and tag from the legacy repository, including the fork commits sitting on the shared merge base.
 
-- [ ] **Step 1: Push all refs**
+**`git push --mirror` is wrong here and an earlier draft of this plan specified it.** A mirror clone of the legacy repository carries `refs/pull/*` — GitHub's read-only refs for its 4 merged pull requests — and those refs still reach pre-scrub commits carrying `the maintainer's personal address`. Mirroring them into a public fork republishes exactly what the pre-fork scrub removed. Measured 2026-08-28: pushing every ref exposes **200** old-email references; pushing heads and tags alone exposes **4**; excluding `pre-shorthand-backup` as well exposes **0**.
+
+Two refs are therefore excluded, deliberately:
+
+- **`refs/pull/*`** — GitHub owns these and rejects pushes to them anyway, but a `--mirror` attempt would still have carried their objects. They stay in the private `shorthand-legacy` backup, which is where the pull-request record is preserved.
+- **`refs/tags/pre-shorthand-backup`** — a personal safety tag from 2026-08-14 pointing at two pre-scrub commits. It is a local safety net, not public history. It also stays in `shorthand-legacy`.
+
+- [ ] **Step 1: Push heads and tags explicitly, excluding the backup tag**
 
 ```bash
 snap=/tmp/shorthand-migration
-git -C "$snap/mirror.git" push --mirror https://github.com/mshish/shorthand-fork-tmp.git
+cd "$snap/mirror.git"
+git push --force https://github.com/mshish/shorthand-fork-tmp.git   'refs/heads/*:refs/heads/*'   $(git for-each-ref --format='%(refname):%(refname)' refs/tags | grep -v pre-shorthand-backup)
 ```
+
+A mirror clone sets `remote.origin.mirror=true`, which makes git refuse any refspec — hence the explicit URL rather than a named remote.
+
+- [ ] **Step 1a: Prove nothing carrying the old identity reached the fork**
+
+This is the check the whole pre-fork scrub exists to satisfy. Run it before Step 2.
+
+```bash
+t=$(mktemp -d) && git clone --quiet --mirror https://github.com/mshish/shorthand-fork-tmp.git "$t/v.git"
+git -C "$t/v.git" log --all --format='%ae%n%ce' | sort -u
+```
+
+Expected: no `the maintainer's personal address` and no `a second personal address`. Upstream contributors — including `cj@cjpais.com` and `an upstream contributor's address` (Artem Shishkin, a real upstream contributor, not the maintainer) — **must** still be present and unaltered.
 
 - [ ] **Step 2: Compare the fork's refs against the clone's, ref by ref**
 
@@ -445,7 +466,7 @@ gh api --paginate repos/mshish/shorthand-fork-tmp/git/refs -q '.[].ref' | sort >
 diff "$snap/local-refs.txt" "$snap/remote-refs.txt"
 ```
 
-Expected: no output. Lines present remotely but not locally are upstream's own refs and are fine; investigate any line present locally but not remotely — that is history that failed to push.
+Expected: the only lines present locally but not remotely are `refs/pull/*` and `refs/tags/pre-shorthand-backup`, all excluded on purpose by Step 1. Lines present remotely but not locally are upstream's own refs and are fine. Any *other* ref present locally but missing remotely is history that failed to push — investigate it.
 
 - [ ] **Step 3: Confirm the fork relationship survived the mirror push**
 
