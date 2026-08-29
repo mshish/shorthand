@@ -29,6 +29,17 @@ on:
         type: boolean
         default: false
       sign-binaries:
+        # Platform code signing (Authenticode / Apple Developer ID). Off: this
+        # fork has no certificates, so installers are unsigned and SmartScreen
+        # warns once on first run.
+        required: false
+        type: boolean
+        default: false
+      sign-updates:
+        # Minisign signing of updater artifacts. Independent of sign-binaries:
+        # without it tauri-action emits no signatures and latest.json, so the
+        # in-app updater silently never offers anything. Free and self-managed,
+        # so it stays on even while code signing is off.
         required: false
         type: boolean
         default: false
@@ -534,8 +545,8 @@ jobs:
           AZURE_CLIENT_ID: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_ID || '' }}
           AZURE_CLIENT_SECRET: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_SECRET || '' }}
           AZURE_TENANT_ID: ${{ inputs.sign-binaries && secrets.AZURE_TENANT_ID || '' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-updates && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-updates && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
           # The Vulkan loader and Wayland client library must come from the host
           # graphics stack. Bundling Ubuntu's copies ahead of the system libraries can
           # prevent a newer distro's Vulkan ICD or Mesa stack from loading.
