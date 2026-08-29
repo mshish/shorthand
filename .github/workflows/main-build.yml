@@ -1,4 +1,4 @@
-name: "Build"
+name: "Platform Build"
 
 # Runs the full cross-platform build on every pull request and every push to
 # main, so breakage is caught before it lands rather than after. Artifacts are
