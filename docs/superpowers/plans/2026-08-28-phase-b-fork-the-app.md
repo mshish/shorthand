@@ -32,13 +32,13 @@ Every task's requirements implicitly include these.
 
 Recorded here because it changes what Tasks 7 and 9 must do, and because it had to happen **before** the fork, not after. Core's equivalent was done after publication and cost a repository deletion to finish.
 
-**What the scan found.** gitleaks over 868 commits: no credentials. No personal paths at all — no `C:\Users\<user>`, no vault paths. One issue: `the maintainer's personal address` on 128 commits.
+**What the scan found.** gitleaks over 868 commits: no credentials. No personal paths at all — no home-directory paths, no vault paths. One issue: the maintainer's personal email address, on 128 commits.
 
 **What did NOT work, and why it matters.** A full-history `git filter-repo --mailmap` moved the merge-base from `549cbde` to `241029a`. Cause: 429 of 936 commits are GPG-signed, filter-repo strips signatures from every commit it rewrites, and that changes their SHAs and every descendant's. `git merge upstream/main` would then treat 25 upstream commits as unrelated history — the fork's entire workflow. This was tried, verified broken, and discarded without pushing.
 
-**What worked.** Rewriting only `549cbde..<branch>` for all 8 branches. That range is entirely the maintainer's: 132 commits, zero upstream ones, only 4 signed (all the maintainer's own). Verified afterwards: merge-base preserved and still an ancestor of `main`; all 65 tags byte-identical; upstream authors and 428 of 429 signatures untouched; `the maintainer's personal address` gone from every branch.
+**What worked.** Rewriting only `549cbde..<branch>` for all 8 branches. That range is entirely the maintainer's: 132 commits, zero upstream ones, only 4 signed (all the maintainer's own). Verified afterwards: merge-base preserved and still an ancestor of `main`; all 65 tags byte-identical; upstream authors and 428 of 429 signatures untouched; the maintainer's personal address gone from every branch.
 
-**Do not rewrite these identities.** `cj@cjpais.com` and every other upstream contributor stay as they are. In particular `an upstream contributor's address` is **Artem Shishkin, an upstream Handy contributor** — a substring search for "shish" matches it, and rewriting a third party's identity in their own commits is not ours to do.
+**Do not rewrite these identities.** `cj@cjpais.com` and every other upstream contributor stay as they are. In particular one upstream contributor, **Artem Shishkin**, has an address a substring search for "shish" matches, and rewriting a third party's identity in their own commits is not ours to do.
 
 **Residual, and where it is contained:** `refs/pull/1-4` and `refs/tags/pre-shorthand-backup` still reach pre-scrub commits. Both stay in the private `shorthand-legacy` backup; Task 9 excludes them from the fork push.
 
@@ -446,7 +446,7 @@ Expected: `{"isFork":true,"parent":"cjpais/Handy","visibility":"PUBLIC"}`.
 
 The fork currently holds upstream's history. This pushes the superset — every branch and tag from the legacy repository, including the fork commits sitting on the shared merge base.
 
-**`git push --mirror` is wrong here and an earlier draft of this plan specified it.** A mirror clone of the legacy repository carries `refs/pull/*` — GitHub's read-only refs for its 4 merged pull requests — and those refs still reach pre-scrub commits carrying `the maintainer's personal address`. Mirroring them into a public fork republishes exactly what the pre-fork scrub removed. Measured 2026-08-28: pushing every ref exposes **200** old-email references; pushing heads and tags alone exposes **4**; excluding `pre-shorthand-backup` as well exposes **0**.
+**`git push --mirror` is wrong here and an earlier draft of this plan specified it.** A mirror clone of the legacy repository carries `refs/pull/*` — GitHub's read-only refs for its 4 merged pull requests — and those refs still reach pre-scrub commits carrying the maintainer's personal address. Mirroring them into a public fork republishes exactly what the pre-fork scrub removed. Measured 2026-08-28: pushing every ref exposes **200** old-email references; pushing heads and tags alone exposes **4**; excluding `pre-shorthand-backup` as well exposes **0**.
 
 Two refs are therefore excluded, deliberately:
 
@@ -472,7 +472,7 @@ t=$(mktemp -d) && git clone --quiet --mirror https://github.com/mshish/shorthand
 git -C "$t/v.git" log --all --format='%ae%n%ce' | sort -u
 ```
 
-Expected: no `the maintainer's personal address` and no `a second personal address`. Upstream contributors — including `cj@cjpais.com` and `an upstream contributor's address` (Artem Shishkin, a real upstream contributor, not the maintainer) — **must** still be present and unaltered.
+Expected: neither of the maintainer's two personal addresses appears. Upstream contributors — including CJ Pais and Artem Shishkin, both real upstream contributors and neither of them the maintainer — **must** still be present and unaltered. Compare against the address list in the private `shorthand-legacy` backup rather than writing the addresses down here.
 
 - [ ] **Step 2: Compare the fork's refs against the clone's, ref by ref**
 
