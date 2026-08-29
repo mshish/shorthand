@@ -28,6 +28,24 @@ Every task's requirements implicitly include these.
 - **Codex's writable root is the shell's working directory at dispatch time, not the path in the brief.** Observed 2026-08-28 in Phase A: a dispatch made from the wrong directory came back "Blocked by workspace permissions" having changed nothing. It fails closed rather than editing the wrong tree, but it costs a round trip. `cd /d/tools/shorthand-repos` and confirm with `pwd` in the same turn as the dispatch.
 - **Between Tasks 6 and 10, the local `origin` remote is a trap.** It still reads `https://github.com/mshish/shorthand.git`, which GitHub silently redirects to `shorthand-legacy` after the rename. A `git push origin` in that window lands in the backup repository and reports success. Every command in that window addresses its repository by explicit URL for exactly this reason; do not add one that relies on `origin`. Task 10 Step 4 repoints it.
 
+## Task -1: Scrub the maintainer's identity from fork history — DONE 2026-08-28
+
+Recorded here because it changes what Tasks 7 and 9 must do, and because it had to happen **before** the fork, not after. Core's equivalent was done after publication and cost a repository deletion to finish.
+
+**What the scan found.** gitleaks over 868 commits: no credentials. No personal paths at all — no `C:\Users\<user>`, no vault paths. One issue: `the maintainer's personal address` on 128 commits.
+
+**What did NOT work, and why it matters.** A full-history `git filter-repo --mailmap` moved the merge-base from `549cbde` to `241029a`. Cause: 429 of 936 commits are GPG-signed, filter-repo strips signatures from every commit it rewrites, and that changes their SHAs and every descendant's. `git merge upstream/main` would then treat 25 upstream commits as unrelated history — the fork's entire workflow. This was tried, verified broken, and discarded without pushing.
+
+**What worked.** Rewriting only `549cbde..<branch>` for all 8 branches. That range is entirely the maintainer's: 132 commits, zero upstream ones, only 4 signed (all the maintainer's own). Verified afterwards: merge-base preserved and still an ancestor of `main`; all 65 tags byte-identical; upstream authors and 428 of 429 signatures untouched; `the maintainer's personal address` gone from every branch.
+
+**Do not rewrite these identities.** `cj@cjpais.com` and every other upstream contributor stay as they are. In particular `an upstream contributor's address` is **Artem Shishkin, an upstream Handy contributor** — a substring search for "shish" matches it, and rewriting a third party's identity in their own commits is not ours to do.
+
+**Residual, and where it is contained:** `refs/pull/1-4` and `refs/tags/pre-shorthand-backup` still reach pre-scrub commits. Both stay in the private `shorthand-legacy` backup; Task 9 excludes them from the fork push.
+
+Three local-only branches — `brand/clay-bird-rebrand`, `feat/fork-only-translation-catalogues`, `fix/clippy-and-settings-coverage` — were never on any remote and were not rewritten. They still carry the old email. **Do not push them without rewriting their `549cbde..` range first.**
+
+---
+
 ## What this corrects in the 2026-08-24 plan
 
 1. **Stale divergence counts.** That plan states 95 ahead / 14 behind and hardcodes "7 branches, 65 tags" in a comment. Measured 2026-08-28: **132 ahead, 25 behind**. Every count is re-derived at run time here.
