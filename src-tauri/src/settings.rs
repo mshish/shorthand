@@ -298,6 +298,14 @@ pub enum OrtAcceleratorSetting {
     Rocm,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VadBackend {
+    #[default]
+    Silero,
+    Earshot,
+}
+
 #[derive(Clone, Serialize, Deserialize, Type)]
 #[serde(transparent)]
 pub struct SecretMap(HashMap<String, String>);
@@ -475,12 +483,21 @@ pub struct AppSettings {
     pub transcribe_accelerator: TranscribeAcceleratorSetting,
     #[serde(default)]
     pub ort_accelerator: OrtAcceleratorSetting,
-    #[serde(default = "default_transcribe_gpu_device")]
-    pub transcribe_gpu_device: i32,
+    /// Stable transcribe.cpp device selector. This is derived from the backend's
+    /// `device_id` when available (or its name for backends such as Metal),
+    /// never from the process-local device registry index.
+    #[serde(
+        default = "default_transcribe_gpu_device",
+        deserialize_with = "deserialize_transcribe_gpu_device"
+    )]
+    pub transcribe_gpu_device: Option<String>,
     #[serde(default)]
     pub extra_recording_buffer_ms: u64,
     #[serde(default = "default_vad_enabled")]
     pub vad_enabled: bool,
+    /// Experimental detector implementation. Silero remains the stable default.
+    #[serde(default)]
+    pub vad_backend: VadBackend,
     /// Which recording overlay to show: None / Minimal / Live. Streaming mode is
     /// not gated on this — that follows model capability. Migrated from the old
     /// `overlay_position` (position `none` → style `None`).
@@ -770,8 +787,25 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
     }]
 }
 
-fn default_transcribe_gpu_device() -> i32 {
-    -1 // auto
+fn default_transcribe_gpu_device() -> Option<String> {
+    None // automatic device selection
+}
+
+/// Accept the 0.1-era integer registry index long enough for the schema
+/// migration to clear it. Device indices are process-local in transcribe.cpp
+/// 0.2 and must never be carried across launches.
+fn deserialize_transcribe_gpu_device<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::String(value)) => Ok(Some(value)),
+        Some(serde_json::Value::Number(_)) => Ok(None),
+        Some(_) => Err(de::Error::custom(
+            "transcribe GPU device must be a string, integer, or null",
+        )),
+    }
 }
 
 fn default_typing_tool() -> TypingTool {
@@ -1045,6 +1079,7 @@ pub fn get_default_settings() -> AppSettings {
         transcribe_gpu_device: default_transcribe_gpu_device(),
         extra_recording_buffer_ms: 0,
         vad_enabled: default_vad_enabled(),
+        vad_backend: VadBackend::default(),
         overlay_style: default_overlay_style(),
         show_all_settings: false,
         dictation: crate::shorthand::dictation::DictationSettings::default(),
@@ -1205,34 +1240,37 @@ fn apply_settings_migrations(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     if stored_schema_version < 1 {
-        // `transcribe_gpu_device` used to be a UI ordinal; it is now a
-        // transcribe.cpp registry index. A positive legacy value can point at a
-        // different GPU after CPU/accelerator/backend devices are included in
-        // the registry, so reset ambiguous explicit selections to Auto once.
-        if settings.transcribe_gpu_device > 0 {
+        // Before schema 1 this was a UI ordinal. Preserve the original safety
+        // migration: a positive selection was ambiguous even in 0.1.
+        let had_positive_legacy_selection = settings_value
+            .get("transcribe_gpu_device")
+            .and_then(|value| value.as_i64())
+            .is_some_and(|value| value > 0);
+        if had_positive_legacy_selection {
             settings.transcribe_accelerator = TranscribeAcceleratorSetting::Auto;
-            settings.transcribe_gpu_device = default_transcribe_gpu_device();
+        }
+    }
+    if stored_schema_version < 2 {
+        // transcribe.cpp 0.2 replaced integer registry indices with opaque
+        // process-local handles. Clear every old index once.
+        settings.transcribe_gpu_device = default_transcribe_gpu_device();
+        // This fork delivers live transcripts to follower processes over a
+        // local socket instead of typing them into the focused window. Reset
+        // an explicit legacy paste setting once so existing profiles receive
+        // the fork's `PasteMethod::None` default as well as fresh installs.
+        if !matches!(settings.paste_method, PasteMethod::None) {
+            settings.paste_method = PasteMethod::None;
         }
         settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
         updated = true;
     }
 
-    if stored_schema_version < 2 {
-        // This fork delivers live transcripts to follower processes over a
-        // local socket instead of typing them into the focused window, so
-        // `impl Default for PasteMethod` now returns `None`. That only
-        // protects settings stores created after that change: any profile
-        // that had already run Handy has `paste_method` written to disk as
-        // an explicit `ctrl_v` (Windows/macOS) or `direct` (Linux), and the
-        // field-level `#[serde(default)]` only fires when the key is
-        // absent, so those stores never pick up the new default. Reset any
-        // explicit stored selection to `None` once; the Advanced-section
-        // escape hatch remains available for anyone who deliberately wants
-        // Handy's original paste-into-focused-window behavior back.
-        if !matches!(settings.paste_method, PasteMethod::None) {
-            settings.paste_method = PasteMethod::None;
-        }
-        settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
+    // The generic GPU choice was removed in favor of Auto or an exact device.
+    // Normalize settings created by builds that exposed that short-lived option.
+    if settings.transcribe_accelerator == TranscribeAcceleratorSetting::Gpu
+        && settings.transcribe_gpu_device.is_none()
+    {
+        settings.transcribe_accelerator = TranscribeAcceleratorSetting::Auto;
         updated = true;
     }
 
@@ -1319,17 +1357,9 @@ mod tests {
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to
     /// disk. This pins backwards compatibility: it must always parse strictly
-    /// (no salvage) and load every stored field without data loss.
-    ///
-    /// This fixture also carries `paste_method: "ctrl_v"`, an explicit stored
-    /// value from before this fork changed `PasteMethod`'s default to `None`
-    /// (see the schema-version-2 migration in `apply_settings_migrations`).
-    /// So, unlike a store already at the current schema version, this one is
-    /// expected to be rewritten exactly once, and by exactly one field:
-    /// `paste_method` resets to `None` and `settings_schema_version` bumps to
-    /// current. The test asserts that precisely - nothing else about the
-    /// parsed settings may change - so a future migration can never silently
-    /// widen its own blast radius against a real user's store.
+    /// (no salvage). Schema migrations may then rewrite fields whose native
+    /// meaning changed: legacy paste delivery and transcribe.cpp's device
+    /// identity both changed in schema version 2.
     ///
     /// If a schema change breaks this test, do NOT just update the fixture —
     /// it stands in for the stores on users' machines. Add a
@@ -1337,7 +1367,7 @@ mod tests {
     /// `apply_settings_migrations` so old values keep loading, and only extend
     /// the fixture (and its migration-blast-radius assertion) alongside that.
     #[test]
-    fn frozen_v0_9_store_parses_strictly_and_migrates_only_paste_method() {
+    fn frozen_v0_9_store_parses_strictly_then_migrates_schema_two_fields() {
         // Note "log_level": 2 — the legacy numeric format, kept deliberately.
         let stored: serde_json::Value = serde_json::from_str(
             r##"{
@@ -1442,33 +1472,23 @@ mod tests {
         assert_eq!(settings.sound_theme, SoundTheme::Pop);
         assert!(settings.filler_word_removal_enabled);
         assert!(matches!(settings.paste_method, PasteMethod::CtrlV));
+        assert_eq!(settings.vad_backend, VadBackend::Silero);
 
-        // Snapshot the fully-parsed, pre-migration settings so the
-        // post-migration blast radius can be checked field-by-field below,
-        // not just spot-checked.
-        let before_migration = serde_json::to_value(&settings).unwrap();
-
-        // This fixture predates the schema-version-2 paste_method migration
-        // (see `apply_settings_migrations`), so — unlike a store already at
-        // the current schema version — it IS rewritten once.
+        // The 0.1 integer device index is cleared once for transcribe.cpp 0.2;
+        // the fork also moves legacy profiles to no automatic paste delivery.
         assert!(apply_settings_migrations(&mut settings, &stored));
         assert!(matches!(settings.paste_method, PasteMethod::None));
-
-        // Assert the blast radius precisely: only `paste_method` and
-        // `settings_schema_version` may differ from the pre-migration
-        // snapshot. Every other stored field must survive unchanged.
-        let mut expected_after = before_migration;
-        expected_after["paste_method"] = serde_json::json!("none");
-        expected_after["settings_schema_version"] =
-            serde_json::json!(CURRENT_SETTINGS_SCHEMA_VERSION);
         assert_eq!(
-            serde_json::to_value(&settings).unwrap(),
-            expected_after,
-            "the paste_method migration must not touch any other field"
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
         );
+        assert_eq!(
+            settings.transcribe_accelerator,
+            TranscribeAcceleratorSetting::Auto
+        );
+        assert_eq!(settings.transcribe_gpu_device, None);
 
-        // Re-running against the now-current-schema value must be a no-op:
-        // this is what proves the migration is run-once, not run-on-every-load.
+        // Schema migrations are one-time only.
         let migrated_value = serde_json::to_value(&settings).unwrap();
         assert!(!apply_settings_migrations(&mut settings, &migrated_value));
     }
@@ -1737,7 +1757,6 @@ mod tests {
     fn gpu_device_migration_resets_legacy_positive_selection_to_auto() {
         let mut settings = get_default_settings();
         settings.transcribe_accelerator = TranscribeAcceleratorSetting::Gpu;
-        settings.transcribe_gpu_device = 2;
 
         let raw = serde_json::json!({
             "transcribe_accelerator": "gpu",
@@ -1749,10 +1768,7 @@ mod tests {
             settings.transcribe_accelerator,
             TranscribeAcceleratorSetting::Auto
         );
-        assert_eq!(
-            settings.transcribe_gpu_device,
-            default_transcribe_gpu_device()
-        );
+        assert_eq!(settings.transcribe_gpu_device, None);
         assert_eq!(
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
@@ -1760,10 +1776,47 @@ mod tests {
     }
 
     #[test]
-    fn gpu_device_migration_keeps_current_schema_positive_selection() {
+    fn gpu_device_migration_maps_v1_automatic_gpu_to_auto() {
+        let raw = serde_json::json!({
+            "settings_schema_version": 1,
+            "transcribe_accelerator": "gpu",
+            "transcribe_gpu_device": 2
+        });
+        let mut settings: AppSettings = serde_json::from_value(raw.clone()).unwrap();
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(
+            settings.transcribe_accelerator,
+            TranscribeAcceleratorSetting::Auto
+        );
+        assert_eq!(settings.transcribe_gpu_device, None);
+    }
+
+    #[test]
+    fn gpu_device_migration_maps_current_automatic_gpu_to_auto() {
+        let raw = serde_json::json!({
+            "settings_schema_version": CURRENT_SETTINGS_SCHEMA_VERSION,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+            "transcribe_accelerator": "gpu",
+            "transcribe_gpu_device": null
+        });
+        let mut settings: AppSettings = serde_json::from_value(raw.clone()).unwrap();
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(
+            settings.transcribe_accelerator,
+            TranscribeAcceleratorSetting::Auto
+        );
+        assert_eq!(settings.transcribe_gpu_device, None);
+    }
+
+    #[test]
+    fn gpu_device_migration_keeps_current_stable_selection() {
         let mut settings = get_default_settings();
         settings.transcribe_accelerator = TranscribeAcceleratorSetting::Gpu;
-        settings.transcribe_gpu_device = 2;
+        settings.transcribe_gpu_device = Some("[\"vulkan\",\"id\",\"0000:01:00.0\"]".into());
 
         let raw = serde_json::json!({
             "settings_schema_version": CURRENT_SETTINGS_SCHEMA_VERSION,
@@ -1771,15 +1824,14 @@ mod tests {
             "whats_new_last_seen_version": default_whats_new_last_seen_version(),
             "overlay_style": "live",
             "transcribe_accelerator": "gpu",
-            "transcribe_gpu_device": 2
+            "transcribe_gpu_device": settings.transcribe_gpu_device
         });
 
         assert!(!apply_settings_migrations(&mut settings, &raw));
         assert_eq!(
-            settings.transcribe_accelerator,
-            TranscribeAcceleratorSetting::Gpu
+            settings.transcribe_gpu_device.as_deref(),
+            Some("[\"vulkan\",\"id\",\"0000:01:00.0\"]")
         );
-        assert_eq!(settings.transcribe_gpu_device, 2);
     }
 
     #[test]

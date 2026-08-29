@@ -258,7 +258,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         system_audio_transcription,
     )));
     app_handle.manage(history_manager.clone());
-    app_handle.manage(tray::CurrentTrayIconState::new());
+    app_handle.manage(tray::TrayState::new());
 
     if follow_stream::listener_required(&initial_settings) {
         let startup_app = app_handle.clone();
@@ -407,7 +407,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                             log::error!("Failed to switch model via tray: {}", e);
                         }
                     }
-                    tray::update_tray_menu(&app_clone, None);
+                    tray::update_tray_menu(&app_clone);
                 });
             }
             _ => {}
@@ -417,7 +417,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(tray);
 
     // Initialize tray menu with idle state
-    utils::update_tray_menu(app_handle, None);
+    tray::update_tray_menu(app_handle);
 
     // Apply show_tray_icon setting
     let settings = settings::get_settings(app_handle);
@@ -428,7 +428,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // Refresh tray menu when model state changes
     let app_handle_for_listener = app_handle.clone();
     app_handle.listen("model-state-changed", move |_| {
-        tray::update_tray_menu(&app_handle_for_listener, None);
+        tray::update_tray_menu(&app_handle_for_listener);
     });
 
     // Apply the autostart preference (SMAppService login item on macOS 13+,
@@ -675,6 +675,19 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_args: CliArgs) {
+    // Avoid ggml-metal residency-set teardown assertions when a native engine
+    // outlives the Tauri shutdown sequence (#1902). This must happen before
+    // transcribe-cpp initializes its Metal device. Advanced users can restore
+    // upstream residency behavior with HANDY_METAL_RESIDENCY=1.
+    #[cfg(target_os = "macos")]
+    if std::env::var("HANDY_METAL_RESIDENCY").as_deref() == Ok("1") {
+        // ggml treats GGML_METAL_NO_RESIDENCY as presence-based, so remove an
+        // inherited value as well when explicitly opting back in.
+        std::env::remove_var("GGML_METAL_NO_RESIDENCY");
+    } else {
+        std::env::set_var("GGML_METAL_NO_RESIDENCY", "1");
+    }
+
     // Pin glibc's dynamic mmap threshold before the first large allocation,
     // so per-dictation transient buffers are returned to the OS on free
     // instead of accumulating in malloc arenas (#1792). No-op off Linux/glibc.
@@ -733,6 +746,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_append_trailing_space_setting,
             shortcut::change_lazy_stream_close_setting,
             shortcut::change_vad_enabled_setting,
+            shortcut::change_vad_backend_setting,
             shortcut::change_filler_word_removal_enabled_setting,
             shortcut::change_app_language_setting,
             shortcut::change_update_checks_setting,
@@ -922,6 +936,14 @@ pub fn run(cli_args: CliArgs) {
                     show_main_window(app);
                 }
             } else {
+                // A second process was launched without remote-control flags
+                // (e.g. the binary run from a shell). On macOS, relaunching the
+                // bundle from Spotlight/Finder/Dock does not start a process —
+                // it arrives as RunEvent::Reopen below — but treat this the
+                // same way: raise the window and recreate a possibly vanished
+                // tray icon (#1948).
+                #[cfg(target_os = "macos")]
+                tray::recreate_tray_icon(app);
                 show_main_window(app);
             }
         }));
@@ -1107,6 +1129,19 @@ pub fn run(cli_args: CliArgs) {
         .run(|app, event| match &event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
+                // Fired when the already-running bundle is launched again from
+                // Spotlight/Finder or the Dock icon is clicked. If the settings
+                // window is hidden, the user is likely looking for a tray icon
+                // that vanished (#1948): recreate it. When the window is
+                // already visible this is just a focus request and the tray is
+                // left alone.
+                let window_visible = app
+                    .get_webview_window("main")
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false);
+                if !window_visible {
+                    tray::recreate_tray_icon(app);
+                }
                 show_main_window(app);
             }
             // Teardown transcribe.cpp before exit

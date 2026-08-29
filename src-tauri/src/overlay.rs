@@ -543,6 +543,10 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
     // Size the overlay for this state (compact vs. streaming), then position it.
     let (width, height) = overlay_dimensions(state);
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
+        // Invalidate any delayed hide still in flight from a previous session
+        // (see `hide_recording_overlay`).
+        OVERLAY_SHOW_GENERATION.fetch_add(1, Ordering::SeqCst);
+
         #[cfg(target_os = "linux")]
         let shown_with_layer_shell = if LAYER_SHELL_ACTIVE.load(Ordering::SeqCst) {
             let position = settings::get_settings(app_handle).overlay_position;
@@ -706,14 +710,24 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
     }
 }
 
+/// Generation counter bumped every time the overlay is shown. The delayed
+/// `hide()` below only unmaps the window if no show happened after it was
+/// scheduled, so a hide left over from a finished transcription can never
+/// take down the overlay of a session that started in the meantime — e.g. a
+/// press the coordinator remembered while the pipeline was busy and started
+/// the instant it drained, well inside the 300 ms hide delay.
+static OVERLAY_SHOW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
     // Always hide the overlay regardless of settings - if setting was changed while recording,
     // we still want to hide it properly
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
+        // Snapshot before doing anything observable, so any show that lands
+        // after this point invalidates the delayed hide below.
+        let scheduled_at = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
         // Emit event to trigger fade-out animation
         let _ = overlay_window.emit("hide-overlay", ());
-
         // Claim this hide's identity before sleeping. If a later show bumps
         // the epoch first, this token goes stale and the delayed native hide
         // below becomes a no-op instead of hiding a window a newer capture
@@ -733,7 +747,9 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
             let main_thread_handle = handle.clone();
             let _ = handle.run_on_main_thread(move || {
                 let current = OVERLAY_VISIBILITY_EPOCH.load(Ordering::Relaxed);
-                if visibility_request_is_current(token, current) {
+                if visibility_request_is_current(token, current)
+                    && OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) == scheduled_at
+                {
                     if let Some(overlay_window) =
                         main_thread_handle.get_webview_window("recording_overlay")
                     {

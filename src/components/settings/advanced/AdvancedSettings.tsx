@@ -27,6 +27,7 @@ import { FillerWordRemoval } from "../FillerWordRemoval";
 import { SystemAudioCapture } from "./SystemAudioCapture";
 import { SystemAudioDeviceSelector } from "./SystemAudioDeviceSelector";
 import { FollowStreamOutput } from "./FollowStreamOutput";
+import { VadBackendSelector } from "../VadBackendSelector";
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -83,6 +84,7 @@ export const AdvancedSettings: React.FC = () => {
           />
           <AccelerationSelector descriptionMode="tooltip" grouped={true} />
           <LazyStreamClose descriptionMode="tooltip" grouped={true} />
+          <VadBackendSelector descriptionMode="tooltip" grouped={true} />
         </SettingsGroup>
       )}
     </div>
