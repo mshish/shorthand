@@ -25,6 +25,7 @@ Every task's requirements implicitly include these.
 - **Shorthand's voice is not Handy's.** The plugin repo's `docs/settings-copy-style.md` is the source. It is scoped to a settings tab, so take the rules that generalise: **rule 3** — describe the consequence, not the mechanism, and keep internal vocabulary out of user-facing prose; **rule 7** — "folder" not "directory", "note" for a Markdown file, American spelling; **rule 8** — sentence case headings; **rule 9** — second person, present tense, active voice, no "we". Rule 1's ethos carries: say it once, plainly, and link rather than inline the background. This repository's `README.md` is inherited Handy copy throughout and reads in Handy's register — longer, more mechanism-forward, more marketing. **The sections this plan rewrites come out in Shorthand's register**, which means the replacement copy is shorter than what it replaces, not merely more accurate. Do not extend that rewrite to sections this plan does not name; that is the rename trap below in a different costume.
 - **Do not extend the Handy → Shorthand rename.** `AGENTS.md` is explicit: renaming something upstream did not rename adds conflict surface for no gain. This plan touches `README.md`'s fork-specific sections only, and leaves inherited binary names, install paths and app-data directory paths alone.
 - **Keep the diff mergeable.** Phase C merges 25 upstream commits into this tree. Every unnecessary edit to an upstream line made now is a conflict paid for then.
+- **Codex's writable root is the shell's working directory at dispatch time, not the path in the brief.** Observed 2026-08-28 in Phase A: a dispatch made from the wrong directory came back "Blocked by workspace permissions" having changed nothing. It fails closed rather than editing the wrong tree, but it costs a round trip. `cd /d/tools/shorthand-repos` and confirm with `pwd` in the same turn as the dispatch.
 - **Between Tasks 6 and 10, the local `origin` remote is a trap.** It still reads `https://github.com/mshish/shorthand.git`, which GitHub silently redirects to `shorthand-legacy` after the rename. A `git push origin` in that window lands in the backup repository and reports success. Every command in that window addresses its repository by explicit URL for exactly this reason; do not add one that relies on `origin`. Task 10 Step 4 repoints it.
 
 ## What this corrects in the 2026-08-24 plan
@@ -40,7 +41,7 @@ Every task's requirements implicitly include these.
 
 | File | Responsibility | Task |
 | --- | --- | --- |
-| `README.md:1-19` | title, badge — the "About This Fork" section is inserted after it | 1 |
+| `README.md:1-19` | title, badge — the "About this fork" section is inserted after it | 1 |
 | `README.md` CLI Parameters | startup flags — `--follow-stream` is currently undocumented here despite being in `AGENTS.md` | 2 |
 | `README.md` § How to Contribute | currently upstream's text verbatim, pointing at upstream's tracker and email | 3 |
 | `docs/superpowers/plans/2026-08-24-github-fork-migration-and-readme.md` | superseded; gets a header saying so | 0 |
@@ -77,7 +78,7 @@ git commit -m "docs: mark the fork-migration plan superseded"
 
 ---
 
-## Task 1: Add the "About This Fork" section to `README.md`
+## Task 1: Add the "About this fork" section to `README.md`
 
 **Repository:** `D:/tools/shorthand-repos/shorthand-app`.
 
@@ -123,7 +124,7 @@ Read what that returns and confirm the list is complete and true. If a shipped f
 grep -n "^## " README.md | head -5
 ```
 
-Expected: `## About This Fork` appears after the title and badge, before `## Why Handy?`.
+Expected: `## About this fork` appears after the title and badge, before `## Why Handy?`.
 
 ---
 
