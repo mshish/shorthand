@@ -22,6 +22,7 @@ Every task's requirements implicitly include these.
 - **Do not delete the pre-migration repository.** Rename it aside and keep it as a private backup.
 - **No agent runs Tasks 6, 8, 9 or 10.** `gh repo rename`, `gh repo fork` and `git push --mirror` are executed by Claude after the user confirms each individually.
 - **Re-derive every count at run time.** Branch counts, tag counts and divergence numbers are printed by the commands below and compared against each other. Numbers quoted in prose anywhere in this plan are dated observations, not expected values — history has moved since they were taken and will move again.
+- **Shorthand's voice is not Handy's.** The plugin repo's `docs/settings-copy-style.md` is the source. It is scoped to a settings tab, so take the rules that generalise: **rule 3** — describe the consequence, not the mechanism, and keep internal vocabulary out of user-facing prose; **rule 7** — "folder" not "directory", "note" for a Markdown file, American spelling; **rule 8** — sentence case headings; **rule 9** — second person, present tense, active voice, no "we". Rule 1's ethos carries: say it once, plainly, and link rather than inline the background. This repository's `README.md` is inherited Handy copy throughout and reads in Handy's register — longer, more mechanism-forward, more marketing. **The sections this plan rewrites come out in Shorthand's register**, which means the replacement copy is shorter than what it replaces, not merely more accurate. Do not extend that rewrite to sections this plan does not name; that is the rename trap below in a different costume.
 - **Do not extend the Handy → Shorthand rename.** `AGENTS.md` is explicit: renaming something upstream did not rename adds conflict surface for no gain. This plan touches `README.md`'s fork-specific sections only, and leaves inherited binary names, install paths and app-data directory paths alone.
 - **Keep the diff mergeable.** Phase C merges 25 upstream commits into this tree. Every unnecessary edit to an upstream line made now is a conflict paid for then.
 - **Between Tasks 6 and 10, the local `origin` remote is a trap.** It still reads `https://github.com/mshish/shorthand.git`, which GitHub silently redirects to `shorthand-legacy` after the rename. A `git push origin` in that window lands in the backup repository and reports success. Every command in that window addresses its repository by explicit URL for exactly this reason; do not add one that relies on `origin`. Task 10 Step 4 repoints it.
@@ -92,18 +93,29 @@ git commit -m "docs: mark the fork-migration plan superseded"
 Insert immediately after line 3 (the Discord badge) and its following blank line — between the badge and the existing tagline / `## Why Handy?`:
 
 ```markdown
-## About This Fork
+## About this fork
 
-**Shorthand** (`mshish/shorthand`) is a GitHub-tracked fork of [cjpais/Handy](https://github.com/cjpais/Handy) — recorded in GitHub's fork network, so it can merge upstream Handy's changes and, for changes with nothing fork-specific about them, be offered back to upstream as pull requests.
+Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), a local speech-to-text app. Everything Handy does, this does.
 
-What's different here:
+What it adds:
 
-- **Fork-only features**, built as their own modules and off by default so they stay easy to lift into an upstream PR later — for example [`--follow-stream`](FOLLOW_STREAM.md), which lets another process follow live transcription output.
-- **A different visual identity** — see [BRANDING.md](BRANDING.md) for the palette, the mark, and the reasoning behind them.
-- **The product name is Shorthand**, not Handy — some inherited code, comments, and documentation below still say "Handy" where the rename hasn't reached yet.
+- **[`--follow-stream`](FOLLOW_STREAM.md)** — another program reads the transcript while you are still talking. The [Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin) uses this to keep meeting notes current during the meeting.
+- **A different look** — see [BRANDING.md](BRANDING.md).
 
-This repository's history includes regular merges from `cjpais/Handy`. See [AGENTS.md](AGENTS.md) for the branch and remote conventions, and this fork's own contribution workflow.
+Handy's own changes still land here regularly. Some inherited code and documentation below still says "Handy" where the rename has not reached. [AGENTS.md](AGENTS.md) covers how this fork tracks upstream and how to contribute.
 ```
+
+Note the register. This is shorter than the section it replaces in an earlier draft of this plan, and deliberately so — see Global Constraints. It drops "recorded in GitHub's fork network", "lift into an upstream PR later" and "built as their own modules": that is repository mechanism, it belongs in `AGENTS.md`, and a reader deciding whether to download this does not need it. Sentence case heading, second person, no "we".
+
+- [ ] **Step 1a: Verify the "what it adds" list against what actually ships**
+
+The two bullets above are the differentiators this plan could verify on 2026-08-28. **Do not add others from memory.** In particular, system-audio capture on Linux and macOS is on an unmerged branch (`feat/system-audio-linux-macos`) and must not be claimed here.
+
+```bash
+grep -n "fork-only\|Fork-only" AGENTS.md
+```
+
+Read what that returns and confirm the list is complete and true. If a shipped fork-only feature is missing, add a bullet in the same register — consequence first, mechanism in the linked doc. If a bullet names something not actually shipped, remove it.
 
 - [ ] **Step 2: Verify placement**
 
@@ -137,8 +149,14 @@ handy --follow-stream delta  # NDJSON, one record per newly-committed suffix
 handy --follow-stream text   # Plain `me: `/`them: ` text as it commits
 ```
 
-Unlike the flags above, `--follow-stream` doesn't control a running instance — it opens a read-only connection to one over a local socket and streams events until you disconnect. Off by default: enable **Follow Live Transcript Output** in Advanced settings first. See [FOLLOW_STREAM.md](FOLLOW_STREAM.md) for the full protocol.
+The flags above control a running Shorthand. This one reads from it: you get transcript events until you disconnect, and Shorthand carries on regardless. Turn on **Follow live transcript output** under Advanced first — it is off by default. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) has the protocol.
 ````
+
+The toggle name is copied from `src/shorthand/locales/en.json:5` and is sentence case there. Do not Title Case it here — a reader scanning the settings pane for "Follow Live Transcript Output" is looking for a control that does not exist under that name. Verify before committing:
+
+```bash
+grep -n "followStream.label" src/shorthand/locales/en.json
+```
 
 - [ ] **Step 2: Verify**
 
@@ -182,20 +200,20 @@ With:
 ```markdown
 ### How to Contribute
 
-Contributing to this fork (`mshish/shorthand`) is ordinary GitHub development: fork it, branch off `main`, test on your target platform, and open a pull request. No community-feedback thread or feature-freeze exemption needed — GitHub will pre-fill the PR description with `cjpais/Handy`'s upstream template; feel free to replace it, since that template's checklist is for PRs aimed at `cjpais/Handy`, not this fork.
+Fork it, branch off `main`, test on your platform, open a pull request. Nothing else is required — GitHub pre-fills the description with Handy's template, and you can replace it, because that checklist is for pull requests aimed at Handy.
 
-If your change belongs upstream instead — a fix or feature with nothing fork-specific about it — see [AGENTS.md § GitHub workflow for AI coding assistants](AGENTS.md#github-workflow-for-ai-coding-assistants) for `cjpais/Handy`'s actual PR template requirements, issue rules, and feature-freeze process before opening anything there.
-
-The goal is to create both a useful tool and a foundation for others to build upon—a well-patterned, simple codebase that serves the community.
+Sending a change to Handy instead is a different process with real requirements. [AGENTS.md](AGENTS.md#github-workflow-for-ai-coding-assistants) has them.
 ```
+
+Handy's closing line — "The goal is to create both a useful tool and a foundation for others to build upon…" — is deleted rather than kept. It is upstream's mission statement in upstream's voice, it tells a contributor nothing about how to contribute, and retaining it while rewriting the instructions above it would leave the section half in each register.
 
 - [ ] **Step 2: Verify**
 
 ```bash
-grep -n "contact@handy.computer\|Fork the repository" README.md
+grep -n "contact@handy.computer\|Fork the repository\|foundation for others to build upon" README.md
 ```
 
-Expected: no matches.
+Expected: no matches. The third pattern catches Handy's mission-statement line, which Step 1 deletes rather than keeps.
 
 ---
 
