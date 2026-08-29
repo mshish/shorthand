@@ -21,25 +21,25 @@ depends on this landing first.
 
 Verified 2026-08-28 against the live repositories, not assumed.
 
-| Fact | Value |
-| --- | --- |
-| Repository visibility | all four private |
-| `mshish/shorthand` | `isFork: false` — never forked from `cjpais/Handy` |
-| Merge base with upstream | `549cbde`, a real shared commit |
-| Divergence | **132 ahead, 25 behind** (the fork-migration plan's "95/14" is stale) |
-| Upstream head | `c6fa60d`, tag `v0.9.6` |
-| App version | `0.9.5` — Handy's number, in `tauri.conf.json` |
-| App identifier | `com.mshish.shorthand`, productName `Shorthand` |
-| Updater endpoint | `cjpais/Handy` releases — **accepting an update installs Handy** |
-| Updater pubkey | upstream's minisign key; no Shorthand keypair exists |
-| `signCommand` | `trusted-signing-cli … -a CJ-Signing -c cjpais-dev`, blocks bundling |
-| Repo secrets | none configured |
-| GitHub Actions | disabled at the repository level |
-| Tags in the app repo | 65, including upstream's `v0.9.5` and `v0.9.6` |
-| Plugin core pin | `github:mshish/shorthand-core#0.13.0` |
-| `shorthand-core` | `0.13.0` tagged and pushed; 31 tags |
-| Plugin id / name | `shorthand` / `Shorthand` — both already correct |
-| Plugin version | `0.1.0`, tagged |
+| Fact                     | Value                                                                 |
+| ------------------------ | --------------------------------------------------------------------- |
+| Repository visibility    | all four private                                                      |
+| `mshish/shorthand`       | `isFork: false` — never forked from `cjpais/Handy`                    |
+| Merge base with upstream | `549cbde`, a real shared commit                                       |
+| Divergence               | **132 ahead, 25 behind** (the fork-migration plan's "95/14" is stale) |
+| Upstream head            | `c6fa60d`, tag `v0.9.6`                                               |
+| App version              | `0.9.5` — Handy's number, in `tauri.conf.json`                        |
+| App identifier           | `com.mshish.shorthand`, productName `Shorthand`                       |
+| Updater endpoint         | `cjpais/Handy` releases — **accepting an update installs Handy**      |
+| Updater pubkey           | upstream's minisign key; no Shorthand keypair exists                  |
+| `signCommand`            | `trusted-signing-cli … -a CJ-Signing -c cjpais-dev`, blocks bundling  |
+| Repo secrets             | none configured                                                       |
+| GitHub Actions           | disabled at the repository level                                      |
+| Tags in the app repo     | 65, including upstream's `v0.9.5` and `v0.9.6`                        |
+| Plugin core pin          | `github:mshish/shorthand-core#0.13.0`                                 |
+| `shorthand-core`         | `0.13.0` tagged and pushed; 31 tags                                   |
+| Plugin id / name         | `shorthand` / `Shorthand` — both already correct                      |
+| Plugin version           | `0.1.0`, tagged                                                       |
 
 ## Decisions
 

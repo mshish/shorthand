@@ -57,21 +57,23 @@ Three local-only branches — `brand/clay-bird-rebrand`, `feat/fork-only-transla
 
 ## File Structure
 
-| File | Responsibility | Task |
-| --- | --- | --- |
-| `README.md:1-19` | title, badge — the "About this fork" section is inserted after it | 1 |
-| `README.md` CLI Parameters | startup flags — `--follow-stream` is currently undocumented here despite being in `AGENTS.md` | 2 |
-| `README.md` § How to Contribute | currently upstream's text verbatim, pointing at upstream's tracker and email | 3 |
-| `docs/superpowers/plans/2026-08-24-github-fork-migration-and-readme.md` | superseded; gets a header saying so | 0 |
+| File                                                                    | Responsibility                                                                                | Task |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---- |
+| `README.md:1-19`                                                        | title, badge — the "About this fork" section is inserted after it                             | 1    |
+| `README.md` CLI Parameters                                              | startup flags — `--follow-stream` is currently undocumented here despite being in `AGENTS.md` | 2    |
+| `README.md` § How to Contribute                                         | currently upstream's text verbatim, pointing at upstream's tracker and email                  | 3    |
+| `docs/superpowers/plans/2026-08-24-github-fork-migration-and-readme.md` | superseded; gets a header saying so                                                           | 0    |
 
 ---
 
 ## Task 0: Mark the superseded plan
 
 **Files:**
+
 - Modify: `docs/superpowers/plans/2026-08-24-github-fork-migration-and-readme.md:1`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing later tasks depend on. Done first so no one executes the wrong document.
 
@@ -101,9 +103,11 @@ git commit -m "docs: mark the fork-migration plan superseded"
 **Repository:** `D:/tools/shorthand-repos/shorthand-app`.
 
 **Files:**
+
 - Modify: `README.md:1-19` — insert after the Discord badge, before `## Why Handy?`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: a README section Tasks 2 and 3 sit alongside. No code interface.
 
@@ -151,9 +155,11 @@ Expected: `## About this fork` appears after the title and badge, before `## Why
 `AGENTS.md`'s CLI Parameters table lists `--follow-stream`; `README.md` does not mention it at all (verified: zero matches). It is the fork's headline feature and the thing `shorthand-core` consumes.
 
 **Files:**
+
 - Modify: `README.md` — CLI Parameters section, after the startup-flags block and its macOS tip, before `## Known Issues & Current Limitations`
 
 **Interfaces:**
+
 - Consumes: Task 1's section (adjacent, not depended on).
 - Produces: nothing later tasks depend on.
 
@@ -192,9 +198,11 @@ Expected: at least 4 (three flag lines plus the `FOLLOW_STREAM.md` link). It was
 The current section is upstream Handy's blurb, unedited: wrong issue tracker, an instruction to "fork the repository" aimed at a reader who is already looking at the fork, and upstream's contact email.
 
 **Files:**
+
 - Modify: `README.md` — `### How to Contribute`, before `## Sponsors`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing later tasks depend on.
 
@@ -241,6 +249,7 @@ Expected: no matches. The third pattern catches Handy's mission-statement line, 
 This must land on `origin` before Task 8. Pushing now, while private, means a mistake is caught before anyone outside can see it.
 
 **Files:**
+
 - Modify: none beyond Tasks 1–3.
 
 - [ ] **Step 1: Confirm only `README.md` is staged**
@@ -484,7 +493,7 @@ gh api --paginate repos/mshish/shorthand-fork-tmp/git/refs -q '.[].ref' | sort >
 diff "$snap/local-refs.txt" "$snap/remote-refs.txt"
 ```
 
-Expected: the only lines present locally but not remotely are `refs/pull/*` and `refs/tags/pre-shorthand-backup`, all excluded on purpose by Step 1. Lines present remotely but not locally are upstream's own refs and are fine. Any *other* ref present locally but missing remotely is history that failed to push — investigate it.
+Expected: the only lines present locally but not remotely are `refs/pull/*` and `refs/tags/pre-shorthand-backup`, all excluded on purpose by Step 1. Lines present remotely but not locally are upstream's own refs and are fine. Any _other_ ref present locally but missing remotely is history that failed to push — investigate it.
 
 - [ ] **Step 3: Confirm the fork relationship survived the mirror push**
 
