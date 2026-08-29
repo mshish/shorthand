@@ -1,5 +1,11 @@
 # GitHub Fork Migration & README Fork Notes — Implementation Plan
 
+> **SUPERSEDED 2026-08-28** by `2026-08-28-phase-b-fork-the-app.md`. Four of
+> this plan's facts and procedures are wrong or stale: the divergence counts
+> (95/14, now 136/25), the secret scan targets the working copy rather than the
+> bare clone, the home-grown detector misses several credential shapes, and the
+> rollback cannot deliver its promised retry. Do not execute this document.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn `mshish/shorthand` into a GitHub-tracked real fork of `cjpais/Handy` — preserving full commit history (all branches and tags, not just `main`) and the existing `git merge upstream/main` workflow — and bring `README.md` up to date so it explains the fork and documents the fork-only `--follow-stream` flag it's currently missing. Forking `cjpais/Handy` (public) makes the new repo public **immediately and irreversibly on its own** — GitHub does not allow a fork of a public repo to be private. That single fact drives this plan's ordering: everything that must happen before the repo is public (README fixes) happens first, against the current still-private repo.
