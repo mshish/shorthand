@@ -27,10 +27,12 @@
 ### Task 1: `FollowMode` and the `mode` field on `Begin`
 
 **Files:**
+
 - Modify: `src-tauri/src/follow_stream/protocol.rs` (enum definition near `FollowEvent`, around line 44-92; the existing `Begin` construction in its own tests at line 179-182)
 - Modify: `src-tauri/src/follow_stream/mod.rs:18-21` (the `pub use protocol::{…}` re-export list)
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces: `pub enum FollowMode { Meeting, AssistedNotes, Dictation }`, re-exported as `crate::follow_stream::FollowMode`, serializing to `"meeting"` / `"assisted-notes"` / `"dictation"`. `FollowEvent::Begin` gains a `mode: FollowMode` field, declared after `streaming`.
 
@@ -158,6 +160,7 @@ point; the wire did not carry it."
 ### Task 2: Advertise `begin-mode` on `hello`
 
 **Files:**
+
 - Modify: `src-tauri/src/follow_stream/hub.rs:436-440` (the `capabilities` vec in `subscribe`) and its six tests asserting a literal `hello` line (746, 779, 839, 924, 978, 1129)
 - Modify: `src-tauri/src/follow_stream/protocol.rs` — the `capabilities` doc comment at 50-58, and the `hello` test literal at 173
 - Modify: `src-tauri/src/follow_stream/server.rs` — `hello` test literals at 386, 421, 458
@@ -165,6 +168,7 @@ point; the wire did not carry it."
 - Modify: `FOLLOW_STREAM.md`
 
 **Interfaces:**
+
 - Consumes: `FollowMode` from Task 1 (referenced by the doc text only).
 - Produces: `hello.capabilities` is `["toggle-assisted-notes", "begin-mode"]`.
 
@@ -209,7 +213,7 @@ In `src-tauri/src/follow_stream/hub.rs`, at the `capabilities` vec inside `subsc
             capabilities: vec!["toggle-assisted-notes", "begin-mode"],
 ```
 
-The doc comment on `FollowEvent::Hello.capabilities` (`protocol.rs:50-58`) describes the field as naming *control flags* — "named exactly as the CLI flag minus its `--`". `begin-mode` is not a control flag, so that description becomes false. Generalize it, keeping the reason the field exists:
+The doc comment on `FollowEvent::Hello.capabilities` (`protocol.rs:50-58`) describes the field as naming _control flags_ — "named exactly as the CLI flag minus its `--`". `begin-mode` is not a control flag, so that description becomes false. Generalize it, keeping the reason the field exists:
 
 ```rust
         /// Optional protocol capabilities this binary supports, as kebab-case
@@ -292,6 +296,7 @@ capability list is where that question is already answered."
 ### Task 3: Thread the active mode from `actions.rs` to the hub
 
 **Files:**
+
 - Modify: `src-tauri/src/shorthand/mode.rs` (add the `From` impl and its test)
 - Modify: `src-tauri/src/follow_stream/hub.rs:296` (`begin`'s signature) and its 19 test call sites
 - Modify: `src-tauri/src/follow_stream/client.rs:757,814` (two test call sites)
@@ -299,6 +304,7 @@ capability list is where that question is already answered."
 - Modify: `src-tauri/src/actions.rs:617-620` (the one production call site)
 
 **Interfaces:**
+
 - Consumes: `FollowMode` from Task 1.
 - Produces: `impl From<Mode> for FollowMode` in `crate::shorthand::mode`. `FollowStreamHub::begin(&self, streaming: bool, mode: FollowMode)`.
 
@@ -403,16 +409,16 @@ cd src-tauri && grep -rn 'hub\.begin(\|FollowEvent::Begin\|\\"t\\":\\"begin\\"\|
 
 Expected as of 2026-08-29 — check the counts against what you actually see, and treat a mismatch as this plan being stale rather than as a reason to skip one:
 
-| File | `hub.begin(…)` calls | Literal `begin` assertions | Literal `hello` assertions |
-| --- | --- | --- | --- |
-| `follow_stream/hub.rs` | 19 (tests) + 1 definition | 13 | 6 |
-| `follow_stream/client.rs` | 2 (tests) | 3 full-line (486, 510, 782) | 1 (781) |
-| `follow_stream/server.rs` | 3 (tests: 388, 424, 452) | at least 1 stamped (430) | 3 (386, 421, 458) |
-| `follow_stream/protocol.rs` | — | 1 (in its own tests) | 1 (173) |
+| File                        | `hub.begin(…)` calls      | Literal `begin` assertions  | Literal `hello` assertions |
+| --------------------------- | ------------------------- | --------------------------- | -------------------------- |
+| `follow_stream/hub.rs`      | 19 (tests) + 1 definition | 13                          | 6                          |
+| `follow_stream/client.rs`   | 2 (tests)                 | 3 full-line (486, 510, 782) | 1 (781)                    |
+| `follow_stream/server.rs`   | 3 (tests: 388, 424, 452)  | at least 1 stamped (430)    | 3 (386, 421, 458)          |
+| `follow_stream/protocol.rs` | —                         | 1 (in its own tests)        | 1 (173)                    |
 
-*Half one — the calls.* None of the 24 test calls is about the mode, so each takes `FollowMode::Meeting`. `server.rs` was missing from the first draft of this plan and is the file most likely to be forgotten; it is not optional.
+_Half one — the calls._ None of the 24 test calls is about the mode, so each takes `FollowMode::Meeting`. `server.rs` was missing from the first draft of this plan and is the file most likely to be forgotten; it is not optional.
 
-*Half two — the assertions.* Each literal `begin` line gains `,"mode":"meeting"` immediately after `streaming`. Two shapes exist and both must be handled:
+_Half two — the assertions._ Each literal `begin` line gains `,"mode":"meeting"` immediately after `streaming`. Two shapes exist and both must be handled:
 
 ```
 {"t":"begin","session":1,"streaming":true}
@@ -424,7 +430,7 @@ The stamped shape appears at `hub.rs:858`, `hub.rs:925` and `server.rs:430` amon
 Then confirm nothing was missed or over-written — in particular that `begin_carries_the_mode_it_was_given` keeps its `AssistedNotes` argument and assertion:
 
 ```bash
-cd src-tauri && grep -rn 'hub\.begin(\|\\"t\\":\\"begin\\"' src/follow_stream | grep -v 'mode' 
+cd src-tauri && grep -rn 'hub\.begin(\|\\"t\\":\\"begin\\"' src/follow_stream | grep -v 'mode'
 ```
 
 Expected: only `client.rs:758`, which is `wait_until(|| output.text().contains("\"t\":\"begin\""))` — a substring probe, not a full-line assertion. It is correct unchanged; leave it. Anything else in that output is something you have not updated yet.
@@ -474,6 +480,7 @@ than read from the hub, which has no AppHandle."
 **Files:** none — this task runs gates and opens the PR.
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: the merged change on `main`. No version bump, no tag — see Global Constraints for why.
 
