@@ -322,7 +322,7 @@ mod tests {
     use crate::managers::transcription::StreamSource;
 
     use super::*;
-    use crate::follow_stream::Speaker;
+    use crate::follow_stream::{FollowMode, Speaker};
 
     static NEXT_TEST_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -385,10 +385,10 @@ mod tests {
             read_line(&mut client).await,
             "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"
         );
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         assert_eq!(
             read_line(&mut client).await,
-            "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n"
+            "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n"
         );
         hub.partial(StreamSource::Mic, "hello ", "wor");
         assert_eq!(
@@ -421,13 +421,13 @@ mod tests {
             "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         clock.advance(100);
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         clock.advance(1112);
         hub.partial(StreamSource::Mic, "hello ", "wor");
 
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n"
+            "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n"
         );
         assert_eq!(
             read_raw_line(&mut client).await,
@@ -449,7 +449,7 @@ mod tests {
         let mut first = connect(name.clone()).await;
         assert!(read_line(&mut first).await.contains("\"t\":\"hello\""));
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         hub.partial(StreamSource::System, "system", " audio");
 
         let mut late = connect(name).await;
@@ -459,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             read_line(&mut late).await,
-            "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n"
+            "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n"
         );
         assert_eq!(
             read_line(&mut late).await,

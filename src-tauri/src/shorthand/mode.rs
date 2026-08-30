@@ -40,6 +40,24 @@ impl Mode {
     }
 }
 
+/// The wire spelling of a mode, for `--follow-stream`'s `begin` record.
+///
+/// The mapping lives here rather than in `follow_stream::protocol` so that the
+/// protocol module — which is the liftable, self-contained fork feature — does
+/// not depend on the active-mode cell. Exhaustive by construction: adding a
+/// `Mode` variant without a wire spelling is a compile error, which is the
+/// point.
+impl From<Mode> for crate::follow_stream::FollowMode {
+    fn from(mode: Mode) -> Self {
+        use crate::follow_stream::FollowMode;
+        match mode {
+            Mode::Meeting => FollowMode::Meeting,
+            Mode::Dictation => FollowMode::Dictation,
+            Mode::AssistedNotes => FollowMode::AssistedNotes,
+        }
+    }
+}
+
 /// Only one capture runs at a time — `AudioRecordingManager` tracks a single
 /// `is_recording` flag, and `TranscriptionCoordinator`'s `Stage` state machine
 /// serialises transcribe bindings — so a single process-wide cell is safe:
@@ -104,5 +122,16 @@ mod tests {
             assert_eq!(Mode::from_repr(mode.as_repr()), mode);
         }
         assert_eq!(Mode::from_repr(200), Mode::Meeting);
+    }
+
+    #[test]
+    fn every_mode_maps_to_its_wire_spelling() {
+        use crate::follow_stream::FollowMode;
+        assert_eq!(FollowMode::from(Mode::Meeting), FollowMode::Meeting);
+        assert_eq!(FollowMode::from(Mode::Dictation), FollowMode::Dictation);
+        assert_eq!(
+            FollowMode::from(Mode::AssistedNotes),
+            FollowMode::AssistedNotes
+        );
     }
 }

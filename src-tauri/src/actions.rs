@@ -616,7 +616,12 @@ impl ShortcutAction for TranscribeAction {
         // follow_stream::hub::tests).
         if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
             if let Some(hub) = crate::follow_stream::hub(app) {
-                hub.begin(model_supports_streaming);
+                // The cell was written by this same function at its top, for this
+                // same capture, so it cannot describe a different one.
+                hub.begin(
+                    model_supports_streaming,
+                    crate::shorthand::mode::active(app).into(),
+                );
             }
         }
         if model_supports_streaming {
