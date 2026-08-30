@@ -9,13 +9,16 @@
  * Run this with node, not bun — Playwright's browser launch hangs under bun on
  * Windows. If chromium is missing: bun x playwright install chromium
  *
- * Seven shots, from two pages:
+ * Nine shots, from two pages:
  *
  *   light.png / dark.png            the component gallery (gallery.html)
- *   settings-light.png              the real settings window, Modes, Advanced off
+ *   settings-light.png              the real settings window, Modes, on
+ *                                   Notetaking > Meetings, Advanced off
  *   settings-dark.png               the same, dark
  *   settings-advanced.png           the same, Advanced on
+ *   settings-assisted.png           the same, Notetaking > Assisted notes
  *   settings-dictation.png          the same, Dictation tab
+ *   settings-dependents.png         the same, with AI cleanup switched on
  *   settings-cancel.png             the same, Meetings tab, Advanced on, with
  *                                   dictation switched off
  *
@@ -104,6 +107,13 @@ const settings = await openPage(SETTINGS_VIEWPORT, "index.html");
 // The app opens on Modes, the first registered section — asserted rather than
 // assumed, since the shots below are all of that section.
 await settings.waitForSelector('nav button[aria-current="page"] >> text=Modes');
+// Modes is two nested tablists, not one flat one: Notetaking / Dictation, and
+// inside the Notetaking panel a second tablist of Meetings / Assisted notes.
+// Both are asserted, outer first, because the inner one exists only while the
+// outer sits on Notetaking — so a failure here names which of the two moved
+// rather than reporting a tab that simply is not there. Every shot below has
+// to say which tab of *each* list it wants.
+await settings.getByRole("tab", { name: "Notetaking" }).waitFor();
 await settings.getByRole("tab", { name: "Meetings" }).waitFor();
 
 const advancedSwitch = settings.getByRole("switch");
@@ -128,10 +138,18 @@ await advancedSwitch.click();
 await expectAdvanced(true);
 await shoot(settings, "settings-advanced");
 
-// Back off before the Dictation shot: that one is about the tab, and leaving
-// advanced on would make it about both at once.
+// Back off before the two tab shots below: each of those is about a tab, and
+// leaving advanced on would make it about both things at once.
 await advancedSwitch.click();
 await expectAdvanced(false);
+
+// Notetaking's other half, which nothing photographed until now. The mock
+// ships assisted notes switched off, exactly as a fresh install does, so what
+// this catches is the sub-tab bar and the single row a user meets before they
+// have chosen the mode — the state the bar has to read correctly in first.
+await settings.getByRole("tab", { name: "Assisted notes" }).click();
+await shoot(settings, "settings-assisted");
+
 await settings.getByRole("tab", { name: "Dictation" }).click();
 await shoot(settings, "settings-dictation");
 
@@ -197,6 +215,13 @@ await settings.waitForFunction(() => {
   return title?.closest("div.px-4")?.querySelector("input")?.checked === false;
 });
 
+// Two clicks, because Meetings is a tab of the *inner* tablist and that one is
+// rendered only inside the Notetaking panel: from the Dictation tab there is
+// no Meetings tab to click. The second click is not redundant once the first
+// has landed either — the open sub-tab is component state that outlives its
+// panel, so returning to Notetaking reopens it on Assisted notes, where the
+// shot above left it.
+await settings.getByRole("tab", { name: "Notetaking" }).click();
 await settings.getByRole("tab", { name: "Meetings" }).click();
 await advancedSwitch.click();
 await expectAdvanced(true);
