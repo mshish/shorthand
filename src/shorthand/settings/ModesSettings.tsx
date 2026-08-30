@@ -162,7 +162,15 @@ export const ModesSettings: React.FC = () => {
   ];
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-8">
+    // No `space-y-8` here. It used to sit on this element, and because a
+    // TabPanel is a *sibling* of the tab bar rather than a child of it, that
+    // 32px landed on top of the TabPanel's own deliberate gap — so the spacing
+    // TabPanel's comment describes as 8px was really 40px on screen. On the
+    // Notetaking tab it was then paid a second time, under the nested bar: 40px
+    // of nothing above that bar and another 40 below it, for a control the
+    // whole pane is read through. The one group that genuinely wants that
+    // separation asks for it itself, below.
+    <div className="max-w-3xl w-full mx-auto">
       <Tabs
         tabs={modeTabs}
         active={activeTab}
@@ -173,6 +181,7 @@ export const ModesSettings: React.FC = () => {
       {activeTab === "notetaking" && (
         <TabPanel id="notetaking">
           <Tabs
+            variant="segmented"
             tabs={notetakingTabs}
             active={notetakingTab}
             onChange={setNotetakingTab}
@@ -504,16 +513,21 @@ export const ModesSettings: React.FC = () => {
           promising a setting with nothing beneath them, which is worse than
           saying nothing. */}
       {advanced && !isLinux && !anyPushToTalk && (
-        <Sheet
-          title={t("settings.modes.shared.title")}
-          description={t("settings.modes.shared.description")}
-        >
-          <ShortcutInput
-            shortcutId="cancel"
-            descriptionMode="tooltip"
-            grouped={true}
-          />
-        </Sheet>
+        // This group really is a peer of the whole tabbed block above, so it
+        // asks for the full separation the container used to hand out
+        // indiscriminately.
+        <div className="pt-8">
+          <Sheet
+            title={t("settings.modes.shared.title")}
+            description={t("settings.modes.shared.description")}
+          >
+            <ShortcutInput
+              shortcutId="cancel"
+              descriptionMode="tooltip"
+              grouped={true}
+            />
+          </Sheet>
+        </div>
       )}
     </div>
   );
