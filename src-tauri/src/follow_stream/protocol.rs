@@ -41,26 +41,50 @@ impl From<StreamSource> for Speaker {
     }
 }
 
+/// Which capture mode produced a session, as it appears on the wire.
+///
+/// Deliberately its own type rather than `shorthand::mode::Mode` re-serialized:
+/// this is a wire contract a follower gates behaviour on, and it must not
+/// change spelling because someone renamed an internal variant. The mapping
+/// between the two lives in `shorthand::mode`, so this module stays ignorant of
+/// the mode cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FollowMode {
+    Meeting,
+    AssistedNotes,
+    Dictation,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum FollowEvent {
     Hello {
         protocol: u32,
         version: String,
-        /// Control flags this binary's parser accepts, named exactly as the
-        /// CLI flag minus its `--` (e.g. `"toggle-assisted-notes"`). This
-        /// advertises parser support only, never whether the mode is
-        /// currently enabled — a follower still gets the app's own settings
-        /// as the single description of behaviour; this field exists so a
-        /// follower can tell an installed binary that predates a control
-        /// flag from one that merely has the setting turned off, instead of
-        /// guessing from a version number. Additive under protocol 1: an
-        /// older follower ignores a field it does not recognize.
+        /// Optional protocol capabilities this binary supports, as kebab-case
+        /// names. Control flags appear here as the CLI flag minus its `--`
+        /// (e.g. `"toggle-assisted-notes"`); other capabilities name a feature
+        /// of the wire format (e.g. `"begin-mode"`, meaning `begin` records
+        /// carry a `mode`). It advertises what this binary can do, never
+        /// whether a mode is currently enabled — a follower still gets the
+        /// app's own settings pane as the single description of behaviour.
+        /// This exists so a follower can tell an installed binary that
+        /// predates a capability from one that merely has the corresponding
+        /// setting turned off, instead of guessing from a version number.
+        /// Additive under protocol 1: an older follower ignores a field it
+        /// does not recognize.
         capabilities: Vec<&'static str>,
     },
     Begin {
         session: u64,
         streaming: bool,
+        /// Additive under protocol 1. An older follower ignores it; a current
+        /// one uses it to decide whether a session is any of its business at
+        /// all. Advertised by the `begin-mode` capability on `hello`, because
+        /// "field absent" and "app predates the field" are the same bytes and a
+        /// follower must not guess between them from a version number.
+        mode: FollowMode,
     },
     Partial {
         session: u64,
@@ -170,18 +194,19 @@ mod tests {
                 FollowEvent::Hello {
                     protocol: FOLLOW_PROTOCOL_VERSION,
                     version: "0.9.5".to_string(),
-                    capabilities: vec!["toggle-assisted-notes"],
+                    capabilities: vec!["toggle-assisted-notes", "begin-mode"],
                 },
                 None,
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
             (
                 FollowEvent::Begin {
                     session: 1,
                     streaming: true,
+                    mode: FollowMode::Meeting,
                 },
                 Some(0),
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\",\"session_elapsed_ms\":0}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\",\"session_elapsed_ms\":0}\n",
             ),
             (
                 FollowEvent::Partial {
@@ -276,6 +301,34 @@ mod tests {
             Stamp::new(wall, None).emitted_at,
             "2026-08-15T21:03:21.412+00:00"
         );
+    }
+
+    #[test]
+    fn begin_names_the_capture_mode_in_kebab_case() {
+        let stamp = Stamp::new(
+            DateTime::parse_from_rfc3339("2026-08-15T14:03:21.412-07:00").unwrap(),
+            Some(0),
+        );
+        // The wire spelling is the contract a follower gates on, so it is asserted
+        // literally rather than round-tripped through serde.
+        for (mode, expected) in [
+            (FollowMode::Meeting, "meeting"),
+            (FollowMode::AssistedNotes, "assisted-notes"),
+            (FollowMode::Dictation, "dictation"),
+        ] {
+            let line = FollowEvent::Begin {
+                session: 1,
+                streaming: true,
+                mode,
+            }
+            .to_line(&stamp);
+            assert_eq!(
+                &*line,
+                format!(
+                    "{{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"{expected}\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\",\"session_elapsed_ms\":0}}\n"
+                )
+            );
+        }
     }
 
     #[test]

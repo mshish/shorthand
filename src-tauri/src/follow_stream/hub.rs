@@ -13,7 +13,8 @@ use tokio::sync::Notify;
 use crate::managers::transcription::StreamSource;
 
 use super::protocol::{
-    FollowEvent, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT, FOLLOW_PROTOCOL_VERSION,
+    FollowEvent, FollowMode, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT,
+    FOLLOW_PROTOCOL_VERSION,
 };
 
 pub const MAX_FOLLOWERS: usize = 8;
@@ -293,7 +294,10 @@ impl FollowStreamHub {
         Stamp::new(self.clock.wall(), elapsed)
     }
 
-    pub fn begin(&self, streaming: bool) {
+    /// `mode` is passed in rather than read here: the hub has no `AppHandle`,
+    /// and the caller is `TranscribeAction::start`, which has already written
+    /// the active-mode cell for this very capture.
+    pub fn begin(&self, streaming: bool, mode: FollowMode) {
         if !self.enabled.load(Ordering::Acquire) {
             return;
         }
@@ -322,7 +326,12 @@ impl FollowStreamHub {
         state.next_session += 1;
 
         let started = self.clock.mono();
-        let line = FollowEvent::Begin { session, streaming }.to_line(&self.stamp(Some(started)));
+        let line = FollowEvent::Begin {
+            session,
+            streaming,
+            mode,
+        }
+        .to_line(&self.stamp(Some(started)));
         state.active = Some(ActiveSession {
             id: session,
             started,
@@ -432,12 +441,13 @@ impl FollowStreamHub {
         let mut backlog = vec![FollowEvent::Hello {
             protocol: FOLLOW_PROTOCOL_VERSION,
             version: app_version.to_string(),
-            // Advertises that this binary's parser accepts
-            // `--toggle-assisted-notes`, so a follower can distinguish an
-            // older installed app (which would error on the unrecognized
-            // flag) from this mode simply being turned off. See
-            // `FollowEvent::Hello`'s own doc comment.
-            capabilities: vec!["toggle-assisted-notes"],
+            // `toggle-assisted-notes` distinguishes an older installed app that
+            // lacks the control flag from a current one with the mode simply
+            // turned off. `begin-mode` distinguishes an app that predates the
+            // `mode` field from one that merely has not started a session yet,
+            // since an absent field and a missing capability are the same bytes
+            // on the wire. See `FollowEvent::Hello`'s own doc comment.
+            capabilities: vec!["toggle-assisted-notes", "begin-mode"],
         }
         .to_line(&self.stamp(None))];
         if let Some(active) = &state.active {
@@ -713,24 +723,24 @@ mod tests {
         hub.finish(Some(Speaker::Me), "orphaned final");
         assert!(follower.drain().is_empty());
 
-        hub.begin(false);
+        hub.begin(false, FollowMode::Meeting);
         hub.no_speech();
         hub.error("late error");
         assert_eq!(
             events(follower.drain()),
             [
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":false}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":false,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"no_speech\",\"session\":1}\n",
             ]
         );
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         hub.cancel();
         hub.finish(Some(Speaker::Me), "late final");
         assert_eq!(
             events(follower.drain()),
             [
-                "{\"t\":\"begin\",\"session\":2,\"streaming\":true}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"cancel\",\"session\":2}\n",
             ]
         );
@@ -743,10 +753,10 @@ mod tests {
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n"]
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
         );
         let mut observed = Vec::new();
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         observed.extend(follower.drain());
         hub.partial(StreamSource::Mic, "hello ", "wor");
         observed.extend(follower.drain());
@@ -756,7 +766,7 @@ mod tests {
         assert_eq!(
             events(observed),
             [
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",
             ]
@@ -764,10 +774,33 @@ mod tests {
     }
 
     #[test]
+    fn hello_advertises_begin_mode_so_a_follower_need_not_guess_from_a_version() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (_follower, initial) = hub.subscribe("0.9.5").unwrap();
+        assert_eq!(
+            events(initial),
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
+        );
+    }
+
+    #[test]
+    fn begin_carries_the_mode_it_was_given() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        hub.begin(true, FollowMode::AssistedNotes);
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"assisted-notes\"}\n"]
+        );
+    }
+
+    #[test]
     fn late_attach_receives_active_session_and_both_partial_snapshots() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         hub.partial(StreamSource::System, "system", " audio");
         hub.partial(StreamSource::Mic, "hello", " there");
 
@@ -776,8 +809,8 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"them\",\"committed\":\"system\",\"tentative\":\" audio\"}\n",
             ]
@@ -836,14 +869,14 @@ mod tests {
         // `hello` describes the connection, not a session.
         assert_eq!(
             strings(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
         );
 
         // Drain between events: an undrained partial is cleared by the next
         // lifecycle event, which is the buffer's normal coalescing.
         let mut observed = Vec::new();
         clock.advance(100);
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         observed.extend(follower.drain());
         clock.advance(1112);
         hub.partial(StreamSource::Mic, "hello ", "wor");
@@ -855,7 +888,7 @@ mod tests {
         assert_eq!(
             strings(observed),
             [
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.200-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\",\"emitted_at\":\"2026-08-15T14:03:21.312-07:00\",\"session_elapsed_ms\":1112}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\",\"emitted_at\":\"2026-08-15T14:03:21.950-07:00\",\"session_elapsed_ms\":1750}\n",
             ]
@@ -868,11 +901,11 @@ mod tests {
         let hub = enabled_hub(&clock);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         clock.advance(5_000);
         hub.finish(Some(Speaker::Me), "one");
         clock.advance(60_000);
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         clock.advance(250);
         hub.finish(Some(Speaker::Me), "two");
 
@@ -886,19 +919,19 @@ mod tests {
         let hub = enabled_hub(&clock);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         clock.advance(4_000);
         // A second begin cancels the orphan; that cancel closes session 1, so it
         // must be measured from session 1's start, not session 2's.
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
 
         let drained = follower.drain();
         assert_eq!(
             events(drained.clone()),
             [
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"cancel\",\"session\":1}\n",
-                "{\"t\":\"begin\",\"session\":2,\"streaming\":true}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":true,\"mode\":\"meeting\"}\n",
             ]
         );
         assert_eq!(elapsed_values(drained), [Some(0), Some(4_000), Some(0)]);
@@ -909,7 +942,7 @@ mod tests {
         let clock = TestClock::new();
         let hub = enabled_hub(&clock);
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         clock.advance(2_000);
         hub.partial(StreamSource::Mic, "hello", " there");
 
@@ -921,8 +954,8 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
             ]
         );
@@ -931,7 +964,7 @@ mod tests {
     #[test]
     fn disabled_hub_ignores_every_publisher_method() {
         let hub = FollowStreamHub::default();
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         hub.partial(StreamSource::Mic, "ignored", "ignored");
         hub.finish(Some(Speaker::Me), "ignored");
         hub.no_speech();
@@ -943,10 +976,10 @@ mod tests {
         hub.set_enabled(true);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(initial.len(), 1);
-        hub.begin(false);
+        hub.begin(false, FollowMode::Meeting);
         assert_eq!(
             events(follower.drain()),
-            ["{\"t\":\"begin\",\"session\":1,\"streaming\":false}\n"]
+            ["{\"t\":\"begin\",\"session\":1,\"streaming\":false,\"mode\":\"meeting\"}\n"]
         );
     }
 
@@ -956,27 +989,27 @@ mod tests {
         hub.set_enabled(true);
         let (existing, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         assert_eq!(
             events(existing.drain()),
-            ["{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n"]
+            ["{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n"]
         );
         hub.partial(StreamSource::Mic, "old", " snapshot");
-        hub.begin(false);
+        hub.begin(false, FollowMode::Meeting);
 
         assert_eq!(
             events(existing.drain()),
             [
                 "{\"t\":\"cancel\",\"session\":1}\n",
-                "{\"t\":\"begin\",\"session\":2,\"streaming\":false}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
         );
         let (_, late_initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
-                "{\"t\":\"begin\",\"session\":2,\"streaming\":false}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
         );
     }
@@ -994,7 +1027,7 @@ mod tests {
         }
         assert!(follower.buffer.lock().unwrap().overflowed());
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
 
         assert_eq!(hub.follower_count(), 0);
         assert!(follower.is_evicted());
@@ -1005,7 +1038,7 @@ mod tests {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
         let (disabled_follower, _) = hub.subscribe("0.9.5").unwrap();
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
 
         hub.set_enabled(false);
 
@@ -1028,7 +1061,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(!wait_task.is_finished());
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(1), wait_task)
             .await
@@ -1078,7 +1111,7 @@ mod tests {
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
         assert!(follower.drain().is_empty());
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
 
         let result = tokio::time::timeout(std::time::Duration::from_millis(100), follower.wait())
             .await
@@ -1111,7 +1144,7 @@ mod tests {
             consumer_hub.unsubscribe(consumer_follower.id());
         });
 
-        hub.begin(true);
+        hub.begin(true, FollowMode::Meeting);
         wait_for_line_count(&written, 2).await;
         hub.partial(StreamSource::Mic, "hello ", "wor");
         wait_for_line_count(&written, 3).await;
@@ -1126,8 +1159,8 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
-                "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",
             ]
