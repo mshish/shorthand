@@ -1,26 +1,36 @@
 # Signing and updates
 
-Fork-only. Nothing here is set up yet — this is the briefing for the session
-that does it.
+Fork-only. Update signing is set up and the fork owns its own updater; code
+signing is not, on either platform.
 
 ## Where things stand
 
-| Thing                        | State                                               | Consequence                                                   |
-| ---------------------------- | --------------------------------------------------- | ------------------------------------------------------------- |
-| `plugins.updater.endpoints`  | points at `cjpais/Handy`'s `latest.json`            | Shorthand offers to install upstream Handy over itself        |
-| `plugins.updater.pubkey`     | upstream's minisign public key                      | only upstream can produce updates this build will accept      |
-| `update_checks_enabled`      | defaults `true`                                     | the offer appears unprompted                                  |
-| `bundle.windows.signCommand` | `trusted-signing-cli … -a CJ-Signing -c cjpais-dev` | bundling fails; this fork cannot authenticate to that account |
-| macOS `signingIdentity`      | `"-"` (ad-hoc)                                      | fine locally, not distributable                               |
-| GitHub Actions               | disabled at the repository level                    | nothing runs, nothing fails, no minutes burned                |
+| Thing                        | State                                        | Consequence                                                   |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| `plugins.updater.endpoints`  | `mshish/shorthand` releases                  | the updater offers Shorthand's own releases                   |
+| `plugins.updater.pubkey`     | this fork's minisign public key              | only this fork can produce updates the app will accept        |
+| `update_checks_enabled`      | defaults `true`                              | the app checks on its own                                     |
+| `bundle.windows.signCommand` | removed                                      | bundling succeeds; installers are unsigned, SmartScreen warns |
+| macOS `signingIdentity`      | `"-"` (ad-hoc)                               | runs on the machine that built it, nowhere else               |
+| GitHub Actions               | enabled; all nine inherited workflows active | builds run on pull requests and pushes to main                |
+| Repository visibility        | public                                       | release assets are reachable by the updater without auth      |
 
-**The live risk is the first row.** Until it changes, decline any update prompt.
-Accepting one replaces Shorthand with Handy.
+**The update-hijack risk this file used to open with is gone.** The endpoint and
+the public key both belong to this fork now, so an update prompt offers
+Shorthand rather than upstream Handy. What is left is ordinary code signing,
+which costs money and warns on first run without it.
 
-A one-line interim mitigation, if the prompt becomes annoying before this work
-happens: flip the fork's default for `update_checks_enabled` to `false` in
-`src-tauri/src/settings.rs`, the same way `paste_method` was defaulted. It
-doesn't fix anything, it just stops the app asking.
+## What is actually still missing
+
+- **Windows Authenticode.** Installers are unsigned. SmartScreen warns once;
+  "More info → Run anyway" works.
+- **macOS Developer ID and notarization.** This is why macOS is out of
+  `release.yml`'s matrix: the build itself now succeeds, but an unsigned `.app`
+  is quarantined on download and needs `xattr -dr com.apple.quarantine` before
+  it will open. macOS is also out of the automatic build matrix in
+  `main-build.yml`, separately, on runner cost.
+- **An exercised update.** The updater has never been run end to end against a
+  real release. Do not assume it works until an install has upgraded itself.
 
 ## Two different things both called "signing"
 
@@ -40,27 +50,24 @@ Entirely optional if you're the only user.
 You can have update signing without code signing. The result auto-updates fine
 and shows a SmartScreen warning on first run.
 
-## The gotcha that shapes everything: the repo is private
+## Where releases are hosted, and why that question is settled
 
-Tauri's updater fetches the endpoint over plain HTTPS. A private GitHub repo's
-release assets need an authenticated request, so `mshish/shorthand`'s releases
-are not reachable by the updater as-is.
+Tauri's updater fetches the endpoint over plain HTTPS, so the assets have to be
+reachable without authentication. That used to be the hard constraint here: the
+repository was private, its release assets needed an authenticated request, and
+this file weighed a separate public releases repo, object storage, and making
+the source public against each other.
 
-Real options, in rough order of sanity:
+**The repository is public now, so option three was taken.** The endpoint is
+`https://github.com/mshish/shorthand/releases/latest/download/latest.json` and
+it resolves for anyone. Nothing further is needed.
 
-1. **A separate public releases repo** (e.g. `mshish/shorthand-releases`)
-   holding only `latest.json` and the artifacts. Source stays private. This is
-   what most private-source projects do.
-2. **Object storage** — Cloudflare R2 or S3 with a public bucket. No GitHub
-   involvement, trivially cheap at this volume, and you control cache headers.
-3. **Make `mshish/shorthand` public.** Simplest, and the fork will eventually
-   contribute upstream anyway — but it publishes the divergence.
-4. **Custom headers with a token.** Tauri v2's updater supports request
-   headers, so a PAT could authenticate. Do not do this: the token ships inside
-   the app binary, readable by anyone who downloads it.
-
-Decide this first. It determines the endpoint URL, which determines everything
-downstream.
+Recorded because the alternatives are worth knowing if that ever reverses: a
+separate public releases repo holding only `latest.json` and the artifacts is
+what most private-source projects do, and object storage (R2, S3) is the option
+with no GitHub involvement at all. Custom request headers carrying a token are
+the one option to refuse outright — the token ships inside the app binary,
+readable by anyone who downloads it.
 
 ## Update signing, concretely
 
@@ -106,34 +113,27 @@ Developer Program ($99/year); the release workflow expects `APPLE_CERTIFICATE`,
 current setting) produces something that runs on the machine that built it and
 nowhere else.
 
-## Re-enabling CI without inheriting nine upstream workflows
+## CI, and the nine inherited workflows
 
-Actions is disabled as a **repository setting**, deliberately: upstream ships
-nine workflow files, and deleting them would be a permanent diff that conflicts
-on every merge. The setting achieves the same thing with a zero-line diff.
+Actions is **on**, and all nine workflow files inherited from upstream are
+active. The per-workflow disabling this section used to plan for never happened;
+the workflows were adapted instead.
 
-Turning Actions back on to get a release workflow would also start all nine.
-The way out is per-workflow disabling, which is also a setting rather than a
-file change:
+What runs automatically today:
 
-```sh
-# Turn Actions back on for the repo
-gh api -X PUT repos/mshish/shorthand/actions/permissions -F enabled=true
+- `main-build.yml` — Windows and Linux on every pull request and every push to
+  `main`. No macOS: cost on the automatic path, and no Developer ID on the
+  release path. `sign-updates` is on for `main` and off for pull requests,
+  because GitHub withholds secrets from a fork's pull request and the build
+  fails hard on an empty `TAURI_SIGNING_PRIVATE_KEY`.
+- `test.yml` — `cargo test`, ubuntu-24.04 only.
+- `code-quality.yml`, `playwright.yml`, `nix-check.yml` — frontend and Nix.
 
-# List the inherited workflows and their ids
-gh api repos/mshish/shorthand/actions/workflows -q '.workflows[] | "\(.id)\t\(.name)\t\(.path)"'
+`build-test.yml` and `pr-test-build.yml` remain `workflow_dispatch` and are the
+only way to build macOS on demand.
 
-# Disable each upstream one individually
-gh api -X PUT repos/mshish/shorthand/actions/workflows/<id>/disable
-```
-
-Then add a Shorthand-only release workflow as a new file, which conflicts with
-nothing because upstream has no file at that path.
-
-The alternative — keep Actions off entirely and cut releases locally with
-`bun run tauri build` plus `gh release create` — is less machinery and works
-fine for a one-person project. Worth considering before building CI you then
-have to maintain across merges.
+Because the repository is public, Actions minutes are free, so the macOS
+exclusion in `main-build.yml` is now about runner time rather than billing.
 
 ## Build commands, for reference
 
@@ -147,26 +147,29 @@ bun run tauri dev
 bun run tauri build --debug --no-bundle
 
 # Release binary, unsigned:         src-tauri/target/release/shorthand.exe
-# --no-bundle skips installer creation, which is where signCommand runs,
-# so this succeeds today despite the broken signing config.
+# --no-bundle skips installer creation. Bundling works now that signCommand
+# is gone; this is just the faster path when you only want the binary.
 bun run tauri build --no-bundle
 ```
 
-A full `bun run tauri build` (with bundling) will fail until `signCommand` is
-dealt with.
+A full `bun run tauri build` (with bundling) succeeds — `signCommand` was
+removed, so nothing tries to authenticate to an account this fork has no access
+to. The installer it produces is unsigned.
 
 `beforeBuildCommand` is `bun run build`, so every one of these runs the
 frontend build first — meaning the branding transform in
 `src/shorthand/branding.ts` applies, and its review warnings print.
 
-## Order of work, when you pick this up
+## If you pick up code signing
 
-1. Choose the distribution channel — public releases repo, object storage, or
-   make the source public. Everything else depends on it.
-2. Generate the minisign keypair; back the private key up off this machine.
-3. Update `pubkey` and `endpoints` in `src-tauri/tauri.conf.json`.
-4. Remove or replace `bundle.windows.signCommand`.
-5. Decide local releases versus CI. If CI, re-enable Actions and disable the
-   nine inherited workflows individually before pushing anything.
-6. Cut a release and verify an actual install upgrades itself — an updater that
-   has never been exercised end to end should not be assumed to work.
+1. Windows: decide between staying unsigned and Azure Trusted Signing (see the
+   table above). Unsigned is the honest default for a fork you run yourself.
+2. macOS: an Apple Developer Program membership ($99/year) is the entry price.
+   With a Developer ID in hand, add the two macOS rows back to `release.yml`'s
+   matrix and set `sign-binaries: true` there.
+3. Either way, cut a release and verify an actual install upgrades itself. The
+   updater path is configured but has never been exercised.
+
+Keep the minisign private key backed up off this machine. Losing it means
+existing installs can never be updated again — they reject anything signed by a
+different key, and the only remedy is a manual reinstall.

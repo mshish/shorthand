@@ -1,15 +1,33 @@
-name: "Main Branch Build"
+name: "Platform Build"
 
-# Runs the full cross-platform build on every push to main so breakage is
-# caught before a manual release is triggered. Artifacts are kept for 30 days
-# so any commit on main has a downloadable, testable build.
+# Runs the full cross-platform build on every pull request and every push to
+# main, so breakage is caught before it lands rather than after. Artifacts are
+# kept for 30 days so any commit on main has a downloadable, testable build.
+#
+# This is the only automatic build. test.yml runs cargo test on ubuntu-24.04
+# alone, where every `#[cfg(target_os = "macos")]` and `#[cfg(windows)]` block
+# is stripped before the compiler sees it — so without a pull_request trigger
+# here, platform-gated code reached main having never been compiled.
 
 on:
+  pull_request:
+    # A denylist, not an allowlist: the gap this trigger closes is platform-gated
+    # code reaching main uncompiled, and an allowlist reopens it the moment
+    # something builds that nobody thought to list. Only what provably cannot
+    # affect a build is skipped, and a pull request touching any of these
+    # alongside real code still builds — paths-ignore skips only when every
+    # changed file matches.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
   push:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Keyed on the PR number when there is one, so a force-push to a branch
+  # cancels its own superseded run rather than an unrelated one on main.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -63,8 +81,15 @@ jobs:
       # these artifacts do not need — main builds are 30-day testing artifacts,
       # not releases. Installers are unsigned, so SmartScreen warns once.
       sign-binaries: false
-      # On, so a main build is a genuine dry run of the release path: the
-      # updater artifacts and their minisign signatures are produced exactly as
-      # release.yml produces them. Costs nothing — the key is self-managed.
-      sign-updates: true
+      # On for main, so a main build is a genuine dry run of the release path:
+      # the updater artifacts and their minisign signatures are produced exactly
+      # as release.yml produces them. Costs nothing — the key is self-managed.
+      #
+      # Off for pull requests, and not merely as an economy: GitHub withholds
+      # secrets from a fork's pull request, and build.yml fails hard when
+      # sign-updates is on with an empty TAURI_SIGNING_PRIVATE_KEY. Leaving it
+      # on would make every outside contribution fail on a signing error that
+      # says nothing about their change. A pull request's artifacts are never
+      # released, so the signature has nothing to protect.
+      sign-updates: ${{ github.event_name != 'pull_request' }}
     secrets: inherit
