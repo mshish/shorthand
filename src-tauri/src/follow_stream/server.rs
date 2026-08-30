@@ -383,7 +383,7 @@ mod tests {
 
         assert_eq!(
             read_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"
         );
         hub.begin(true);
         assert_eq!(
@@ -418,7 +418,7 @@ mod tests {
 
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         clock.advance(100);
         hub.begin(true);
@@ -455,7 +455,7 @@ mod tests {
         let mut late = connect(name).await;
         assert_eq!(
             read_line(&mut late).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"
         );
         assert_eq!(
             read_line(&mut late).await,

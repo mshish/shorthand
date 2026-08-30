@@ -433,11 +433,12 @@ impl FollowStreamHub {
             protocol: FOLLOW_PROTOCOL_VERSION,
             version: app_version.to_string(),
             // Advertises that this binary's parser accepts
-            // `--toggle-assisted-notes`, so a follower can distinguish an
-            // older installed app (which would error on the unrecognized
-            // flag) from this mode simply being turned off. See
-            // `FollowEvent::Hello`'s own doc comment.
-            capabilities: vec!["toggle-assisted-notes"],
+            // `--toggle-assisted-notes`, and that its `begin` records name the
+            // capture mode. Both exist so a follower can distinguish an older
+            // installed app from a current one with the corresponding mode
+            // simply turned off — a version-number guess is what this replaces.
+            // See `FollowEvent::Hello`'s own doc comment.
+            capabilities: vec!["toggle-assisted-notes", "begin-mode"],
         }
         .to_line(&self.stamp(None))];
         if let Some(active) = &state.active {
@@ -743,7 +744,7 @@ mod tests {
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n"]
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
         );
         let mut observed = Vec::new();
         hub.begin(true);
@@ -764,6 +765,17 @@ mod tests {
     }
 
     #[test]
+    fn hello_advertises_begin_mode_so_a_follower_need_not_guess_from_a_version() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (_follower, initial) = hub.subscribe("0.9.5").unwrap();
+        assert_eq!(
+            events(initial),
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
+        );
+    }
+
+    #[test]
     fn late_attach_receives_active_session_and_both_partial_snapshots() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
@@ -776,7 +788,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"them\",\"committed\":\"system\",\"tentative\":\" audio\"}\n",
@@ -836,7 +848,7 @@ mod tests {
         // `hello` describes the connection, not a session.
         assert_eq!(
             strings(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
+            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
         );
 
         // Drain between events: an undrained partial is cleared by the next
@@ -921,7 +933,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
             ]
@@ -975,7 +987,7 @@ mod tests {
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false}\n",
             ]
         );
@@ -1126,7 +1138,7 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",

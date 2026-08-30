@@ -18,8 +18,8 @@ Two separate things decide whether a follower sees anything, and they must not b
 The stream is UTF-8, with exactly one JSON object per newline. Every object has a `t` discriminator; consumers should ignore fields they do not recognize so later protocol additions remain compatible. The current protocol is version 1:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.5","capabilities":["toggle-assisted-notes"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
-{"t":"begin","session":1,"streaming":true,"emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","begin-mode"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"begin","session":1,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":1,"speaker":"me","committed":"hello ","tentative":"wor","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"final","session":1,"speaker":"me","text":"Hello world.","emitted_at":"2026-08-15T14:03:22.050-07:00","session_elapsed_ms":1850}
 {"t":"no_speech","session":1,"emitted_at":"...","session_elapsed_ms":700}
@@ -27,15 +27,15 @@ The stream is UTF-8, with exactly one JSON object per newline. Every object has 
 {"t":"error","session":1,"message":"transcription failed","emitted_at":"...","session_elapsed_ms":900}
 ```
 
-`hello` is always the first event on a connection and reports the protocol and Handy versions. `capabilities` names the control flags this binary's parser accepts (currently just `toggle-assisted-notes`), not which settings are enabled — a follower still gets the app's own settings pane as the single description of behaviour, but this lets it tell an installed binary that predates a control flag from one that merely has the corresponding mode turned off, without guessing from a version number. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
+`hello` is always the first event on a connection and reports the protocol and Handy versions. `capabilities` names the control flags this binary's parser accepts (currently just `toggle-assisted-notes`), not which settings are enabled — a follower still gets the app's own settings pane as the single description of behaviour, but this lets it tell an installed binary that predates a control flag from one that merely has the corresponding mode turned off, without guessing from a version number. The `begin-mode` capability says this binary's `begin` records carry a `mode` field. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. `mode` names the capture mode that produced the session — `meeting`, `assisted-notes` or `dictation` — so a follower can decide whether a session is any of its business. Which modes reach a follower at all is still each mode's own publication setting, described at the top of this document; `mode` says what a delivered session was, not what is enabled. A follower that needs this field must gate on the `begin-mode` capability rather than on the field's absence, because an app that predates it is indistinguishable from one that has simply not started a session yet. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
 
 In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript.
 
 A dual-speaker session can therefore look like this:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.5","capabilities":["toggle-assisted-notes"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
-{"t":"begin","session":42,"streaming":true,"emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","begin-mode"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"begin","session":42,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":42,"speaker":"me","committed":"Can you hear me?","tentative":"","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"partial","session":42,"speaker":"them","committed":"Yes, clearly.","tentative":"","emitted_at":"2026-08-15T14:03:22.900-07:00","session_elapsed_ms":2700}
 {"t":"final","session":42,"text":"Me: Can you hear me?\nThem: Yes, clearly.","emitted_at":"2026-08-15T14:03:23.010-07:00","session_elapsed_ms":2810}
@@ -57,6 +57,8 @@ Every event carries two time fields, stamped once when Handy produces the event:
 `session_elapsed_ms` is absent on events that belong to no session: `hello`, and connection-level `error`. It restarts at zero for every `begin`.
 
 Both fields were added without bumping `protocol`, because they are additive and consumers are already told to ignore unrecognized fields. A bump is reserved for a removal, a rename, or a changed event meaning.
+
+`begin.mode` was added the same way and for the same reason.
 
 Two caveats on what a timestamp means:
 

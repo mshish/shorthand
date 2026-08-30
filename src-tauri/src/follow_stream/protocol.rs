@@ -62,15 +62,18 @@ pub enum FollowEvent {
     Hello {
         protocol: u32,
         version: String,
-        /// Control flags this binary's parser accepts, named exactly as the
-        /// CLI flag minus its `--` (e.g. `"toggle-assisted-notes"`). This
-        /// advertises parser support only, never whether the mode is
-        /// currently enabled — a follower still gets the app's own settings
-        /// as the single description of behaviour; this field exists so a
-        /// follower can tell an installed binary that predates a control
-        /// flag from one that merely has the setting turned off, instead of
-        /// guessing from a version number. Additive under protocol 1: an
-        /// older follower ignores a field it does not recognize.
+        /// Optional protocol capabilities this binary supports, as kebab-case
+        /// names. Control flags appear here as the CLI flag minus its `--`
+        /// (e.g. `"toggle-assisted-notes"`); other capabilities name a feature
+        /// of the wire format (e.g. `"begin-mode"`, meaning `begin` records
+        /// carry a `mode`). It advertises what this binary can do, never
+        /// whether a mode is currently enabled — a follower still gets the
+        /// app's own settings pane as the single description of behaviour.
+        /// This exists so a follower can tell an installed binary that
+        /// predates a capability from one that merely has the corresponding
+        /// setting turned off, instead of guessing from a version number.
+        /// Additive under protocol 1: an older follower ignores a field it
+        /// does not recognize.
         capabilities: Vec<&'static str>,
     },
     Begin {
@@ -191,10 +194,10 @@ mod tests {
                 FollowEvent::Hello {
                     protocol: FOLLOW_PROTOCOL_VERSION,
                     version: "0.9.5".to_string(),
-                    capabilities: vec!["toggle-assisted-notes"],
+                    capabilities: vec!["toggle-assisted-notes", "begin-mode"],
                 },
                 None,
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\"],\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
             (
                 FollowEvent::Begin {
