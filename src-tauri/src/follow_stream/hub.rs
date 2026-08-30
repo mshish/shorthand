@@ -441,12 +441,12 @@ impl FollowStreamHub {
         let mut backlog = vec![FollowEvent::Hello {
             protocol: FOLLOW_PROTOCOL_VERSION,
             version: app_version.to_string(),
-            // Advertises that this binary's parser accepts
-            // `--toggle-assisted-notes`, and that its `begin` records name the
-            // capture mode. Both exist so a follower can distinguish an older
-            // installed app from a current one with the corresponding mode
-            // simply turned off — a version-number guess is what this replaces.
-            // See `FollowEvent::Hello`'s own doc comment.
+            // `toggle-assisted-notes` distinguishes an older installed app that
+            // lacks the control flag from a current one with the mode simply
+            // turned off. `begin-mode` distinguishes an app that predates the
+            // `mode` field from one that merely has not started a session yet,
+            // since an absent field and a missing capability are the same bytes
+            // on the wire. See `FollowEvent::Hello`'s own doc comment.
             capabilities: vec!["toggle-assisted-notes", "begin-mode"],
         }
         .to_line(&self.stamp(None))];
