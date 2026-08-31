@@ -22,6 +22,16 @@ use super::protocol::{
 /// `t` value. One list, referenced from the one place `hello` is built, so
 /// the advertised set can never drift from what `subscribe` actually sends.
 /// See [`FollowEvent::Hello`]'s own doc comment for what each kind means.
+///
+/// `"refused"` says the `refused` record type exists at all; it says nothing
+/// about which `reason` values it may carry. `"refused-publication-disabled"`
+/// is the capability for the specific `reason:"publication-disabled"` value
+/// (see `RefusalReason::PublicationDisabled` in protocol.rs): a follower that
+/// wants to recognise that particular reason, rather than merely treat any
+/// `refused` it doesn't understand as an unexplained refusal, gates on this
+/// entry instead of assuming every installed binary that can send `refused`
+/// at all can also send this specific reason. See FOLLOW_STREAM.md's
+/// "Explicit start/stop commands" section for the full contract.
 const CAPABILITIES: &[&str] = &[
     "toggle-assisted-notes",
     "start-assisted-notes",
@@ -29,6 +39,7 @@ const CAPABILITIES: &[&str] = &[
     "begin-mode",
     "idle",
     "refused",
+    "refused-publication-disabled",
     "start-failed",
 ];
 
@@ -1211,7 +1222,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"idle\"}\n",
             ]
         );
@@ -1241,7 +1252,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"idle\"}\n",
             ]
         );
@@ -1496,7 +1507,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"them\",\"committed\":\"system\",\"tentative\":\" audio\"}\n",
@@ -1558,7 +1569,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
                 "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
             ]
         );
@@ -1645,7 +1656,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
             ]
@@ -1704,7 +1715,7 @@ mod tests {
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
         );
@@ -1857,7 +1868,7 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"idle\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",

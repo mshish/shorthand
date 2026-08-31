@@ -122,6 +122,30 @@ enum Effect {
     Start {
         binding_id: String,
         hotkey_string: String,
+        /// Whether the mode being started should publish to the follow-stream
+        /// hub, already decided by whoever produced this `Effect` — never
+        /// resolved here. `CoordinatorState` is deliberately pure (no
+        /// `AppHandle`, so it cannot read settings itself), which is exactly
+        /// why this has to be carried rather than looked up: `None` for the
+        /// hotkey/PTT path (`on_input`, `on_grace_expired`,
+        /// `on_processing_finished`), which has never pre-decided this and
+        /// leaves `actions.rs`'s `TranscribeAction::start` to resolve it,
+        /// same as always. `Some(v)` only for `decide_explicit_capture`,
+        /// which already resolved `publication_enabled` via `apply_mode` to
+        /// feed `capture_command::decide` (see the `Command::ExplicitCapture`
+        /// arm below) — that is the *same* read `actions.rs` used to redo on
+        /// its own, later, after the entire pre-recording prefix (model
+        /// kickoff, tray, overlay, settings/stream plan) and
+        /// `try_start_recording`. Two reads of one setting, straddling that
+        /// window, meant publication could be switched off in between: the
+        /// first read let `decide` answer `Forward`, the capture started for
+        /// real, and the second read then made `actions.rs` skip `hub.begin`
+        /// silently — no `refused` (nothing was refused), no `start_failed`
+        /// (nothing failed), just a live capture no follower ever saw a
+        /// `begin` for. Carrying the decision here instead of a second
+        /// `Option` closes that window by construction: there is only ever
+        /// one read for an explicit start.
+        publication_enabled: Option<bool>,
     },
     Stop {
         binding_id: String,
@@ -337,7 +361,10 @@ impl CoordinatorState {
         if input.push_to_talk {
             if input.is_pressed {
                 if matches!(self.stage, Stage::Idle) {
-                    return Some(self.begin_recording(input.binding_id, input.hotkey_string));
+                    // Hotkey/PTT path: nobody asked for a stream, so there is
+                    // no pre-decided publication value to carry -- `None`
+                    // lets `actions.rs` resolve it itself, same as always.
+                    return Some(self.begin_recording(input.binding_id, input.hotkey_string, None));
                 }
             } else if matches!(&self.stage, Stage::Recording { binding_id, .. } if binding_id == &input.binding_id)
             {
@@ -346,7 +373,7 @@ impl CoordinatorState {
         } else if input.is_pressed {
             match &self.stage {
                 Stage::Idle => {
-                    return Some(self.begin_recording(input.binding_id, input.hotkey_string));
+                    return Some(self.begin_recording(input.binding_id, input.hotkey_string, None));
                 }
                 Stage::Recording { binding_id, .. } if binding_id == &input.binding_id => {
                     return Some(self.begin_processing(input.binding_id, input.hotkey_string));
@@ -433,7 +460,9 @@ impl CoordinatorState {
             "Pipeline drained; starting remembered press for '{}'",
             pending.binding_id
         );
-        Some(self.begin_recording(pending.binding_id, pending.hotkey_string))
+        // A remembered hotkey/PTT press, replayed once the pipeline drains --
+        // still no pre-decided publication value. See `Effect::Start`.
+        Some(self.begin_recording(pending.binding_id, pending.hotkey_string, None))
     }
 
     /// Reconcile the optimistic `Stage::Recording` after the executor reports
@@ -486,7 +515,17 @@ impl CoordinatorState {
     /// Optimistic transition to `Recording`; rolled back via
     /// [`CoordinatorState::on_start_result`] if the effect fails to start
     /// recording for real.
-    fn begin_recording(&mut self, binding_id: String, hotkey_string: String) -> Effect {
+    ///
+    /// `publication_enabled` becomes `Effect::Start`'s field of the same
+    /// name -- see its doc comment for why this is threaded through rather
+    /// than resolved here or in `actions.rs` alone. Every caller except
+    /// `decide_explicit_capture` passes `None`.
+    fn begin_recording(
+        &mut self,
+        binding_id: String,
+        hotkey_string: String,
+        publication_enabled: Option<bool>,
+    ) -> Effect {
         let mode = mode::mode_for_binding(&binding_id);
         self.stage = Stage::Recording {
             binding_id: binding_id.clone(),
@@ -497,6 +536,7 @@ impl CoordinatorState {
         Effect::Start {
             binding_id,
             hotkey_string,
+            publication_enabled,
         }
     }
 
@@ -613,9 +653,16 @@ fn decide_explicit_capture(
     }
     match decision {
         capture_command::Decision::Forward => match op {
-            capture_command::ExplicitOp::Start => ExplicitOutcome::Effect(
-                state.begin_recording(binding_id.to_string(), "CLI".to_string()),
-            ),
+            // The same `publication_enabled` just fed to `capture_command::decide`
+            // above, carried onto `Effect::Start` verbatim instead of left for
+            // `actions.rs` to re-read later -- see `Effect::Start`'s doc
+            // comment for the unobservable-start bug a second, later read
+            // used to allow.
+            capture_command::ExplicitOp::Start => ExplicitOutcome::Effect(state.begin_recording(
+                binding_id.to_string(),
+                "CLI".to_string(),
+                Some(publication_enabled),
+            )),
             // Stop must end whatever binding is actually recording, not the
             // canonical one passed in: the `_with_post_process` variant
             // differs in whether the finished transcript gets post-processed,
@@ -835,10 +882,21 @@ impl TranscriptionCoordinator {
     /// thread rather than the caller's own — see `Command::SuppressPublication`
     /// for why that ordering, not this call itself, is what closes the race
     /// with `hub.begin()`.
-    pub fn notify_publication_suppressed(&self, mode: FollowMode) {
-        if self.tx.send(Command::SuppressPublication { mode }).is_err() {
+    ///
+    /// Returns whether the command was actually enqueued. Unlike the sibling
+    /// `notify_*` methods above, which just log and drop on a closed channel
+    /// because a dropped cancel/processing-finished notification only costs
+    /// one missed transition, a dropped suppression here means a follower
+    /// keeps receiving a mode's transcript after the user asked to stop
+    /// sharing it — silently and permanently. `suppress_publication` below
+    /// needs to know when that happened so it can fall back to suppressing
+    /// directly instead.
+    pub fn notify_publication_suppressed(&self, mode: FollowMode) -> bool {
+        let sent = self.tx.send(Command::SuppressPublication { mode }).is_ok();
+        if !sent {
             warn!("Transcription coordinator channel closed");
         }
+        sent
     }
 
     /// Send an explicit `--start-assisted-notes` / `--stop-assisted-notes`
@@ -871,32 +929,53 @@ impl TranscriptionCoordinator {
 /// see `Command::SuppressPublication`'s doc comment for why that ordering is
 /// what closes the race.
 ///
-/// Falls back to calling `hub.suppress_if_active` directly if the
-/// coordinator isn't registered as app state. Every other `try_state::<TranscriptionCoordinator>()`
-/// caller in this codebase (`handle_explicit_assisted_notes_command` in
-/// `lib.rs`, `shortcut::handler`, `signal_handle`) just logs and drops the
-/// command on `None`, which is fine there: a dropped explicit start/stop
-/// simply fails outwardly, visibly, once. Dropping a suppression instead
-/// leaves a follower silently receiving a mode's transcript after the user
-/// told the app to stop sharing it -- a delayed, unordered `suppress_if_active`
-/// call (racing `hub.begin()` again, exactly as before this fix) is still
-/// strictly better than that permanent leak. In practice this branch should
-/// be unreachable: `TranscriptionCoordinator::new` is `app.manage()`d during
-/// setup, before any Tauri command reachable from the frontend can run (see
-/// `lib.rs`), so every caller of this function already has the same
-/// guarantee `handle_explicit_assisted_notes_command` relies on.
+/// Falls back to calling `hub.suppress_if_active` directly in two cases,
+/// neither of which is this function reading stale state itself -- both are
+/// the coordinator's own send failing to reach a live loop:
+///
+/// - `try_state::<TranscriptionCoordinator>()` returns `None`. Every other
+///   such caller in this codebase (`handle_explicit_assisted_notes_command`
+///   in `lib.rs`, `shortcut::handler`, `signal_handle`) just logs and drops
+///   the command on `None`, which is fine there: a dropped explicit
+///   start/stop simply fails outwardly, visibly, once. In practice this
+///   branch should be unreachable: `TranscriptionCoordinator::new` is
+///   `app.manage()`d during setup, before any Tauri command reachable from
+///   the frontend can run (see `lib.rs`), so every caller of this function
+///   already has the same guarantee `handle_explicit_assisted_notes_command`
+///   relies on.
+/// - `try_state` *does* find a coordinator, but
+///   `notify_publication_suppressed` reports the send failed. This is the
+///   case the first bullet's guarantee doesn't cover: `TranscriptionCoordinator::new`
+///   wraps its loop in `std::panic::catch_unwind` (see there) and exits the
+///   thread on a panic, but the managed `Sender` it handed out stays
+///   registered in Tauri state regardless -- `try_state` keeps succeeding
+///   forever after that. Before `notify_publication_suppressed` reported
+///   its send result, this case looked identical to a *successful* enqueue:
+///   the settings command returned success, `notify_publication_suppressed`
+///   merely logged and dropped the command, and the live hub session kept
+///   publishing a transcript the user had just asked to stop sharing --
+///   silently, and permanently, since nothing was ever going to dequeue it.
+///
+/// Either way, dropping a suppression instead leaves a follower silently
+/// receiving a mode's transcript after the user told the app to stop
+/// sharing it -- a delayed, unordered `suppress_if_active` call (racing
+/// `hub.begin()` again, exactly as before this fix) is still strictly
+/// better than that permanent leak.
 pub fn suppress_publication(app: &AppHandle, mode: FollowMode) {
-    match app.try_state::<TranscriptionCoordinator>() {
-        Some(coordinator) => coordinator.notify_publication_suppressed(mode),
-        None => {
-            warn!(
-                "TranscriptionCoordinator not initialized; suppressing {mode:?} publication \
-                 directly, without the coordinator queue's ordering guarantee against hub.begin()"
-            );
-            if let Some(hub) = crate::follow_stream::hub(app) {
-                hub.suppress_if_active(mode);
-            }
+    let unordered_fallback_reason = match app.try_state::<TranscriptionCoordinator>() {
+        Some(coordinator) if coordinator.notify_publication_suppressed(mode) => return,
+        Some(_) => {
+            "TranscriptionCoordinator channel closed (its thread panicked and exited, \
+             see TranscriptionCoordinator::new's catch_unwind)"
         }
+        None => "TranscriptionCoordinator not initialized",
+    };
+    warn!(
+        "{unordered_fallback_reason}; suppressing {mode:?} publication directly, without the \
+         coordinator queue's ordering guarantee against hub.begin()"
+    );
+    if let Some(hub) = crate::follow_stream::hub(app) {
+        hub.suppress_if_active(mode);
     }
 }
 
@@ -905,8 +984,10 @@ fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
         Effect::Start {
             binding_id,
             hotkey_string,
+            publication_enabled,
         } => {
-            let (started, publication_session) = start(app, &binding_id, &hotkey_string);
+            let (started, publication_session) =
+                start(app, &binding_id, &hotkey_string, publication_enabled);
             if let Some(orphaned_session) =
                 state.on_start_result(&binding_id, started, publication_session)
             {
@@ -976,12 +1057,20 @@ fn run_explicit_outcome(
 /// with whatever follow-stream session `action.start` allocated (`None` if
 /// its mode's publication setting is off, or nothing began at all) — see
 /// `on_start_result` for how the latter reaches `Stage`.
-fn start(app: &AppHandle, binding_id: &str, hotkey_string: &str) -> (bool, Option<u64>) {
+///
+/// `publication_enabled` is passed straight through to `action.start` — see
+/// `Effect::Start`'s doc comment for what `Some`/`None` mean here.
+fn start(
+    app: &AppHandle,
+    binding_id: &str,
+    hotkey_string: &str,
+    publication_enabled: Option<bool>,
+) -> (bool, Option<u64>) {
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return (false, None);
     };
-    let publication_session = action.start(app, binding_id, hotkey_string);
+    let publication_session = action.start(app, binding_id, hotkey_string, publication_enabled);
     let recording = app
         .try_state::<Arc<AudioRecordingManager>>()
         .is_some_and(|a| a.is_recording());
@@ -1466,6 +1555,47 @@ mod tests {
         }
     }
 
+    /// The hotkey/PTT path has no pre-decided publication value to carry --
+    /// `actions.rs` resolves `follow_stream_enabled` itself, exactly as
+    /// before this field existed on `Effect::Start`. Only
+    /// `decide_explicit_capture` ever has an earlier decision to hand down
+    /// (see `explicit_start_effect_carries_the_resolved_publication_enabled_value`
+    /// below).
+    #[test]
+    fn hotkey_start_carries_no_pre_decided_publication_value() {
+        let mut state = CoordinatorState::new();
+        let now = Instant::now();
+        match state.on_input(toggle_input(true), now) {
+            Some(Effect::Start {
+                publication_enabled,
+                ..
+            }) => assert_eq!(publication_enabled, None),
+            other => panic!("expected Start effect, got {other:?}"),
+        }
+    }
+
+    /// A press remembered while the pipeline was busy and replayed once it
+    /// drains is still the hotkey/PTT path -- `on_processing_finished` must
+    /// carry `None` too, not silently inherit whatever value some earlier
+    /// capture happened to have.
+    #[test]
+    fn drained_pending_press_carries_no_pre_decided_publication_value() {
+        let mut state = CoordinatorState::new();
+        let now = Instant::now();
+        drive_into_processing(&mut state, now);
+        assert!(state
+            .on_input(toggle_input(true), now + Duration::from_millis(200))
+            .is_none());
+
+        match state.on_processing_finished() {
+            Some(Effect::Start {
+                publication_enabled,
+                ..
+            }) => assert_eq!(publication_enabled, None),
+            other => panic!("expected Start effect, got {other:?}"),
+        }
+    }
+
     /// External triggers fire on every edge by design (e.g. SIGUSR2 sent on
     /// both key press and release). Two edges inside the debounce window must
     /// both be honoured, or the parity desyncs and recording wedges on.
@@ -1668,6 +1798,38 @@ mod tests {
         );
     }
 
+    /// `decide_explicit_capture`'s Forward+Start outcome carries the exact
+    /// `publication_enabled` value it was given -- the same one it already
+    /// fed to `capture_command::decide` to decide whether to forward the
+    /// command at all -- onto `Effect::Start`, rather than leaving
+    /// `actions.rs` to resolve it again later. See `Effect::Start`'s doc
+    /// comment for the two-reads-on-one-thread bug this closes: a start
+    /// forwarded on one read of the publication setting whose `hub.begin()`
+    /// gate then silently disagreed with a second, later read of the same
+    /// setting, leaving a real capture with no `begin` any follower could
+    /// ever observe.
+    #[test]
+    fn explicit_start_effect_carries_the_resolved_publication_enabled_value() {
+        let mut state = CoordinatorState::new();
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+
+        match outcome {
+            ExplicitOutcome::Effect(Effect::Start {
+                publication_enabled,
+                ..
+            }) => assert_eq!(publication_enabled, Some(true)),
+            other => panic!("expected Start effect, got {other:?}"),
+        }
+    }
+
     #[test]
     fn two_consecutive_explicit_stops_are_a_safe_noop() {
         let mut state = CoordinatorState::new();
@@ -1757,6 +1919,7 @@ mod tests {
         state.begin_recording(
             ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
             "keyboard".to_string(),
+            None,
         );
 
         let outcome = decide_explicit_capture(
@@ -1783,7 +1946,7 @@ mod tests {
     #[test]
     fn explicit_start_is_refused_while_a_different_mode_is_processing() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string());
+        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage("transcribe"));
 
@@ -1816,7 +1979,7 @@ mod tests {
     #[test]
     fn explicit_start_while_the_same_mode_is_processing_is_refused_as_busy() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
 
@@ -1846,7 +2009,7 @@ mod tests {
     #[test]
     fn explicit_stop_while_the_same_mode_is_processing_is_a_noop() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
 
@@ -1867,7 +2030,7 @@ mod tests {
     #[test]
     fn explicit_stop_while_a_different_mode_is_processing_is_a_noop() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string());
+        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage("transcribe"));
 
@@ -1939,7 +2102,7 @@ mod tests {
     #[test]
     fn explicit_stop_is_not_refused_when_publication_is_disabled() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
         assert_eq!(state.stage, recording_stage(ASSISTED_NOTES));
 
         let outcome = decide_explicit_capture(
@@ -1973,7 +2136,7 @@ mod tests {
     #[test]
     fn explicit_stop_during_processing_clears_a_same_mode_pending_press() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         state.pending_press = Some(PendingPress {
             binding_id: ASSISTED_NOTES.to_string(),
@@ -2008,7 +2171,7 @@ mod tests {
     #[test]
     fn explicit_stop_leaves_a_different_mode_pending_press_untouched() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string());
+        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         state.pending_press = Some(PendingPress {
             binding_id: "transcribe".to_string(),
@@ -2044,7 +2207,7 @@ mod tests {
     #[test]
     fn explicit_start_while_already_recording_clears_a_same_mode_pending_release() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
         state.pending_release = Some(PendingRelease {
             binding_id: ASSISTED_NOTES.to_string(),
             hotkey_string: "keyboard".to_string(),
@@ -2124,6 +2287,7 @@ mod tests {
         state.begin_recording(
             ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
             "keyboard".to_string(),
+            None,
         );
         state.begin_processing(
             ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
@@ -2182,7 +2346,10 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let coordinator = TranscriptionCoordinator { tx };
 
-        coordinator.notify_publication_suppressed(FollowMode::Dictation);
+        assert!(
+            coordinator.notify_publication_suppressed(FollowMode::Dictation),
+            "the receiver is still alive, so the send must be reported as successful"
+        );
 
         match rx.recv().expect("notify_publication_suppressed must send") {
             Command::SuppressPublication { mode } => {
@@ -2190,5 +2357,27 @@ mod tests {
             }
             _ => panic!("expected Command::SuppressPublication"),
         }
+    }
+
+    /// `suppress_publication` (the free function three settings commands
+    /// call) only falls back to calling `hub.suppress_if_active` directly
+    /// when this reports failure -- see its own doc comment for the panicked-
+    /// coordinator-thread scenario this exists to catch, where
+    /// `try_state::<TranscriptionCoordinator>()` keeps succeeding forever
+    /// after the loop behind it has already exited. Dropping `rx` here
+    /// stands in for that: the `Sender` is still registered (this
+    /// `TranscriptionCoordinator` still exists), but nothing will ever
+    /// dequeue from it, exactly like a coordinator thread that panicked out
+    /// of its `catch_unwind` loop.
+    #[test]
+    fn notify_publication_suppressed_reports_failure_once_the_receiver_is_dropped() {
+        let (tx, rx) = mpsc::channel();
+        let coordinator = TranscriptionCoordinator { tx };
+        drop(rx);
+
+        assert!(
+            !coordinator.notify_publication_suppressed(FollowMode::Dictation),
+            "the receiver is gone, so the send must be reported as failed"
+        );
     }
 }

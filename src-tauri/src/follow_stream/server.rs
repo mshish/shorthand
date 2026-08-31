@@ -377,7 +377,7 @@ mod tests {
 
         assert_eq!(
             read_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n"
         );
         assert_eq!(read_line(&mut client).await, "{\"t\":\"idle\"}\n");
         let session = hub.begin(true, FollowMode::Meeting).unwrap();
@@ -413,7 +413,7 @@ mod tests {
 
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         assert_eq!(
             read_raw_line(&mut client).await,
@@ -454,7 +454,7 @@ mod tests {
         let mut late = connect(name).await;
         assert_eq!(
             read_line(&mut late).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n"
         );
         assert_eq!(
             read_line(&mut late).await,

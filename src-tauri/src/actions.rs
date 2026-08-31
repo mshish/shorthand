@@ -82,8 +82,27 @@ impl Drop for FollowStreamSessionGuard {
 // transcription_coordinator.rs for the race this replaces: a process-wide
 // cell that a newer capture could overwrite before the older one's `stop`
 // ever read it.
+//
+// `start`'s `publication_enabled` parameter is the same idea applied to the
+// *decision* that governs whether `start` calls `hub.begin()` at all, not
+// just the id that decision produces. It is `Some(v)` only for an explicit
+// `--start-assisted-notes` capture, whose `v` is the value
+// `transcription_coordinator.rs`'s `decide_explicit_capture` already
+// resolved (via `apply_mode`) to decide whether to forward the command in
+// the first place — see `Effect::Start`'s doc comment there for the
+// unobservable-start bug that came from `TranscribeAction::start` re-reading
+// this setting a second time, later, instead of being handed the first
+// read. It is `None` for the hotkey/PTT path, which has no earlier decision
+// to hand down and resolves the setting itself, same as before this
+// parameter existed.
 pub trait ShortcutAction: Send + Sync {
-    fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) -> Option<u64>;
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        publication_enabled: Option<bool>,
+    ) -> Option<u64>;
     fn stop(
         &self,
         app: &AppHandle,
@@ -542,7 +561,13 @@ pub(crate) async fn process_transcription_output(
 }
 
 impl ShortcutAction for TranscribeAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) -> Option<u64> {
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
         crate::shorthand::mode::set_active(app, binding_id);
@@ -672,17 +697,40 @@ impl ShortcutAction for TranscribeAction {
                 // terminal hub call and `partial` check for an active session
                 // first and silently no-op without one (pinned in
                 // follow_stream::hub::tests).
-                follow_stream_session =
-                    if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
-                        crate::follow_stream::hub(app).and_then(|hub| {
-                            hub.begin(
-                                model_supports_streaming,
-                                crate::shorthand::mode::active(app).into(),
-                            )
-                        })
-                    } else {
-                        None
-                    };
+                //
+                // `publication_enabled` is `Some` only when the caller is
+                // `decide_explicit_capture`, which already read this exact
+                // setting (via `apply_mode`) before deciding to forward the
+                // start at all — see `Effect::Start`'s doc comment in
+                // transcription_coordinator.rs. Using it verbatim here,
+                // instead of calling `resolve_settings` again, is the fix: the
+                // old code read the setting twice on this thread — once in
+                // `decide_explicit_capture` to decide whether to forward, and
+                // again right here — straddling the entire pre-recording
+                // prefix above (model kickoff, tray, overlay, settings/stream
+                // plan) plus `try_start_recording`. A publication toggle
+                // flipped off inside that window made the first read stand
+                // (so the capture was forwarded and actually recorded) while
+                // this second read saw the new value and skipped `hub.begin`
+                // — no `refused` (nothing was refused, the start already
+                // succeeded), no `start_failed` (nothing failed), just a live
+                // capture with no `begin` a follower could ever see. The
+                // hotkey/PTT path still has no earlier decision to honour
+                // (`None`), so it keeps resolving fresh here, same as always
+                // — publication being off there is a private capture nobody
+                // asked to stream, not a bug to route around.
+                follow_stream_session = if publication_enabled.unwrap_or_else(|| {
+                    crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled
+                }) {
+                    crate::follow_stream::hub(app).and_then(|hub| {
+                        hub.begin(
+                            model_supports_streaming,
+                            crate::shorthand::mode::active(app).into(),
+                        )
+                    })
+                } else {
+                    None
+                };
                 let generation = readiness.generation();
                 let app_clone = app.clone();
                 let rm_clone = Arc::clone(&rm);
@@ -1234,7 +1282,13 @@ impl ShortcutAction for TranscribeAction {
 struct CancelAction;
 
 impl ShortcutAction for CancelAction {
-    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) -> Option<u64> {
+    fn start(
+        &self,
+        app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         utils::cancel_current_operation(app);
         None
     }
@@ -1254,7 +1308,13 @@ impl ShortcutAction for CancelAction {
 struct TestAction;
 
 impl ShortcutAction for TestAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) -> Option<u64> {
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        _publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         log::info!(
             "Shortcut ID '{}': Started - {} (App: {})", // Changed "Pressed" to "Started" for consistency
             binding_id,
