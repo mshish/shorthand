@@ -41,6 +41,24 @@ impl From<StreamSource> for Speaker {
     }
 }
 
+/// Why the app declined an explicit `--start-assisted-notes` /
+/// `--stop-assisted-notes` command. Carried on [`FollowEvent::Refused`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RefusalReason {
+    /// A different mode's capture is already running. An explicit command
+    /// never interrupts a capture it did not ask to start.
+    Busy,
+    /// The requested mode is switched off in Settings.
+    ModeDisabled,
+    /// The requested mode is enabled, but its `--follow-stream` publication
+    /// toggle is off, so a real capture would begin with no way for a
+    /// follower to observe it. Additive: a follower built against an older
+    /// binary will see this as an unrecognized `reason` value and must
+    /// tolerate it, the same as any other open-ended string on this wire.
+    PublicationDisabled,
+}
+
 /// Which capture mode produced a session, as it appears on the wire.
 ///
 /// Deliberately its own type rather than `shorthand::mode::Mode` re-serialized:
@@ -110,6 +128,43 @@ pub enum FollowEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<&'static str>,
         message: String,
+    },
+    /// Emitted right after `hello` when subscribing finds no active session.
+    /// Idle was previously only inferable from the absence of a `begin`,
+    /// which a follower cannot tell apart from "attached before anything has
+    /// started yet". This makes idle a state a follower can read directly
+    /// instead of a guess from silence.
+    Idle,
+    /// A capture request was accepted but never produced a `begin`, because
+    /// `begin` now fires only once `try_start_recording` has actually
+    /// succeeded (see `TranscribeAction::start`). Session-less: no session
+    /// was ever announced for this attempt, so there is nothing for a
+    /// terminal event to close, and a follower that got `Response::Accepted`
+    /// on its command would otherwise wait forever for a `begin` that is
+    /// never coming. Deliberately its own record rather than a session-less
+    /// `error`: every other session-less `error` on this wire carries a
+    /// `code` (`follower_limit`, `disabled`, `serialization_failed`), so
+    /// reusing that shape here would give a follower two things to
+    /// distinguish by the *absence* of a field instead of one to match on.
+    ///
+    /// Reaches a follower only when the failed mode's own
+    /// `follow_stream_enabled` is on — the same publication gate `begin`
+    /// respects — and carries `mode` for the same reason `begin` does:
+    /// without it a follower watching one mode could misattribute a
+    /// different mode's failure to itself.
+    StartFailed {
+        mode: FollowMode,
+        message: String,
+    },
+    /// The app declined an explicit `--start-assisted-notes` /
+    /// `--stop-assisted-notes` command. Carries no request id: this protocol
+    /// is one-way with no request/response correlation, so a follower can
+    /// only relate this to a command it just issued for the same `mode` by
+    /// having attached first and read current state before issuing it (see
+    /// "Level-triggered attachment" in FOLLOW_STREAM.md).
+    Refused {
+        mode: FollowMode,
+        reason: RefusalReason,
     },
 }
 
@@ -273,6 +328,35 @@ mod tests {
                 None,
                 "{\"t\":\"error\",\"code\":\"serialization_failed\",\"message\":\"serialization failed\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
+            (
+                FollowEvent::Idle,
+                None,
+                "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+            (
+                FollowEvent::StartFailed {
+                    mode: FollowMode::AssistedNotes,
+                    message: "no input device".to_string(),
+                },
+                None,
+                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+            (
+                FollowEvent::Refused {
+                    mode: FollowMode::AssistedNotes,
+                    reason: RefusalReason::ModeDisabled,
+                },
+                None,
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"mode-disabled\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+            (
+                FollowEvent::Refused {
+                    mode: FollowMode::AssistedNotes,
+                    reason: RefusalReason::PublicationDisabled,
+                },
+                None,
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"publication-disabled\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
         ];
 
         for (event, session_elapsed_ms, expected) in cases {
@@ -329,6 +413,22 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn refusal_reason_serializes_to_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&RefusalReason::Busy).unwrap(),
+            "\"busy\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RefusalReason::ModeDisabled).unwrap(),
+            "\"mode-disabled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RefusalReason::PublicationDisabled).unwrap(),
+            "\"publication-disabled\""
+        );
     }
 
     #[test]

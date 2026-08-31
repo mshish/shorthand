@@ -58,15 +58,19 @@ pub fn handle_shortcut_event(
     if binding_id == "cancel" {
         let audio_manager = app.state::<Arc<AudioRecordingManager>>();
         if audio_manager.is_recording() && is_pressed {
-            action.start(app, binding_id, hotkey_string);
+            action.start(app, binding_id, hotkey_string, None);
         }
         return;
     }
 
     // Remaining bindings (e.g. "test") use simple start/stop on press/release.
+    // Neither ever carries a follow-stream session -- only the coordinator's
+    // `Stage` does, and these bindings bypass it entirely. Likewise no
+    // pre-decided publication value: only `decide_explicit_capture` in
+    // transcription_coordinator.rs ever has one (see `ShortcutAction::start`).
     if is_pressed {
-        action.start(app, binding_id, hotkey_string);
+        action.start(app, binding_id, hotkey_string, None);
     } else {
-        action.stop(app, binding_id, hotkey_string);
+        action.stop(app, binding_id, hotkey_string, None);
     }
 }

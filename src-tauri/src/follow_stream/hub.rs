@@ -13,9 +13,35 @@ use tokio::sync::Notify;
 use crate::managers::transcription::StreamSource;
 
 use super::protocol::{
-    FollowEvent, FollowMode, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT,
+    FollowEvent, FollowMode, RefusalReason, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT,
     FOLLOW_PROTOCOL_VERSION,
 };
+
+/// Capabilities this binary advertises on `hello`. A control flag appears
+/// here as the CLI flag minus its `--`; a new record type appears as its own
+/// `t` value. One list, referenced from the one place `hello` is built, so
+/// the advertised set can never drift from what `subscribe` actually sends.
+/// See [`FollowEvent::Hello`]'s own doc comment for what each kind means.
+///
+/// `"refused"` says the `refused` record type exists at all; it says nothing
+/// about which `reason` values it may carry. `"refused-publication-disabled"`
+/// is the capability for the specific `reason:"publication-disabled"` value
+/// (see `RefusalReason::PublicationDisabled` in protocol.rs): a follower that
+/// wants to recognise that particular reason, rather than merely treat any
+/// `refused` it doesn't understand as an unexplained refusal, gates on this
+/// entry instead of assuming every installed binary that can send `refused`
+/// at all can also send this specific reason. See FOLLOW_STREAM.md's
+/// "Explicit start/stop commands" section for the full contract.
+const CAPABILITIES: &[&str] = &[
+    "toggle-assisted-notes",
+    "start-assisted-notes",
+    "stop-assisted-notes",
+    "begin-mode",
+    "idle",
+    "refused",
+    "refused-publication-disabled",
+    "start-failed",
+];
 
 pub const MAX_FOLLOWERS: usize = 8;
 pub const MAX_QUEUED_EVENTS: usize = 256;
@@ -77,6 +103,36 @@ impl FollowerBuffer {
         self.buffered_bytes = new_total.expect("checked above");
         self.queue.push_back(line);
         self.partials = [None, None];
+    }
+
+    /// Queues a session-less control record (`refused`, `start_failed`) —
+    /// unlike `push_event`, this does NOT clear unflushed partials. A `final`
+    /// must never trail a stale `partial` of the text it just finalized, but
+    /// a control record describes a declined *command*, not a session event:
+    /// a `busy` refusal for one mode has nothing to do with another mode's
+    /// active session, and clearing that session's latest undrained partial
+    /// here would erase committed speech no later partial is guaranteed to
+    /// repeat — if the session's own `final` arrives before another partial
+    /// does, that text is gone from the wire for good. The bytes still count
+    /// toward the shared budget: they are no longer being discarded to make
+    /// room for this line, so the budget must still see them.
+    fn push_control_event(&mut self, line: Arc<str>) {
+        if self.overflowed {
+            return;
+        }
+
+        let count_would_overflow = self.queue.len() >= MAX_QUEUED_EVENTS;
+        let new_total = self.buffered_bytes.checked_add(line.len());
+        let bytes_would_overflow = new_total
+            .map(|total| total > MAX_BUFFERED_BYTES)
+            .unwrap_or(true);
+        if count_would_overflow || bytes_would_overflow {
+            self.mark_overflowed();
+            return;
+        }
+
+        self.buffered_bytes = new_total.expect("checked above");
+        self.queue.push_back(line);
     }
 
     fn drain(&mut self) -> Vec<Arc<str>> {
@@ -236,6 +292,29 @@ struct ActiveSession {
     /// Latest serialized partial line per speaker, for the late-attach snapshot.
     /// Stored already-stamped, for the same reason as `begin_line`.
     partial_lines: [Option<Arc<str>>; 2],
+    /// The mode this session was opened for, so `suppress_if_active` can tell
+    /// "the mode whose toggle just turned off" apart from "some other mode
+    /// that happens to be capturing right now" without a caller having to
+    /// pass a session id it may not have at hand (a settings setter knows
+    /// only which mode's toggle changed).
+    mode: FollowMode,
+}
+
+/// Which `FollowerBuffer` path a broadcast line takes.
+///
+/// `Event` is a real session lifecycle event (`begin`, and every terminal
+/// `finish_with` produces) and clears any unflushed partial — a `final` must
+/// never trail a stale `partial` of the text it just finalized. `Control` is
+/// a session-less command record (`refused`, `start_failed`): it reports a
+/// declined command rather than a session event, so it must leave whatever
+/// session's undrained partial is currently buffered alone — see
+/// `FollowerBuffer::push_control_event`'s own doc comment for the data loss
+/// clearing it would cause.
+#[derive(Clone, Copy)]
+enum BroadcastKind {
+    Partial(Speaker),
+    Event,
+    Control,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,14 +376,25 @@ impl FollowStreamHub {
     /// `mode` is passed in rather than read here: the hub has no `AppHandle`,
     /// and the caller is `TranscribeAction::start`, which has already written
     /// the active-mode cell for this very capture.
-    pub fn begin(&self, streaming: bool, mode: FollowMode) {
+    ///
+    /// Returns the allocated session id, or `None` when the hub is disabled
+    /// and no session was created. The caller (`TranscribeAction::start`)
+    /// returns this onward so the coordinator's `Stage` can carry it (see
+    /// `Stage`'s own doc comment in transcription_coordinator.rs) and hand it
+    /// back explicitly to every terminal call made for this same capture,
+    /// rather than each terminal call re-reading "whatever session is active
+    /// now". The latter is what let a stale, already-queued terminal call
+    /// finalize a session it did not belong to (a newer capture can begin
+    /// before that queued call runs; see `finish_with`'s session check
+    /// below).
+    pub fn begin(&self, streaming: bool, mode: FollowMode) -> Option<u64> {
         if !self.enabled.load(Ordering::Acquire) {
-            return;
+            return None;
         }
 
         let mut state = self.inner.lock().unwrap();
         if !self.enabled.load(Ordering::Acquire) {
-            return;
+            return None;
         }
 
         if let Some(orphaned) = state.active.take() {
@@ -319,7 +409,7 @@ impl FollowStreamHub {
                 session: orphaned.id,
             }
             .to_line(&stamp);
-            Self::broadcast(&mut state, line, None);
+            Self::broadcast(&mut state, line, BroadcastKind::Event);
         }
 
         let session = state.next_session;
@@ -337,8 +427,10 @@ impl FollowStreamHub {
             started,
             begin_line: Arc::clone(&line),
             partial_lines: [None, None],
+            mode,
         });
-        Self::broadcast(&mut state, line, None);
+        Self::broadcast(&mut state, line, BroadcastKind::Event);
+        Some(session)
     }
 
     pub fn partial(&self, source: StreamSource, committed: &str, tentative: &str) {
@@ -369,31 +461,155 @@ impl FollowStreamHub {
             .as_mut()
             .expect("active checked above")
             .partial_lines[speaker.index()] = Some(Arc::clone(&line));
-        Self::broadcast(&mut state, line, Some(speaker));
+        Self::broadcast(&mut state, line, BroadcastKind::Partial(speaker));
     }
 
-    pub fn finish(&self, speaker: Option<Speaker>, text: &str) {
-        self.finish_with(|session| FollowEvent::Final {
+    /// `session` must be the id `begin` returned for the capture this final
+    /// text belongs to (see `begin`'s own doc comment for how that id
+    /// reaches here). A call whose `session` does not match the hub's
+    /// current active session is dropped — see `finish_with` — rather than
+    /// finalizing whatever session happens to be active when this runs.
+    pub fn finish(&self, session: u64, speaker: Option<Speaker>, text: &str) {
+        self.finish_with(session, |session| FollowEvent::Final {
             session,
             speaker,
             text: text.to_string(),
         });
     }
 
-    pub fn no_speech(&self) {
-        self.finish_with(|session| FollowEvent::NoSpeech { session });
+    /// See `finish`'s doc comment: `session` gates this the same way.
+    pub fn no_speech(&self, session: u64) {
+        self.finish_with(session, |session| FollowEvent::NoSpeech { session });
     }
 
-    pub fn cancel(&self) {
-        self.finish_with(|session| FollowEvent::Cancel { session });
+    /// See `finish`'s doc comment: `session` gates this the same way.
+    pub fn cancel(&self, session: u64) {
+        self.finish_with(session, |session| FollowEvent::Cancel { session });
     }
 
-    pub fn error(&self, message: &str) {
-        self.finish_with(|session| FollowEvent::Error {
+    /// Cancels whatever session is currently active, if any — for callers
+    /// that need to end "the current operation" without an id in hand.
+    /// `utils::cancel_current_operation` and the app-exit teardown in
+    /// `lib.rs` both used to read one out of a process-wide cell
+    /// (`follow_stream::last_begun_session`); now that `Stage` in
+    /// `transcription_coordinator.rs` is the session id's one owner, neither
+    /// caller can reach it synchronously from where they run —
+    /// `cancel_current_operation` only notifies the coordinator
+    /// asynchronously afterward, and exit teardown runs during shutdown,
+    /// where depending on the coordinator's own thread still being
+    /// responsive would be a new failure mode of its own. The hub already
+    /// tracks its own active session (`HubState.active`) for the orphan
+    /// check in `begin`, so asking it directly needs no id passed in and no
+    /// second copy of the id resurrected to hold one. A session that gets
+    /// superseded between reading its id here and `cancel` below is simply
+    /// a no-op, the same tolerance the old cell-based path already had.
+    pub fn cancel_active(&self) {
+        let Some(session) = self.active_session_id() else {
+            return;
+        };
+        self.cancel(session);
+    }
+
+    fn active_session_id(&self) -> Option<u64> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return None;
+        }
+        self.inner.lock().unwrap().active.as_ref().map(|a| a.id)
+    }
+
+    /// See `finish`'s doc comment: `session` gates this the same way.
+    pub fn error(&self, session: u64, message: &str) {
+        self.finish_with(session, |session| FollowEvent::Error {
             session: Some(session),
             code: None,
             message: message.to_string(),
         });
+    }
+
+    /// Broadcasts that a capture request never produced a `begin`. Unlike
+    /// `error`, `no_speech` etc. this closes no active session — there isn't
+    /// one, by construction (`begin` only fires after `try_start_recording`
+    /// succeeds) — so it is stamped session-less like `hello` rather than
+    /// against a session origin.
+    pub fn start_failed(&self, mode: FollowMode, message: &str) {
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let mut state = self.inner.lock().unwrap();
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let line = FollowEvent::StartFailed {
+            mode,
+            message: message.to_string(),
+        }
+        .to_line(&self.stamp(None));
+        Self::broadcast(&mut state, line, BroadcastKind::Control);
+    }
+
+    /// Broadcasts that the app declined an explicit start/stop command. Also
+    /// session-less: a refusal opens and closes nothing.
+    pub fn refused(&self, mode: FollowMode, reason: RefusalReason) {
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let mut state = self.inner.lock().unwrap();
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let line = FollowEvent::Refused { mode, reason }.to_line(&self.stamp(None));
+        Self::broadcast(&mut state, line, BroadcastKind::Control);
+    }
+
+    /// Ends the active session if, and only if, it belongs to `mode` —
+    /// called when `mode`'s own publication toggle is switched off while a
+    /// capture for it is in flight.
+    ///
+    /// Without this, turning that toggle off mid-capture did nothing: the
+    /// listener is unconditional (see FOLLOW_STREAM.md's note on publication
+    /// vs. listener lifetime) and `begin`/`partial`/`finish_with` only check
+    /// the toggle at the moment each of *their own* calls runs, not whether
+    /// it is still on by the time a later call for the same session arrives.
+    /// A follower already attached kept receiving `partial`/`final` for a
+    /// mode the user had just told the app to stop streaming.
+    ///
+    /// This reuses `Cancel` rather than adding a new wire record: a follower
+    /// already reads `Cancel` as "this session produced no committed final
+    /// text", which is exactly true here, and a new record type is a
+    /// consumer-visible protocol addition this task has no reason to make.
+    /// Taking `state.active` (rather than leaving it open and merely
+    /// dropping future broadcasts) is deliberate too: it makes the capture's
+    /// real, eventual `hub.finish`/`hub.no_speech`/etc. for this same session
+    /// id fall through `finish_with`'s existing stale-session check and
+    /// no-op on its own, instead of this method needing its own "publication
+    /// suppressed" flag that every other publisher would then have to
+    /// consult. Either way the follower must end up with a `begin` and
+    /// exactly one terminal, never a `begin` left dangling — the same
+    /// invariant `a_start_cancelled_before_begin_still_gets_a_terminal`
+    /// pins for the unrelated race it was written for.
+    pub fn suppress_if_active(&self, mode: FollowMode) {
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let mut state = self.inner.lock().unwrap();
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        match state.active.as_ref() {
+            Some(active) if active.mode == mode => {}
+            _ => return,
+        }
+
+        let active = state.active.take().expect("checked above");
+        let stamp = self.stamp(Some(active.started));
+        let line = FollowEvent::Cancel { session: active.id }.to_line(&stamp);
+        Self::broadcast(&mut state, line, BroadcastKind::Event);
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -441,18 +657,19 @@ impl FollowStreamHub {
         let mut backlog = vec![FollowEvent::Hello {
             protocol: FOLLOW_PROTOCOL_VERSION,
             version: app_version.to_string(),
-            // `toggle-assisted-notes` distinguishes an older installed app that
-            // lacks the control flag from a current one with the mode simply
-            // turned off. `begin-mode` distinguishes an app that predates the
-            // `mode` field from one that merely has not started a session yet,
-            // since an absent field and a missing capability are the same bytes
-            // on the wire. See `FollowEvent::Hello`'s own doc comment.
-            capabilities: vec!["toggle-assisted-notes", "begin-mode"],
+            capabilities: CAPABILITIES.to_vec(),
         }
         .to_line(&self.stamp(None))];
         if let Some(active) = &state.active {
             backlog.push(Arc::clone(&active.begin_line));
             backlog.extend(active.partial_lines.iter().flatten().map(Arc::clone));
+        } else {
+            // Idle is otherwise only inferable from the absence of a `begin`,
+            // which looks identical to "attached before the first capture
+            // ever started". A follower that attaches first and reads this
+            // record learns real state instead of arming a timer and hoping
+            // silence means idle rather than a `begin` still in flight.
+            backlog.push(FollowEvent::Idle.to_line(&self.stamp(None)));
         }
 
         state.followers.push(Arc::clone(&follower));
@@ -483,7 +700,21 @@ impl FollowStreamHub {
         self.inner.lock().unwrap().followers.len()
     }
 
-    fn finish_with(&self, make_event: impl FnOnce(u64) -> FollowEvent) {
+    /// Applies a terminal event to the active session, but only if `session`
+    /// is that session's own id.
+    ///
+    /// Without this check, a terminal call queued for one capture can still
+    /// run after a *newer* capture has begun — `TranscribeAction::stop`
+    /// queues its `hub.finish` call onto the main thread, and `FinishGuard`
+    /// tells the coordinator the pipeline is free (permitting a new capture
+    /// to start) as soon as that queueing returns, not once the queued call
+    /// has actually executed. An unscoped `finish_with` would then finalize
+    /// the NEW session with the OLD capture's text. Comparing `session`
+    /// against `state.active`'s own id closes that window regardless of
+    /// which future code path manages to start a capture quickly, rather
+    /// than relying on some timing margin between "coordinator goes idle"
+    /// and "queued closure runs" staying wide enough forever.
+    fn finish_with(&self, session: u64, make_event: impl FnOnce(u64) -> FollowEvent) {
         if !self.enabled.load(Ordering::Acquire) {
             return;
         }
@@ -493,22 +724,39 @@ impl FollowStreamHub {
             return;
         }
 
-        let Some(active) = state.active.take() else {
-            return;
-        };
+        match state.active.as_ref() {
+            Some(active) if active.id == session => {}
+            Some(active) => {
+                // Diagnosable rather than silent: this is the exact shape a
+                // stale-session bug takes on the wire (nothing happens), so a
+                // log line naming both ids is the only way to tell "working
+                // as designed" apart from "a terminal call went missing".
+                log::debug!(
+                    "Dropping stale follow-stream terminal call for session {session}; \
+                     the active session is {}",
+                    active.id
+                );
+                return;
+            }
+            None => return,
+        }
+
+        let active = state.active.take().expect("checked above");
         let stamp = self.stamp(Some(active.started));
         let line = make_event(active.id).to_line(&stamp);
-        Self::broadcast(&mut state, line, None);
+        Self::broadcast(&mut state, line, BroadcastKind::Event);
     }
 
-    fn broadcast(state: &mut HubState, line: Arc<str>, partial_speaker: Option<Speaker>) {
+    fn broadcast(state: &mut HubState, line: Arc<str>, kind: BroadcastKind) {
         state.followers.retain(|follower| {
             let overflowed = {
                 let mut buffer = follower.buffer.lock().unwrap();
-                if let Some(speaker) = partial_speaker {
-                    buffer.push_partial(speaker, Arc::clone(&line));
-                } else {
-                    buffer.push_event(Arc::clone(&line));
+                match kind {
+                    BroadcastKind::Partial(speaker) => {
+                        buffer.push_partial(speaker, Arc::clone(&line))
+                    }
+                    BroadcastKind::Event => buffer.push_event(Arc::clone(&line)),
+                    BroadcastKind::Control => buffer.push_control_event(Arc::clone(&line)),
                 }
                 buffer.overflowed()
             };
@@ -614,6 +862,18 @@ mod tests {
     }
 
     #[test]
+    fn control_event_preserves_unflushed_partials_and_still_drains_in_order() {
+        // FIX 2: unlike a real lifecycle event, a control record (`refused`,
+        // `start_failed`) must not erase an undrained partial -- it
+        // describes a declined command, not this session's own terminal.
+        let mut buffer = FollowerBuffer::default();
+        buffer.push_partial(Speaker::Me, Arc::from("partial\n"));
+        buffer.push_control_event(Arc::from("refused\n"));
+
+        assert_eq!(strings(buffer.drain()), ["refused\n", "partial\n"]);
+    }
+
+    #[test]
     fn lifecycle_events_are_fifo_and_precede_partial_slots() {
         let mut buffer = FollowerBuffer::default();
         buffer.push_event(Arc::from("begin\n"));
@@ -685,6 +945,22 @@ mod tests {
     }
 
     #[test]
+    fn control_event_that_cannot_fit_alongside_preserved_partials_overflows() {
+        // A control record's bytes still count toward the shared budget --
+        // it is no longer discarding the partials it preserves to make room
+        // for itself, so it must still overflow like anything else that
+        // doesn't fit.
+        let mut buffer = FollowerBuffer::default();
+        buffer.push_partial(Speaker::Me, Arc::from("p".repeat(MAX_BUFFERED_BYTES - 32)));
+        assert!(!buffer.overflowed());
+
+        buffer.push_control_event(Arc::from("c".repeat(33)));
+
+        assert!(buffer.overflowed());
+        assert!(buffer.drain().is_empty());
+    }
+
+    #[test]
     fn partial_without_an_active_session_emits_nothing() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
@@ -707,8 +983,10 @@ mod tests {
         hub.set_enabled(true);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.finish(Some(Speaker::Me), "orphaned final");
-        hub.no_speech();
+        // Session 1 has never been allocated (no `begin` ran), so any id
+        // presented here is necessarily stale; 1 is as good as any other.
+        hub.finish(1, Some(Speaker::Me), "orphaned final");
+        hub.no_speech(1);
         hub.partial(StreamSource::Mic, "ignored", "");
 
         assert!(follower.drain().is_empty());
@@ -720,12 +998,12 @@ mod tests {
         hub.set_enabled(true);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.finish(Some(Speaker::Me), "orphaned final");
+        hub.finish(1, Some(Speaker::Me), "orphaned final");
         assert!(follower.drain().is_empty());
 
-        hub.begin(false, FollowMode::Meeting);
-        hub.no_speech();
-        hub.error("late error");
+        let first = hub.begin(false, FollowMode::Meeting).unwrap();
+        hub.no_speech(first);
+        hub.error(first, "late error");
         assert_eq!(
             events(follower.drain()),
             [
@@ -734,9 +1012,9 @@ mod tests {
             ]
         );
 
-        hub.begin(true, FollowMode::Meeting);
-        hub.cancel();
-        hub.finish(Some(Speaker::Me), "late final");
+        let second = hub.begin(true, FollowMode::Meeting).unwrap();
+        hub.cancel(second);
+        hub.finish(second, Some(Speaker::Me), "late final");
         assert_eq!(
             events(follower.drain()),
             [
@@ -747,20 +1025,213 @@ mod tests {
     }
 
     #[test]
+    fn cancel_active_ends_whatever_session_is_currently_open() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        hub.cancel_active();
+
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"cancel\",\"session\":1}\n"]
+        );
+    }
+
+    #[test]
+    fn cancel_active_is_a_noop_with_nothing_open() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        follower.drain();
+
+        hub.cancel_active();
+
+        assert!(follower.drain().is_empty());
+    }
+
+    #[test]
+    fn cancel_active_does_not_touch_a_session_it_did_not_read() {
+        // Guards the race `cancel_active`'s own doc comment calls out: if the
+        // active session changes between reading its id and cancelling it,
+        // the stale id must be dropped by `cancel`'s own session check
+        // rather than cancelling whatever replaced it.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let first = hub.begin(true, FollowMode::Meeting).unwrap();
+        hub.no_speech(first); // session 1 ends normally
+        hub.begin(true, FollowMode::Meeting).unwrap(); // session 2 is now active
+        follower.drain();
+
+        // Simulates the stale id `cancel_active` could have captured just
+        // before session 1 ended and session 2 began: presenting it now must
+        // not touch session 2.
+        hub.cancel(first);
+        assert!(
+            follower.drain().is_empty(),
+            "a stale id must not cancel the session that replaced it"
+        );
+
+        hub.cancel_active();
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"cancel\",\"session\":2}\n"]
+        );
+    }
+
+    #[test]
+    fn a_start_cancelled_before_begin_still_gets_a_terminal() {
+        // Pins the actions.rs/transcription_coordinator.rs fix: `action.start()`
+        // starts the recorder before calling `hub.begin()`, so a concurrent
+        // cancel can stop the recorder and find no active hub session to end
+        // -- `hub.begin()` then runs anyway and publishes a session for a
+        // capture that is already dead. `on_start_result` reports that
+        // session's id back to `run_effect` on rollback (`started == false`
+        // but a `publication_session` was allocated), which is what calls
+        // `hub.cancel` with it below. Without that call the session would sit
+        // open until some unrelated later `begin` happened to notice it as
+        // orphaned (see `begin`'s own orphan handling) -- an arbitrarily long
+        // wait during which a follower has a `begin` with no terminal at all.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let session = hub.begin(true, FollowMode::AssistedNotes).unwrap();
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"assisted-notes\"}\n"]
+        );
+
+        // What `run_effect` does when `on_start_result` reports this session
+        // as orphaned by the rollback.
+        hub.cancel(session);
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"cancel\",\"session\":1}\n"],
+            "the follower must see a terminal for the cancelled start, not be left on begin alone"
+        );
+
+        // The session is fully closed -- not merely appearing to a single
+        // follower -- so a later terminal call for the same id is dropped as
+        // stale rather than reopening or double-closing it.
+        hub.no_speech(session);
+        assert!(
+            follower.drain().is_empty(),
+            "a session that already received its terminal must not emit a second one"
+        );
+    }
+
+    #[test]
+    fn a_terminal_call_for_a_superseded_session_does_not_close_the_new_one() {
+        // Pins the fix for the stale-terminal bug: `TranscribeAction::stop`
+        // queues its `hub.finish` call onto the main thread, and the
+        // coordinator can admit a brand new capture before that queued call
+        // actually runs (see `FinishGuard`'s doc comment in actions.rs). If
+        // `finish_with` finalized whatever session happens to be active
+        // instead of checking the id it was given, this stale call would
+        // steal session 1's text onto session 2's `final` record.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let first = hub.begin(true, FollowMode::Meeting).unwrap();
+        hub.no_speech(first); // session 1 ends normally, with no orphan involved
+        let second = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        // The stale call: presents session 1's id, long after session 2 began.
+        hub.finish(first, Some(Speaker::Me), "stale text from session 1");
+        assert!(
+            follower.drain().is_empty(),
+            "a stale terminal call must not broadcast anything"
+        );
+
+        // Session 2 is still open — the stale call above must not have
+        // consumed it — and its own matching terminal still closes it.
+        hub.no_speech(second);
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"no_speech\",\"session\":2}\n"]
+        );
+    }
+
+    #[test]
+    fn a_finished_session_is_not_orphan_cancelled_by_the_next_begin() {
+        // Pins the actions.rs fix: `TranscribeAction::stop` now calls
+        // `hub.finish` synchronously on the worker, before `FinishGuard`
+        // drops and lets the coordinator admit a new capture — rather than
+        // queuing `hub.finish` onto the main thread as part of the paste
+        // closure. Under the old ordering, a rapid next capture's
+        // `hub.begin` could run before that queued closure did, find this
+        // session's `ActiveSession` still open, and force-cancel it as
+        // orphaned (see `begin`'s own orphan handling below); the delayed
+        // `hub.finish` then found the session already replaced and silently
+        // dropped as stale (see `finish_with`), so a transcript that
+        // actually completed reached the wire as `cancel` instead of
+        // `final`. This test exercises the two calls in the order the fix
+        // now guarantees — `finish` completes before the next `begin` is
+        // ever issued — and pins that no orphan `cancel` appears between
+        // them.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let first = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        hub.finish(first, Some(Speaker::Me), "completed transcript");
+        let second = hub.begin(true, FollowMode::Meeting).unwrap();
+        assert_eq!(second, 2, "the next capture still gets a fresh session");
+
+        assert_eq!(
+            events(follower.drain()),
+            [
+                "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"completed transcript\"}\n",
+                "{\"t\":\"begin\",\"session\":2,\"streaming\":true,\"mode\":\"meeting\"}\n",
+            ],
+            "a cleanly finished session must not be orphan-cancelled by the next begin"
+        );
+    }
+
+    #[test]
+    fn a_matching_terminal_call_still_closes_its_own_session() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let session = hub.begin(true, FollowMode::AssistedNotes).unwrap();
+        follower.drain();
+        hub.finish(session, Some(Speaker::Me), "correct session");
+
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"correct session\"}\n"]
+        );
+    }
+
+    #[test]
     fn follower_observes_begin_partial_and_final_in_order() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
+            [
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
+                "{\"t\":\"idle\"}\n",
+            ]
         );
         let mut observed = Vec::new();
-        hub.begin(true, FollowMode::Meeting);
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
         observed.extend(follower.drain());
         hub.partial(StreamSource::Mic, "hello ", "wor");
         observed.extend(follower.drain());
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
         observed.extend(follower.drain());
 
         assert_eq!(
@@ -780,7 +1251,10 @@ mod tests {
         let (_follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"]
+            [
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
+                "{\"t\":\"idle\"}\n",
+            ]
         );
     }
 
@@ -797,6 +1271,230 @@ mod tests {
     }
 
     #[test]
+    fn start_failed_broadcasts_without_an_active_session() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.start_failed(FollowMode::AssistedNotes, "no input device");
+
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\"}\n"]
+        );
+    }
+
+    #[test]
+    fn start_failed_is_ignored_while_the_hub_is_disabled() {
+        let hub = FollowStreamHub::default();
+        hub.start_failed(FollowMode::AssistedNotes, "ignored");
+
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        assert!(follower.drain().is_empty());
+    }
+
+    #[test]
+    fn refused_names_the_mode_and_reason() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::ModeDisabled);
+
+        assert_eq!(
+            events(follower.drain()),
+            [
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"busy\"}\n",
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"mode-disabled\"}\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn refused_is_ignored_while_the_hub_is_disabled() {
+        let hub = FollowStreamHub::default();
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
+
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        assert!(follower.drain().is_empty());
+    }
+
+    #[test]
+    fn a_refusal_does_not_close_an_active_session() {
+        // A refusal is orthogonal to whatever session is or isn't active — it
+        // reports a declined command, not a session lifecycle event, so it
+        // must never consume `state.active` the way a terminal event does.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
+        hub.finish(session, Some(Speaker::Me), "still open");
+
+        assert_eq!(
+            events(follower.drain()),
+            [
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"busy\"}\n",
+                "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"still open\"}\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn refused_preserves_an_active_sessions_undrained_partial_and_it_still_drains_after() {
+        // FIX 2 (data loss): a `busy` refusal for one mode used to broadcast
+        // through the same path as a real lifecycle event, which cleared
+        // BOTH partial slots -- including an unrelated (or the same) active
+        // session's latest undrained partial. If no later partial arrived
+        // before that session's own `final`, the committed text in the
+        // cleared partial was gone from the wire for good. This pins that the
+        // partial survives the refusal and is still delivered, in order,
+        // ahead of the eventual `final`.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        // Left undrained on purpose: this is the exact state a slow consumer
+        // is in when a `refused` for an unrelated command lands.
+        hub.partial(StreamSource::Mic, "hello ", "wor");
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
+
+        assert_eq!(
+            events(follower.drain()),
+            [
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"busy\"}\n",
+                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
+            ],
+            "the refusal must not have discarded the undrained partial, and the partial \
+             must still drain, in order, after it"
+        );
+
+        // The session's own later final is unaffected: it drains cleanly on
+        // its own, proving the preserved partial was actually consumed above
+        // rather than lingering to double-count here.
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n"]
+        );
+    }
+
+    #[test]
+    fn start_failed_also_preserves_an_active_sessions_undrained_partial() {
+        // Same shape as `refused`'s test above; `start_failed` takes the same
+        // control-record path and must have the same property.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        hub.partial(StreamSource::Mic, "hello ", "wor");
+        hub.start_failed(FollowMode::AssistedNotes, "no input device");
+
+        assert_eq!(
+            events(follower.drain()),
+            [
+                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\"}\n",
+                "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_real_session_event_still_clears_an_undrained_partial() {
+        // Contrast with the two tests above: this property is deliberately
+        // *not* extended to real session events. A `final` must never trail
+        // a stale `partial` of the text it just finalized, so `no_speech`
+        // here must still discard the earlier partial rather than replaying
+        // it after its own session has already ended.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        hub.partial(StreamSource::Mic, "hello ", "wor");
+        follower.drain();
+        hub.no_speech(session);
+
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"no_speech\",\"session\":1}\n"],
+            "a real terminal event must still clear the undrained partial"
+        );
+    }
+
+    #[test]
+    fn suppress_if_active_ends_the_matching_session_and_silences_its_later_real_events() {
+        // Pins the FIX 1 regression: turning a mode's own publication toggle
+        // off mid-capture must stop the follower seeing anything further for
+        // that session, and must not leave it with a `begin` and no
+        // terminal.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        let session = hub.begin(true, FollowMode::AssistedNotes).unwrap();
+        follower.drain();
+
+        hub.suppress_if_active(FollowMode::AssistedNotes);
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"cancel\",\"session\":1}\n"],
+            "the follower must see a terminal, not be left on begin alone"
+        );
+
+        // The real capture keeps running server-side and still reports its
+        // own partial/finish for this session id -- both must now be silent,
+        // exactly like any other stale terminal call (see finish_with).
+        hub.partial(StreamSource::Mic, "still recording", "");
+        hub.finish(session, Some(Speaker::Me), "late real transcript");
+        assert!(
+            follower.drain().is_empty(),
+            "publication must not resume for a session already ended by its own toggle"
+        );
+    }
+
+    #[test]
+    fn suppress_if_active_ignores_a_session_from_a_different_mode() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+        follower.drain();
+
+        // Assisted Notes' own toggle turning off must not touch Meeting's
+        // active session.
+        hub.suppress_if_active(FollowMode::AssistedNotes);
+        assert!(follower.drain().is_empty());
+
+        hub.finish(session, Some(Speaker::Me), "still open");
+        assert_eq!(
+            events(follower.drain()),
+            ["{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"still open\"}\n"]
+        );
+    }
+
+    #[test]
+    fn suppress_if_active_is_a_noop_with_nothing_open() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        let (follower, _) = hub.subscribe("0.9.5").unwrap();
+
+        hub.suppress_if_active(FollowMode::Meeting);
+
+        assert!(follower.drain().is_empty());
+    }
+
+    #[test]
     fn late_attach_receives_active_session_and_both_partial_snapshots() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
@@ -809,7 +1507,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"them\",\"committed\":\"system\",\"tentative\":\" audio\"}\n",
@@ -866,23 +1564,27 @@ mod tests {
         let hub = enabled_hub(&clock);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
 
-        // `hello` describes the connection, not a session.
+        // `hello` describes the connection, not a session; `idle` reports
+        // that the connection found no active session, at that same instant.
         assert_eq!(
             strings(initial),
-            ["{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"]
+            [
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+                "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+            ]
         );
 
         // Drain between events: an undrained partial is cleared by the next
         // lifecycle event, which is the buffer's normal coalescing.
         let mut observed = Vec::new();
         clock.advance(100);
-        hub.begin(true, FollowMode::Meeting);
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
         observed.extend(follower.drain());
         clock.advance(1112);
         hub.partial(StreamSource::Mic, "hello ", "wor");
         observed.extend(follower.drain());
         clock.advance(638);
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
         observed.extend(follower.drain());
 
         assert_eq!(
@@ -901,13 +1603,13 @@ mod tests {
         let hub = enabled_hub(&clock);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.begin(true, FollowMode::Meeting);
+        let first = hub.begin(true, FollowMode::Meeting).unwrap();
         clock.advance(5_000);
-        hub.finish(Some(Speaker::Me), "one");
+        hub.finish(first, Some(Speaker::Me), "one");
         clock.advance(60_000);
-        hub.begin(true, FollowMode::Meeting);
+        let second = hub.begin(true, FollowMode::Meeting).unwrap();
         clock.advance(250);
-        hub.finish(Some(Speaker::Me), "two");
+        hub.finish(second, Some(Speaker::Me), "two");
 
         let elapsed = elapsed_values(follower.drain());
         assert_eq!(elapsed, [Some(0), Some(5_000), Some(0), Some(250)]);
@@ -954,7 +1656,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
             ]
@@ -964,18 +1666,23 @@ mod tests {
     #[test]
     fn disabled_hub_ignores_every_publisher_method() {
         let hub = FollowStreamHub::default();
-        hub.begin(true, FollowMode::Meeting);
+        assert_eq!(hub.begin(true, FollowMode::Meeting), None);
         hub.partial(StreamSource::Mic, "ignored", "ignored");
-        hub.finish(Some(Speaker::Me), "ignored");
-        hub.no_speech();
-        hub.cancel();
-        hub.error("ignored");
+        // The hub is disabled, so no session was ever allocated; any id is
+        // equally stale here.
+        hub.finish(1, Some(Speaker::Me), "ignored");
+        hub.no_speech(1);
+        hub.cancel(1);
+        hub.error(1, "ignored");
+        hub.start_failed(FollowMode::AssistedNotes, "ignored");
+        hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
 
         assert!(!hub.is_enabled());
 
         hub.set_enabled(true);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
-        assert_eq!(initial.len(), 1);
+        // hello + idle: no active session survived the disabled window above.
+        assert_eq!(initial.len(), 2);
         hub.begin(false, FollowMode::Meeting);
         assert_eq!(
             events(follower.drain()),
@@ -1008,7 +1715,7 @@ mod tests {
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
         );
@@ -1144,12 +1851,14 @@ mod tests {
             consumer_hub.unsubscribe(consumer_follower.id());
         });
 
-        hub.begin(true, FollowMode::Meeting);
-        wait_for_line_count(&written, 2).await;
-        hub.partial(StreamSource::Mic, "hello ", "wor");
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+        // initial already carries hello + idle, so each checkpoint below is
+        // offset by those two.
         wait_for_line_count(&written, 3).await;
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.partial(StreamSource::Mic, "hello ", "wor");
         wait_for_line_count(&written, 4).await;
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
+        wait_for_line_count(&written, 5).await;
         hub.set_enabled(false);
 
         tokio::time::timeout(std::time::Duration::from_secs(2), consumer)
@@ -1159,7 +1868,8 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
+                "{\"t\":\"idle\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",

@@ -110,7 +110,10 @@ fn build_console_filter() -> env_filter::Filter {
     builder.build()
 }
 
-fn show_main_window(app: &AppHandle) {
+// `pub(crate)`: `transcription_coordinator`'s explicit-command handling also
+// raises the window on a mode-disabled refusal, the same courtesy
+// `--toggle-assisted-notes` gives — see `run_explicit_outcome`.
+pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
         if let Err(e) = main_window.unminimize() {
             log::error!("Failed to unminimize webview window: {}", e);
@@ -135,6 +138,27 @@ fn show_main_window(app: &AppHandle) {
         "Main window not found. Webview labels: {:?}",
         webview_labels
     );
+}
+
+/// Forwards an explicit `--start-assisted-notes` / `--stop-assisted-notes`
+/// command to the coordinator. The decision (forward, no-op, or refuse) and
+/// its execution both happen atomically inside `TranscriptionCoordinator`'s
+/// own serialized command loop, which owns the authoritative `Stage` — see
+/// `transcription_coordinator::decide_explicit_capture` for why that must be
+/// where this happens rather than here. Whether the mode is enabled is
+/// likewise read inside that loop, at dequeue time, rather than here: this
+/// function can run well before the coordinator thread gets to the command
+/// it sends, and resolving Settings here would risk deciding against a
+/// snapshot a later settings change had already made stale.
+fn handle_explicit_assisted_notes_command(
+    app: &AppHandle,
+    op: crate::shorthand::capture_command::ExplicitOp,
+) {
+    if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
+        coordinator.send_explicit_capture(op, "assisted_notes");
+    } else {
+        log::warn!("TranscriptionCoordinator not initialized");
+    }
 }
 
 #[allow(unused_variables)]
@@ -260,26 +284,25 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
 
-    if follow_stream::listener_required(&initial_settings) {
-        let startup_app = app_handle.clone();
-        tauri::async_runtime::spawn(async move {
-            let server = startup_app.state::<follow_stream::FollowStreamServer>();
-            let _lifecycle_guard = server.lock_lifecycle().await;
-            // Re-read after acquiring the lifecycle lock so a settings command
-            // that won the race can cancel this queued startup attempt.
-            if !follow_stream::listener_required(&settings::get_settings(&startup_app)) {
-                return;
-            }
-
-            if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
-                log::error!("Failed to start configured follow-stream listener: {error}");
-                // No single toggle owns the listener any more — Meeting,
-                // Dictation, and Assisted Notes can all request it — so there
-                // is no truthful rollback beyond leaving every stored
-                // preference exactly as the user set it.
-            }
-        });
-    }
+    // The follow-stream listener is unconditional — it exists whenever the
+    // app runs, regardless of any mode's settings. This is listener
+    // LIFETIME, not publication: which captures actually reach a follower is
+    // still gated per-mode by each mode's own `follow_stream_enabled`, at the
+    // `hub.begin`/`hub.start_failed` call sites in actions.rs, and that gate
+    // is unchanged. The listener has to be unconditional because a `refused`
+    // record (e.g. "Assisted Notes is disabled") is precisely the message a
+    // follower needs when a mode is off — if the socket only existed while
+    // some mode could publish, the one case `refused` exists to explain
+    // (every publishing mode disabled) is exactly the case with no socket
+    // for it to arrive on. See FOLLOW_STREAM.md's "Local transport and
+    // security" section.
+    let startup_app = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let server = startup_app.state::<follow_stream::FollowStreamServer>();
+        if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
+            log::error!("Failed to start the follow-stream listener: {error}");
+        }
+    });
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -935,6 +958,16 @@ pub fn run(cli_args: CliArgs) {
                     log::warn!("--toggle-assisted-notes ignored: Assisted Notes is not enabled");
                     show_main_window(app);
                 }
+            } else if args.iter().any(|a| a == "--start-assisted-notes") {
+                handle_explicit_assisted_notes_command(
+                    app,
+                    crate::shorthand::capture_command::ExplicitOp::Start,
+                );
+            } else if args.iter().any(|a| a == "--stop-assisted-notes") {
+                handle_explicit_assisted_notes_command(
+                    app,
+                    crate::shorthand::capture_command::ExplicitOp::Stop,
+                );
             } else {
                 // A second process was launched without remote-control flags
                 // (e.g. the binary run from a shell). On macOS, relaunching the
@@ -1146,10 +1179,16 @@ pub fn run(cli_args: CliArgs) {
             }
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
+                // `Stage` in transcription_coordinator.rs owns the session id
+                // now, and exit teardown can't reach it synchronously here —
+                // relying on the coordinator's own thread still being
+                // responsive during shutdown would be its own new failure
+                // mode. `cancel_active` asks the hub directly instead (see
+                // its own doc comment).
                 if let Some(hub) = follow_stream::hub(app) {
                     // Best-effort terminal event: server teardown aborts follower
                     // tasks, so a follower may observe EOF instead of this cancel.
-                    hub.cancel();
+                    hub.cancel_active();
                 }
                 for tm in transcription_managers(app) {
                     let _ = tm.unload_model();

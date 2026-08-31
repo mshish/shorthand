@@ -94,9 +94,13 @@ pub fn cancel_current_operation(app: &AppHandle) {
     let recording_was_active = audio_manager.is_recording();
     audio_manager.cancel_recording();
 
-    // Abandon any live streaming transcription
+    // Abandon any live streaming transcription. `Stage` in
+    // transcription_coordinator.rs owns the session id now, and this call
+    // site can't reach it synchronously (it only notifies the coordinator
+    // asynchronously below) — so this asks the hub to cancel whatever it
+    // itself considers active instead (see `cancel_active`'s doc comment).
     if let Some(hub) = crate::follow_stream::hub(app) {
-        hub.cancel();
+        hub.cancel_active();
     }
     cancel_active_streams(app);
 

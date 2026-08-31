@@ -54,20 +54,62 @@ impl Drop for FinishGuard {
 /// Publishes a terminal follow-stream event if the transcription pipeline ended
 /// without one — a panic, or any future early return that forgets its terminal.
 /// A no-op on every normal path, because the real terminal already cleared the
-/// hub's active session.
-struct FollowStreamSessionGuard(AppHandle);
+/// hub's active session (or, once superseded, `FollowStreamHub::finish_with`
+/// drops this call as stale on its own).
+///
+/// Carries the session id captured when this guard was constructed — the
+/// same id `TranscribeAction::stop`'s `publication_session` parameter gave
+/// every other terminal call in this task — rather than re-reading it from
+/// anywhere else at drop time, which could by then describe a capture this
+/// guard knows nothing about.
+struct FollowStreamSessionGuard(AppHandle, Option<u64>);
 impl Drop for FollowStreamSessionGuard {
     fn drop(&mut self) {
-        if let Some(hub) = crate::follow_stream::hub(&self.0) {
-            hub.error("transcription ended unexpectedly");
+        if let (Some(hub), Some(session)) = (crate::follow_stream::hub(&self.0), self.1) {
+            hub.error(session, "transcription ended unexpectedly");
         }
     }
 }
 
 // Shortcut Action Trait
+//
+// `start`'s return value and `stop`'s `publication_session` parameter carry
+// the follow-stream session id `hub.begin()` allocated for this capture (or
+// `None`, when the mode's own publication setting kept `start` from ever
+// calling `begin`). `TranscriptionCoordinator` stores whatever `start`
+// returns on `Stage::Recording`/`Stage::Processing` and hands it back to
+// `stop` explicitly from there — see `Stage`'s own doc comment in
+// transcription_coordinator.rs for the race this replaces: a process-wide
+// cell that a newer capture could overwrite before the older one's `stop`
+// ever read it.
+//
+// `start`'s `publication_enabled` parameter is the same idea applied to the
+// *decision* that governs whether `start` calls `hub.begin()` at all, not
+// just the id that decision produces. It is `Some(v)` only for an explicit
+// `--start-assisted-notes` capture, whose `v` is the value
+// `transcription_coordinator.rs`'s `decide_explicit_capture` already
+// resolved (via `apply_mode`) to decide whether to forward the command in
+// the first place — see `Effect::Start`'s doc comment there for the
+// unobservable-start bug that came from `TranscribeAction::start` re-reading
+// this setting a second time, later, instead of being handed the first
+// read. It is `None` for the hotkey/PTT path, which has no earlier decision
+// to hand down and resolves the setting itself, same as before this
+// parameter existed.
 pub trait ShortcutAction: Send + Sync {
-    fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str);
-    fn stop(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str);
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        publication_enabled: Option<bool>,
+    ) -> Option<u64>;
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        publication_session: Option<u64>,
+    );
 }
 
 // Transcribe Action
@@ -133,31 +175,6 @@ where
 
 fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool {
     style == OverlayStyle::Live && is_streaming
-}
-
-/// Builds the message logged when a transcription finishes.
-///
-/// The file log target runs at `LogLevel::Debug` by default (see
-/// `default_log_level` in settings.rs), so an unconditional `debug!` of the
-/// transcript text would still write it to `<app data dir>/logs/handy.log`
-/// even when the user has turned `save_transcripts` off — defeating the
-/// setting through the log file instead of `history.db`. When it's off,
-/// keep the useful diagnostics (elapsed time, character count) but withhold
-/// the text itself, and say so explicitly so the absence reads as
-/// intentional rather than as an empty transcription.
-fn transcription_completed_message(
-    save_transcripts: bool,
-    elapsed: Duration,
-    transcription: &str,
-) -> String {
-    if save_transcripts {
-        format!("Transcription completed in {elapsed:?}: '{transcription}'")
-    } else {
-        format!(
-            "Transcription completed in {elapsed:?}: <withheld, save_transcripts is off> ({} chars)",
-            transcription.chars().count()
-        )
-    }
 }
 
 /// Decides what the post-processed transcript and its prompt should look
@@ -544,7 +561,13 @@ pub(crate) async fn process_transcription_output(
 }
 
 impl ShortcutAction for TranscribeAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
         crate::shorthand::mode::set_active(app, binding_id);
@@ -606,24 +629,6 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        // Which captures reach the follow-stream hub is the *resolved*
-        // `follow_stream_enabled` value, not the mode: that is the switch the
-        // Modes pane shows per mode, and gating on anything else makes the UI
-        // describe a capture it is not governing. Meeting ships true,
-        // dictation false, assisted notes true. Skipping `begin` alone is
-        // sufficient: every terminal hub call and `partial` check for an
-        // active session first and silently no-op without one (pinned in
-        // follow_stream::hub::tests).
-        if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
-            if let Some(hub) = crate::follow_stream::hub(app) {
-                // The cell was written by this same function at its top, for this
-                // same capture, so it cannot describe a different one.
-                hub.begin(
-                    model_supports_streaming,
-                    crate::shorthand::mode::active(app).into(),
-                );
-            }
-        }
         if model_supports_streaming {
             let managers = transcription_managers(app);
             if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
@@ -662,6 +667,15 @@ impl ShortcutAction for TranscribeAction {
         debug!("Microphone mode - always_on: {}", is_always_on);
 
         let mut recording_error: Option<String> = None;
+        // Becomes this call's return value. The coordinator carries whatever
+        // ends up here onto `Stage::Recording` (see
+        // `CoordinatorState::on_start_result`) and passes it explicitly into
+        // `stop`'s `publication_session` parameter when this capture ends —
+        // never a process-wide cell read at some later point, which is what
+        // previously let a *newer* capture's id silently replace an older
+        // one still finishing (see `Stage`'s doc comment in
+        // transcription_coordinator.rs).
+        let mut follow_stream_session: Option<u64> = None;
         let recording_start_time = Instant::now();
         match rm.try_start_recording(&binding_id, vad_policy) {
             Ok(readiness) => {
@@ -669,6 +683,54 @@ impl ShortcutAction for TranscribeAction {
                     "Recording request accepted in {:?}; waiting for first microphone samples",
                     recording_start_time.elapsed()
                 );
+                // `begin` now means "started": emitted only once
+                // `try_start_recording` has actually succeeded, so a follower
+                // that sees it has real proof the microphone opened — unlike
+                // before, when `begin` ran ahead of this call and could be
+                // followed by a failure it never announced. Which captures
+                // reach the hub at all is still the *resolved*
+                // `follow_stream_enabled` value, not the mode: that is the
+                // switch the Modes pane shows per mode, and gating on
+                // anything else makes the UI describe a capture it is not
+                // governing. Meeting ships true, dictation false, assisted
+                // notes true. Skipping `begin` alone is sufficient: every
+                // terminal hub call and `partial` check for an active session
+                // first and silently no-op without one (pinned in
+                // follow_stream::hub::tests).
+                //
+                // `publication_enabled` is `Some` only when the caller is
+                // `decide_explicit_capture`, which already read this exact
+                // setting (via `apply_mode`) before deciding to forward the
+                // start at all — see `Effect::Start`'s doc comment in
+                // transcription_coordinator.rs. Using it verbatim here,
+                // instead of calling `resolve_settings` again, is the fix: the
+                // old code read the setting twice on this thread — once in
+                // `decide_explicit_capture` to decide whether to forward, and
+                // again right here — straddling the entire pre-recording
+                // prefix above (model kickoff, tray, overlay, settings/stream
+                // plan) plus `try_start_recording`. A publication toggle
+                // flipped off inside that window made the first read stand
+                // (so the capture was forwarded and actually recorded) while
+                // this second read saw the new value and skipped `hub.begin`
+                // — no `refused` (nothing was refused, the start already
+                // succeeded), no `start_failed` (nothing failed), just a live
+                // capture with no `begin` a follower could ever see. The
+                // hotkey/PTT path still has no earlier decision to honour
+                // (`None`), so it keeps resolving fresh here, same as always
+                // — publication being off there is a private capture nobody
+                // asked to stream, not a bug to route around.
+                follow_stream_session = if publication_enabled.unwrap_or_else(|| {
+                    crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled
+                }) {
+                    crate::follow_stream::hub(app).and_then(|hub| {
+                        hub.begin(
+                            model_supports_streaming,
+                            crate::shorthand::mode::active(app).into(),
+                        )
+                    })
+                } else {
+                    None
+                };
                 let generation = readiness.generation();
                 let app_clone = app.clone();
                 let rm_clone = Arc::clone(&rm);
@@ -715,9 +777,29 @@ impl ShortcutAction for TranscribeAction {
             }
             Err(e) => {
                 debug!("Failed to start recording: {}", e);
-                if let Some(hub) = crate::follow_stream::hub(app) {
-                    hub.error(&e);
+                // No `begin` ever ran for this capture — it is only emitted
+                // after `try_start_recording` succeeds, above — so there is
+                // no active hub session for `hub.error()` to close; calling
+                // it here would silently no-op (see its own doc comment) and
+                // leave a requester that got `Response::Accepted` waiting
+                // forever for the `begin`-or-`error` this same connection
+                // promised it. `start_failed` is the session-less broadcast
+                // that promise still needs.
+                //
+                // Gated on the same resolved `follow_stream_enabled` that
+                // guards `begin` above: a mode whose own publication toggle
+                // is off must not surface anything to followers, including a
+                // failure. `mode` rides along for the same reason `begin`
+                // carries it — without it a follower watching one mode could
+                // misattribute a different mode's failure to itself.
+                if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
+                    if let Some(hub) = crate::follow_stream::hub(app) {
+                        hub.start_failed(crate::shorthand::mode::active(app).into(), &e);
+                    }
                 }
+                // No session was allocated for this capture either (`begin`
+                // never ran), so `follow_stream_session` stays `None` — there
+                // is nothing for this call to return.
                 recording_error = Some(e);
             }
         }
@@ -753,9 +835,17 @@ impl ShortcutAction for TranscribeAction {
             "TranscribeAction::start completed in {:?}",
             start_time.elapsed()
         );
+
+        follow_stream_session
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        publication_session: Option<u64>,
+    ) {
         // Prevent a slow microphone from emitting a ready event or start chime
         // after the user has already requested stop.
         app.state::<Arc<AudioRecordingManager>>()
@@ -800,7 +890,19 @@ impl ShortcutAction for TranscribeAction {
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
-            let follow_stream_guard = FollowStreamSessionGuard(ah.clone());
+            // `publication_session` is what the coordinator's
+            // `Stage::Recording` carried for this exact capture (see
+            // `Stage`'s doc comment in transcription_coordinator.rs) — passed
+            // in as a parameter rather than read from a process-wide cell,
+            // which is what previously let a *newer* capture's id silently
+            // replace an older one still finishing here. Every terminal hub
+            // call in this task presents this same id, including
+            // `hub.finish` below, which runs synchronously on this task
+            // rather than being queued onto the main thread, precisely so it
+            // completes before `_guard` can drop and let the coordinator
+            // admit a new capture (see the comment at that call site).
+            let follow_stream_session = publication_session;
+            let _follow_stream_guard = FollowStreamSessionGuard(ah.clone(), follow_stream_session);
             debug!(
                 "Starting async transcription task for binding: {}",
                 binding_id
@@ -826,8 +928,10 @@ impl ShortcutAction for TranscribeAction {
 
                 if samples.is_empty() {
                     debug!("Recording produced no audio samples; skipping persistence");
-                    if let Some(hub) = crate::follow_stream::hub(&ah) {
-                        hub.no_speech();
+                    if let (Some(hub), Some(session)) =
+                        (crate::follow_stream::hub(&ah), follow_stream_session)
+                    {
+                        hub.no_speech(session);
                     }
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
@@ -1030,39 +1134,64 @@ impl ShortcutAction for TranscribeAction {
                             }
 
                             if processed.final_text.is_empty() {
-                                if let Some(hub) = crate::follow_stream::hub(&ah) {
-                                    hub.no_speech();
+                                if let (Some(hub), Some(session)) =
+                                    (crate::follow_stream::hub(&ah), follow_stream_session)
+                                {
+                                    hub.no_speech(session);
                                 }
                                 utils::hide_recording_overlay(&ah);
                                 set_tray_state(&ah, TrayIconState::Idle);
                             } else {
-                                let ah_clone = ah.clone();
-                                let paste_time = Instant::now();
                                 let final_text = processed.final_text;
+
+                                // Publish the terminal here, synchronously, before this
+                                // async block returns — not from inside the paste closure
+                                // queued below. `_guard` (`FinishGuard`) is what tells the
+                                // coordinator the pipeline is free to admit a new capture,
+                                // and it only drops once this async block actually returns.
+                                // `run_on_main_thread` below only *queues* the paste
+                                // closure; before this fix `hub.finish` ran inside that
+                                // closure, so the guard could drop — and a rapid next
+                                // capture's `hub.begin` could run — before the closure ever
+                                // executed. `begin` would then find this session's
+                                // `ActiveSession` still open, treat it as orphaned, and
+                                // force-cancel it: the eventual, delayed `hub.finish` call
+                                // then found the session already replaced and silently
+                                // dropped as stale (see `finish_with`), so a transcript
+                                // that actually completed reached the wire as `cancel`
+                                // instead of `final`. Calling it here closes the session
+                                // before the guard can drop and a next capture can ever be
+                                // admitted, so `begin`'s orphan check never has a cleanly
+                                // finished session left to find.
+                                if rm.was_cancelled_since(cancel_generation) {
+                                    debug!("Transcription operation cancelled before paste");
+                                    utils::hide_recording_overlay(&ah);
+                                    set_tray_state(&ah, TrayIconState::Idle);
+                                    return;
+                                }
+                                if let (Some(hub), Some(session)) =
+                                    (crate::follow_stream::hub(&ah), follow_stream_session)
+                                {
+                                    let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
+                                    hub.finish(session, speaker, &final_text);
+                                }
+
+                                let ah_clone = ah.clone();
                                 let rm_for_paste = Arc::clone(&rm);
                                 // The mode cell records "the mode of the most recently
                                 // started capture" and is never cleared (see
                                 // shorthand::mode), so it is only guaranteed correct for
                                 // the capture in flight at the moment it is read.
-                                // run_on_main_thread only *queues* this closure. The
-                                // FinishGuard is still alive here, but it drops as soon as
-                                // this async block returns — which is right after the
-                                // queueing call below, not after the closure runs. So by
-                                // the time the closure reaches the main thread the
-                                // coordinator may already have accepted a new capture of
-                                // the other mode, and the cell would describe that one
-                                // instead. Resolving now, while the guard still holds the
-                                // coordinator and the cell still reflects this capture,
-                                // and moving the snapshot into the
-                                // closure avoids `paste()` re-reading a cell that may by
-                                // then belong to a different capture.
+                                // run_on_main_thread only *queues* this closure, which can
+                                // run after a new capture has begun and overwritten the
+                                // cell, so resolve settings now, while the cell still
+                                // reflects this capture, and move the snapshot into the
+                                // closure instead of letting `paste()` re-read a cell that
+                                // may by then belong to a different capture.
                                 let paste_settings =
                                     crate::shorthand::dictation::resolve_settings(&ah);
-                                // run_on_main_thread queues the closure, so keep the
-                                // wire backstop alive until final can be published.
-                                let follow_stream_guard = follow_stream_guard;
+                                let paste_time = Instant::now();
                                 ah.run_on_main_thread(move || {
-                                    let _follow_stream_guard = follow_stream_guard;
                                     if rm_for_paste.was_cancelled_since(cancel_generation) {
                                         debug!("Transcription operation cancelled before paste");
                                         utils::hide_recording_overlay(&ah_clone);
@@ -1070,10 +1199,6 @@ impl ShortcutAction for TranscribeAction {
                                         return;
                                     }
 
-                                    if let Some(hub) = crate::follow_stream::hub(&ah_clone) {
-                                        let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
-                                        hub.finish(speaker, &final_text);
-                                    }
                                     match utils::paste(final_text, ah_clone.clone(), paste_settings)
                                     {
                                         Ok(()) => debug!(
@@ -1107,8 +1232,10 @@ impl ShortcutAction for TranscribeAction {
 
                             error!("Transcription failed: {}", err);
                             let error_message = err.to_string();
-                            if let Some(hub) = crate::follow_stream::hub(&ah) {
-                                hub.error(&error_message);
+                            if let (Some(hub), Some(session)) =
+                                (crate::follow_stream::hub(&ah), follow_stream_session)
+                            {
+                                hub.error(session, &error_message);
                             }
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
@@ -1132,8 +1259,10 @@ impl ShortcutAction for TranscribeAction {
                 }
             } else {
                 debug!("No samples retrieved from recording stop");
-                if let Some(hub) = crate::follow_stream::hub(&ah) {
-                    hub.no_speech();
+                if let (Some(hub), Some(session)) =
+                    (crate::follow_stream::hub(&ah), follow_stream_session)
+                {
+                    hub.no_speech(session);
                 }
                 // Tear down any streaming worker so its channel doesn't leak.
                 cancel_active_streams(&ah);
@@ -1153,11 +1282,24 @@ impl ShortcutAction for TranscribeAction {
 struct CancelAction;
 
 impl ShortcutAction for CancelAction {
-    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+    fn start(
+        &self,
+        app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         utils::cancel_current_operation(app);
+        None
     }
 
-    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+    fn stop(
+        &self,
+        _app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _publication_session: Option<u64>,
+    ) {
         // Nothing to do on stop for cancel
     }
 }
@@ -1166,16 +1308,29 @@ impl ShortcutAction for CancelAction {
 struct TestAction;
 
 impl ShortcutAction for TestAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) {
+    fn start(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        _publication_enabled: Option<bool>,
+    ) -> Option<u64> {
         log::info!(
             "Shortcut ID '{}': Started - {} (App: {})", // Changed "Pressed" to "Started" for consistency
             binding_id,
             shortcut_str,
             app.package_info().name
         );
+        None
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) {
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        _publication_session: Option<u64>,
+    ) {
         log::info!(
             "Shortcut ID '{}': Stopped - {} (App: {})", // Changed "Released" to "Stopped" for consistency
             binding_id,
@@ -1234,7 +1389,6 @@ mod tests {
     use super::{
         combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
         is_blank_transcription, should_use_streaming_overlay, strip_think_block,
-        transcription_completed_message,
     };
     use crate::settings::OverlayStyle;
     use std::future;
@@ -1348,27 +1502,5 @@ mod tests {
         );
         assert_eq!(text, None);
         assert_eq!(prompt, None);
-    }
-
-    #[test]
-    fn completed_message_includes_transcript_when_transcripts_are_saved() {
-        let message = transcription_completed_message(
-            true,
-            Duration::from_millis(250),
-            "a secret transcript",
-        );
-        assert!(message.contains("a secret transcript"));
-    }
-
-    #[test]
-    fn completed_message_withholds_transcript_when_transcripts_are_off() {
-        let message = transcription_completed_message(
-            false,
-            Duration::from_millis(250),
-            "a secret transcript",
-        );
-        assert!(!message.contains("a secret transcript"));
-        // The absence should read as intentional, not as an empty result.
-        assert!(message.contains("save_transcripts"));
     }
 }

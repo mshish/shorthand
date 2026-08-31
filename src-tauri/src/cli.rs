@@ -36,8 +36,59 @@ pub struct CliArgs {
     pub cancel: bool,
 
     /// Toggle an Assisted Notes capture on/off (sent to running instance)
-    #[arg(long)]
+    #[arg(
+        long,
+        conflicts_with_all = ["start_assisted_notes", "stop_assisted_notes"]
+    )]
     pub toggle_assisted_notes: bool,
+
+    /// Start an Assisted Notes capture (sent to running instance). Idempotent:
+    /// a no-op if that capture is already running, refused (not a toggle-off)
+    /// if a different capture is running or the mode is disabled.
+    //
+    // Conflicts with --stop-assisted-notes: without this, clap accepts both
+    // flags at once and callback ordering silently picks start, so a caller
+    // that passes a contradictory pair gets one of its two requests executed
+    // without any indication the other was ignored. The remaining four
+    // entries are every other mutually exclusive remote-control flag: the
+    // single-instance dispatch in `lib.rs` is an `else if` chain that acts on
+    // only the first match, so e.g. `--toggle-transcription
+    // --start-assisted-notes` would otherwise parse and silently drop the
+    // assisted-notes request instead of rejecting the combination at parse
+    // time. Declared here (matching how `--follow-stream` declares its own
+    // full list below) rather than added to those four flags' own attributes,
+    // so the new flags carry this constraint without touching upstream's
+    // existing ones.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "stop_assisted_notes",
+            "toggle_assisted_notes",
+            "toggle_transcription",
+            "toggle_post_process",
+            "cancel",
+            "follow_stream",
+        ]
+    )]
+    pub start_assisted_notes: bool,
+
+    /// Stop an Assisted Notes capture (sent to running instance). Idempotent:
+    /// a no-op if that capture is not the one running.
+    //
+    // See `start_assisted_notes`'s own comment for why this list is longer
+    // than just the other two assisted-notes flags.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "start_assisted_notes",
+            "toggle_assisted_notes",
+            "toggle_transcription",
+            "toggle_post_process",
+            "cancel",
+            "follow_stream",
+        ]
+    )]
+    pub stop_assisted_notes: bool,
 
     /// Enable debug mode with verbose logging
     #[arg(long)]
@@ -84,7 +135,7 @@ pub struct CliArgs {
         value_name = "MODE",
         num_args = 0..=1,
         default_missing_value = "json",
-        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel", "toggle_assisted_notes"]
+        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel", "toggle_assisted_notes", "start_assisted_notes", "stop_assisted_notes"]
     )]
     pub follow_stream: Option<FollowStreamMode>,
 }
@@ -127,7 +178,82 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
 
+        let error = CliArgs::try_parse_from(["handy", "--follow-stream", "--start-assisted-notes"])
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error = CliArgs::try_parse_from(["handy", "--follow-stream", "--stop-assisted-notes"])
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
         let error = CliArgs::try_parse_from(["handy", "--follow-stream", "bogus"]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn explicit_assisted_notes_flags_parse_independently_of_the_toggle() {
+        assert!(!CliArgs::parse_from(["handy"]).start_assisted_notes);
+        assert!(!CliArgs::parse_from(["handy"]).stop_assisted_notes);
+        assert!(CliArgs::parse_from(["handy", "--start-assisted-notes"]).start_assisted_notes);
+        assert!(CliArgs::parse_from(["handy", "--stop-assisted-notes"]).stop_assisted_notes);
+        // Kept alongside the toggle rather than replacing it: fork-only and
+        // harmless for manual use.
+        assert!(CliArgs::parse_from(["handy", "--toggle-assisted-notes"]).toggle_assisted_notes);
+    }
+
+    #[test]
+    fn contradictory_assisted_notes_flags_fail_to_parse() {
+        // Without these conflicts, clap accepts both flags in a pair and
+        // callback ordering silently picks one (start), so a caller that
+        // sends a contradictory combination gets no indication the other
+        // half of it was ignored. Every pairing among the three
+        // assisted-notes flags must be rejected at parse time instead.
+        let error =
+            CliArgs::try_parse_from(["handy", "--start-assisted-notes", "--stop-assisted-notes"])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error =
+            CliArgs::try_parse_from(["handy", "--start-assisted-notes", "--toggle-assisted-notes"])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error =
+            CliArgs::try_parse_from(["handy", "--stop-assisted-notes", "--toggle-assisted-notes"])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn explicit_assisted_notes_flags_conflict_with_every_other_remote_control_flag() {
+        // Before this fix, `--start-assisted-notes`/`--stop-assisted-notes`
+        // only conflicted with each other and `--toggle-assisted-notes`, so a
+        // combination like `--toggle-transcription --start-assisted-notes`
+        // parsed successfully -- and then the single-instance `else if` chain
+        // in `lib.rs` acted on whichever flag it checks first, silently
+        // dropping the other. Every one of these must now be rejected at
+        // parse time instead.
+        for other in [
+            "--toggle-transcription",
+            "--toggle-post-process",
+            "--cancel",
+            "--follow-stream",
+        ] {
+            let error =
+                CliArgs::try_parse_from(["handy", "--start-assisted-notes", other]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::ArgumentConflict,
+                "--start-assisted-notes with {other} should conflict"
+            );
+
+            let error =
+                CliArgs::try_parse_from(["handy", "--stop-assisted-notes", other]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::ArgumentConflict,
+                "--stop-assisted-notes with {other} should conflict"
+            );
+        }
     }
 }

@@ -1429,15 +1429,17 @@ pub async fn change_dictation_settings(
     dictation: crate::shorthand::dictation::DictationSettings,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    // Kept so a follow-stream listener failure below can put the shared
-    // listener back exactly where it was, rather than merely stopping it —
-    // Meeting or Assisted Notes may still need it running.
-    let previous_settings = settings.clone();
     let was_registered = settings.dictation.enabled;
     let was_post_process_registered = was_registered && settings.dictation.post_process_enabled;
+    // Read before `dictation` overwrites it below, so the write at the
+    // bottom of this function can tell "just turned off" apart from
+    // "already off" and suppress a live Dictation session only on the
+    // former (see the call site there).
+    let was_publishing = settings.dictation.follow_stream_enabled;
 
     settings.dictation = dictation;
     let now_registered = settings.dictation.enabled;
+    let now_publishing = settings.dictation.follow_stream_enabled;
     let now_post_process_registered = now_registered && settings.dictation.post_process_enabled;
 
     // Registering the two dictation shortcuts only at the next app start
@@ -1492,9 +1494,6 @@ pub async fn change_dictation_settings(
     // Rolls back whichever half of this call already changed live
     // registration state, so a partial failure can't leave a shortcut
     // registered that the (unwritten) settings say is off, or vice versa.
-    // Shared between the registration failure below and the follow-stream
-    // listener failure further down, which can only be reached once
-    // registration has already succeeded.
     let roll_back_registrations = |dictate_changed: bool, dictate_pp_changed: bool| {
         if dictate_changed {
             if let Some(binding) = settings.bindings.get("dictate").cloned() {
@@ -1528,38 +1527,35 @@ pub async fn change_dictation_settings(
         return Err(error);
     }
 
-    // Reconcile the shared follow-stream listener against the candidate
-    // settings before persistence, mirroring the registration transaction
-    // above: a failure here must not reach disk as `dictation.enabled = true`
-    // either, and the shortcuts already registered above must come back down
-    // with it. See `follow_stream::lifecycle`.
-    let server = app.state::<crate::follow_stream::FollowStreamServer>();
-    let listener_result = match crate::follow_stream::hub(&app) {
-        Some(hub) => crate::follow_stream::reconcile(&app, &server, hub, &settings).await,
-        None => Err("Follow-stream hub is unavailable".to_string()),
-    };
-    if let Err(error) = listener_result {
-        roll_back_registrations(dictate_changed, dictate_pp_changed);
-        // Restore the listener to match what is still on disk. Best-effort:
-        // if this also fails, the error below is what the caller sees, and
-        // the next `reconcile` call (or app restart) corrects the drift.
-        if let Some(hub) = crate::follow_stream::hub(&app) {
-            let _ = crate::follow_stream::reconcile(&app, &server, hub, &previous_settings).await;
-        }
-        crate::secure_input::reconcile_fallback(&app);
-        return Err(error);
-    }
-
     settings::write_settings(&app, settings);
     crate::secure_input::reconcile_fallback(&app);
+
+    // Dictation ships this toggle off by default (FOLLOW_STREAM.md), so this
+    // fires rarely, but a user who did turn it on and then off again mid
+    // capture must not keep leaking dictated text to a follower — the same
+    // regression `change_follow_stream_enabled_setting` guards against for
+    // Meeting.
+    //
+    // Routed through the coordinator, not called on the hub directly, for
+    // the same reason as `change_follow_stream_enabled_setting`'s call: this
+    // command runs on its own thread and would otherwise race a Dictation
+    // capture's own `hub.begin()`, which runs on the coordinator thread.
+    // `suppress_publication` queues this suppression onto that same thread
+    // so the two can never interleave — see `Command::SuppressPublication`
+    // in `transcription_coordinator.rs`.
+    if was_publishing && !now_publishing {
+        crate::transcription_coordinator::suppress_publication(
+            &app,
+            crate::follow_stream::FollowMode::Dictation,
+        );
+    }
     Ok(())
 }
 
 /// Mirrors `change_dictation_settings` field for field, for the second
 /// note-producing mode: registration before persistence, roll back on
-/// partial failure, and a follow-stream listener reconciliation against the
-/// candidate settings before that persistence — see the comments on
-/// `change_dictation_settings` for why each step is ordered the way it is.
+/// partial failure — see the comments on `change_dictation_settings` for why
+/// each step is ordered the way it is.
 #[tauri::command]
 #[specta::specta]
 pub async fn change_assisted_notes_settings(
@@ -1567,13 +1563,16 @@ pub async fn change_assisted_notes_settings(
     assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    let previous_settings = settings.clone();
     let was_registered = settings.assisted_notes.enabled;
     let was_post_process_registered =
         was_registered && settings.assisted_notes.post_process_enabled;
+    // Read before `assisted_notes` overwrites it below -- see the matching
+    // comment in `change_dictation_settings`.
+    let was_publishing = settings.assisted_notes.follow_stream_enabled;
 
     settings.assisted_notes = assisted_notes;
     let now_registered = settings.assisted_notes.enabled;
+    let now_publishing = settings.assisted_notes.follow_stream_enabled;
     let now_post_process_registered =
         now_registered && settings.assisted_notes.post_process_enabled;
 
@@ -1651,22 +1650,28 @@ pub async fn change_assisted_notes_settings(
         return Err(error);
     }
 
-    let server = app.state::<crate::follow_stream::FollowStreamServer>();
-    let listener_result = match crate::follow_stream::hub(&app) {
-        Some(hub) => crate::follow_stream::reconcile(&app, &server, hub, &settings).await,
-        None => Err("Follow-stream hub is unavailable".to_string()),
-    };
-    if let Err(error) = listener_result {
-        roll_back_registrations(assisted_notes_changed, assisted_notes_pp_changed);
-        if let Some(hub) = crate::follow_stream::hub(&app) {
-            let _ = crate::follow_stream::reconcile(&app, &server, hub, &previous_settings).await;
-        }
-        crate::secure_input::reconcile_fallback(&app);
-        return Err(error);
-    }
-
     settings::write_settings(&app, settings);
     crate::secure_input::reconcile_fallback(&app);
+
+    // Assisted Notes ships this toggle on by default, so this is the more
+    // likely of the two per-mode paths to fire: a user disabling it while it
+    // is the mode currently capturing must not keep streaming to a follower
+    // (the regression `change_follow_stream_enabled_setting` guards against
+    // for Meeting).
+    //
+    // Routed through the coordinator, not called on the hub directly, for
+    // the same reason as `change_dictation_settings`'s call just above: this
+    // command runs on its own thread and would otherwise race an Assisted
+    // Notes capture's own `hub.begin()`, which runs on the coordinator
+    // thread. `suppress_publication` queues this suppression onto that same
+    // thread so the two can never interleave — see
+    // `Command::SuppressPublication` in `transcription_coordinator.rs`.
+    if was_publishing && !now_publishing {
+        crate::transcription_coordinator::suppress_publication(
+            &app,
+            crate::follow_stream::FollowMode::AssistedNotes,
+        );
+    }
     Ok(())
 }
 

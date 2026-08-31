@@ -281,6 +281,8 @@ Handy supports command-line parameters on all platforms for integration with scr
 | `--toggle-post-process`   | Toggle recording with post-processing on/off                                                                                                       |
 | `--cancel`                | Cancel the current operation on a running instance                                                                                                 |
 | `--toggle-assisted-notes` | Toggle an Assisted Notes capture on/off on a running instance (refused, with a warning and the settings window raised, while the mode is disabled) |
+| `--start-assisted-notes`  | Start an Assisted Notes capture on a running instance. Idempotent: a no-op if that capture is already running; refused (`--follow-stream` reports why) if a different capture is running or the mode is disabled |
+| `--stop-assisted-notes`   | Stop an Assisted Notes capture on a running instance. Idempotent: a no-op if that capture is not the one currently running |
 | `--follow-stream [MODE]`  | Follow live transcript events: `json`, `delta`, or `text`                                                                                          |
 | `--start-hidden`          | Launch without showing the main window (tray icon visible)                                                                                         |
 | `--no-tray`               | Launch without system tray (closing window quits the app)                                                                                          |
