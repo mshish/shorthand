@@ -62,10 +62,25 @@ pub async fn change_follow_stream_enabled_setting(
     // turning this off. `suppress_if_active` is a no-op unless Meeting is
     // the mode actually capturing right now, so this is safe to call
     // unconditionally whenever the toggle lands off.
+    //
+    // Routed through the coordinator rather than called on the hub directly:
+    // this command runs on its own thread and can otherwise race
+    // `actions.rs`'s `hub.begin()` for a Meeting capture starting right now,
+    // which runs on the coordinator thread. `hub.begin()` reads
+    // `follow_stream_enabled` fresh, but nothing orders that read against
+    // this write -- a settings command dispatched with `follow_stream_enabled`
+    // still true could find no active session yet, do nothing, and then lose
+    // the race to a `hub.begin()` that publishes a session for a mode this
+    // toggle just turned off. `suppress_publication` queues this suppression
+    // onto the same coordinator thread `hub.begin()` runs on, so the two are
+    // strictly ordered instead. See `Command::SuppressPublication` in
+    // `transcription_coordinator.rs` for the full race and why the ordering
+    // closes it either way it resolves.
     if !enabled {
-        if let Some(hub) = crate::follow_stream::hub(&app) {
-            hub.suppress_if_active(crate::follow_stream::FollowMode::Meeting);
-        }
+        crate::transcription_coordinator::suppress_publication(
+            &app,
+            crate::follow_stream::FollowMode::Meeting,
+        );
     }
     Ok(())
 }

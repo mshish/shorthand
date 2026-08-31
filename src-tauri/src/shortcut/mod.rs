@@ -1535,10 +1535,19 @@ pub async fn change_dictation_settings(
     // capture must not keep leaking dictated text to a follower — the same
     // regression `change_follow_stream_enabled_setting` guards against for
     // Meeting.
+    //
+    // Routed through the coordinator, not called on the hub directly, for
+    // the same reason as `change_follow_stream_enabled_setting`'s call: this
+    // command runs on its own thread and would otherwise race a Dictation
+    // capture's own `hub.begin()`, which runs on the coordinator thread.
+    // `suppress_publication` queues this suppression onto that same thread
+    // so the two can never interleave — see `Command::SuppressPublication`
+    // in `transcription_coordinator.rs`.
     if was_publishing && !now_publishing {
-        if let Some(hub) = crate::follow_stream::hub(&app) {
-            hub.suppress_if_active(crate::follow_stream::FollowMode::Dictation);
-        }
+        crate::transcription_coordinator::suppress_publication(
+            &app,
+            crate::follow_stream::FollowMode::Dictation,
+        );
     }
     Ok(())
 }
@@ -1649,10 +1658,19 @@ pub async fn change_assisted_notes_settings(
     // is the mode currently capturing must not keep streaming to a follower
     // (the regression `change_follow_stream_enabled_setting` guards against
     // for Meeting).
+    //
+    // Routed through the coordinator, not called on the hub directly, for
+    // the same reason as `change_dictation_settings`'s call just above: this
+    // command runs on its own thread and would otherwise race an Assisted
+    // Notes capture's own `hub.begin()`, which runs on the coordinator
+    // thread. `suppress_publication` queues this suppression onto that same
+    // thread so the two can never interleave — see
+    // `Command::SuppressPublication` in `transcription_coordinator.rs`.
     if was_publishing && !now_publishing {
-        if let Some(hub) = crate::follow_stream::hub(&app) {
-            hub.suppress_if_active(crate::follow_stream::FollowMode::AssistedNotes);
-        }
+        crate::transcription_coordinator::suppress_publication(
+            &app,
+            crate::follow_stream::FollowMode::AssistedNotes,
+        );
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 use crate::actions::ACTION_MAP;
+use crate::follow_stream::FollowMode;
 use crate::managers::audio::AudioRecordingManager;
 use crate::shorthand::capture_command::{self, CaptureState};
 use crate::shorthand::mode::{self, Mode};
@@ -163,6 +164,36 @@ enum Command {
         // ran. It is read fresh from Settings inside the coordinator loop
         // instead, at the same moment `Stage` itself is read, right before
         // calling `decide_explicit_capture`.
+    },
+    /// `mode`'s own `follow_stream_enabled` publication toggle was just
+    /// written `false` by one of `change_follow_stream_enabled_setting`,
+    /// `change_dictation_settings`, or `change_assisted_notes_settings` —
+    /// each an `async` Tauri command running on its own thread, racing the
+    /// coordinator thread's own `hub.begin()` call (inside `Effect::Start`,
+    /// reached via `run_effect` → `start` → `action.start`) for the capture
+    /// that toggle governs. This queue is the ordering mechanism the fix
+    /// relies on, not merely a convenient way to reach the hub from a
+    /// command handler: dispatching the suppression here, instead of
+    /// calling `hub.suppress_if_active` directly from the command, makes it
+    /// dequeue on the same single thread that also runs every `hub.begin()`,
+    /// so the two can never interleave. Either resulting order is then
+    /// correct on its own — this command dequeued before the next
+    /// `Effect::Start` means that start's own settings read already sees the
+    /// toggle off and skips `hub.begin()` entirely; dequeued after means a
+    /// session already exists for this command to end. Without going
+    /// through this queue, a settings command could find no active session
+    /// yet (nothing to suppress) only for a capture already in flight to
+    /// call `hub.begin()` immediately after, publishing a session for a mode
+    /// whose toggle is now off with nothing left to close it — exactly the
+    /// leak `suppress_if_active` exists to prevent.
+    ///
+    /// The settings write itself still happens synchronously on the calling
+    /// command's own thread, before this command is sent — it must land
+    /// before the enqueue, or a `hub.begin()` dequeued ahead of this command
+    /// could still observe the old value. Each of the three call sites
+    /// already writes settings before sending this.
+    SuppressPublication {
+        mode: FollowMode,
     },
 }
 
@@ -354,6 +385,47 @@ impl CoordinatorState {
         }
     }
 
+    /// Clears whichever of `pending_press`/`pending_release` would otherwise
+    /// contradict what `decide_explicit_capture` just reported for `mode`.
+    /// Only called there for `Forward`/`NoOp` outcomes -- a `Refuse` changes
+    /// nothing and promises the caller nothing about the capture, so there
+    /// is nothing for a later deferred input to contradict (see
+    /// `decide_explicit_capture`'s own comment on that exemption).
+    ///
+    /// Compares by `Mode`, not `binding_id`: `assisted_notes` and
+    /// `assisted_notes_with_post_process` are different binding ids for the
+    /// same `Mode::AssistedNotes` (see `mode::mode_for_binding`), and a
+    /// deferred input remembered under either one is just as able to
+    /// contradict a command that names the other.
+    fn clear_contradicting_deferred_input(&mut self, op: capture_command::ExplicitOp, mode: Mode) {
+        // Only Stop clears `pending_press`: an explicit Stop that reports
+        // "stopped" (or "already stopped") must not be followed by a start
+        // of the very mode it just stopped once the pipeline drains and
+        // this remembered press is taken by `on_processing_finished`. An
+        // explicit Start leaves `pending_press` alone entirely -- unlike
+        // `pending_release` below, it plays no part in what a Start reports.
+        if op == capture_command::ExplicitOp::Stop
+            && self
+                .pending_press
+                .as_ref()
+                .is_some_and(|pending| mode::mode_for_binding(&pending.binding_id) == mode)
+        {
+            self.pending_press = None;
+        }
+        // Both ops clear `pending_release`: after an explicit Stop it is
+        // now redundant (the capture is being stopped right here) or stale
+        // (nothing of this mode was running to defer a release for); after
+        // an explicit Start it would otherwise fire later and stop the very
+        // capture the caller was just told is running.
+        if self
+            .pending_release
+            .as_ref()
+            .is_some_and(|pending| mode::mode_for_binding(&pending.binding_id) == mode)
+        {
+            self.pending_release = None;
+        }
+    }
+
     fn on_processing_finished(&mut self) -> Option<Effect> {
         self.stage = Stage::Idle;
         let pending = self.pending_press.take()?;
@@ -524,11 +596,22 @@ fn decide_explicit_capture(
     op: capture_command::ExplicitOp,
     binding_id: &str,
     mode_enabled: bool,
+    publication_enabled: bool,
     processing_mode: Mode,
 ) -> ExplicitOutcome {
     let mode = mode::mode_for_binding(binding_id);
     let capture = capture_state_for_decision(&state.stage, processing_mode);
-    match capture_command::decide(op, mode, mode_enabled, capture) {
+    let decision = capture_command::decide(op, mode, mode_enabled, publication_enabled, capture);
+    // A Refuse leaves the capture exactly as it was and promises the caller
+    // nothing about it, so there is nothing here yet for a deferred input to
+    // contradict; only Forward and NoOp report an outcome ("it started",
+    // "it's already running/stopped") that a subsequently-firing deferred
+    // press or release could otherwise falsify. See
+    // `CoordinatorState::clear_contradicting_deferred_input`.
+    if !matches!(decision, capture_command::Decision::Refuse(_)) {
+        state.clear_contradicting_deferred_input(op, mode);
+    }
+    match decision {
         capture_command::Decision::Forward => match op {
             capture_command::ExplicitOp::Start => ExplicitOutcome::Effect(
                 state.begin_recording(binding_id.to_string(), "CLI".to_string()),
@@ -626,17 +709,56 @@ impl TranscriptionCoordinator {
                             // the channel — see `Command::ExplicitCapture`'s
                             // doc comment for the stale-snapshot window that
                             // would otherwise open between enqueue and
-                            // dequeue.
-                            let mode_enabled =
-                                crate::settings::get_settings(&app).assisted_notes.enabled;
+                            // dequeue. Both `mode_enabled` and
+                            // `publication_enabled` come from the same
+                            // `get_settings` read so they can never
+                            // disagree about which settings snapshot they
+                            // describe.
+                            let settings = crate::settings::get_settings(&app);
+                            let mode_enabled = settings.assisted_notes.enabled;
+                            // The mode this command would start, derived the
+                            // same way `Stage` itself will label it — not
+                            // `mode::active`, which names the *previously*
+                            // started capture and would be stale for a start
+                            // that has not happened yet. `apply_mode` must be
+                            // gated on the exact same value `actions.rs` gates
+                            // `hub.begin` on (its `follow_stream_enabled`,
+                            // via `resolve_settings`), or the two could decide
+                            // differently and this command could be forwarded
+                            // only for `actions.rs` to silently start a
+                            // capture with no `begin` ever reaching a
+                            // follower.
+                            let requested_mode = mode::mode_for_binding(&binding_id);
+                            let publication_enabled = crate::shorthand::dictation::apply_mode(
+                                settings.clone(),
+                                requested_mode,
+                            )
+                            .follow_stream_enabled;
                             let outcome = decide_explicit_capture(
                                 &mut state,
                                 op,
                                 &binding_id,
                                 mode_enabled,
+                                publication_enabled,
                                 mode::active(&app),
                             );
                             run_explicit_outcome(&app, &mut state, op, &binding_id, outcome);
+                        }
+                        Command::SuppressPublication { mode } => {
+                            // Ordering-only: unlike every other arm above,
+                            // this one touches no `CoordinatorState` at all
+                            // -- it exists solely so `suppress_if_active` is
+                            // dequeued through the same single-threaded
+                            // queue as `hub.begin()` (see
+                            // `Command::SuppressPublication`'s own doc
+                            // comment for why that ordering is the whole
+                            // fix). Do not "helpfully" move this into
+                            // `CoordinatorState` or fold it into `Stage` --
+                            // the guarantee comes from running on this
+                            // thread, not from touching any state here.
+                            if let Some(hub) = crate::follow_stream::hub(&app) {
+                                hub.suppress_if_active(mode);
+                            }
                         }
                     }
                 }
@@ -709,6 +831,16 @@ impl TranscriptionCoordinator {
         }
     }
 
+    /// Suppresses `mode`'s active publication, if any, from the coordinator
+    /// thread rather than the caller's own — see `Command::SuppressPublication`
+    /// for why that ordering, not this call itself, is what closes the race
+    /// with `hub.begin()`.
+    pub fn notify_publication_suppressed(&self, mode: FollowMode) {
+        if self.tx.send(Command::SuppressPublication { mode }).is_err() {
+            warn!("Transcription coordinator channel closed");
+        }
+    }
+
     /// Send an explicit `--start-assisted-notes` / `--stop-assisted-notes`
     /// command. `binding_id` is the canonical binding to start (e.g.
     /// `"assisted_notes"`); a stop instead targets whatever binding is
@@ -727,6 +859,43 @@ impl TranscriptionCoordinator {
             .is_err()
         {
             warn!("Transcription coordinator channel closed");
+        }
+    }
+}
+
+/// Entry point for the three settings commands (`change_follow_stream_enabled_setting`,
+/// `change_dictation_settings`, `change_assisted_notes_settings`) that must
+/// suppress `mode`'s active publication after writing its toggle off. Routes
+/// through `TranscriptionCoordinator::notify_publication_suppressed` so the
+/// suppression is ordered against `hub.begin()` on the coordinator thread —
+/// see `Command::SuppressPublication`'s doc comment for why that ordering is
+/// what closes the race.
+///
+/// Falls back to calling `hub.suppress_if_active` directly if the
+/// coordinator isn't registered as app state. Every other `try_state::<TranscriptionCoordinator>()`
+/// caller in this codebase (`handle_explicit_assisted_notes_command` in
+/// `lib.rs`, `shortcut::handler`, `signal_handle`) just logs and drops the
+/// command on `None`, which is fine there: a dropped explicit start/stop
+/// simply fails outwardly, visibly, once. Dropping a suppression instead
+/// leaves a follower silently receiving a mode's transcript after the user
+/// told the app to stop sharing it -- a delayed, unordered `suppress_if_active`
+/// call (racing `hub.begin()` again, exactly as before this fix) is still
+/// strictly better than that permanent leak. In practice this branch should
+/// be unreachable: `TranscriptionCoordinator::new` is `app.manage()`d during
+/// setup, before any Tauri command reachable from the frontend can run (see
+/// `lib.rs`), so every caller of this function already has the same
+/// guarantee `handle_explicit_assisted_notes_command` relies on.
+pub fn suppress_publication(app: &AppHandle, mode: FollowMode) {
+    match app.try_state::<TranscriptionCoordinator>() {
+        Some(coordinator) => coordinator.notify_publication_suppressed(mode),
+        None => {
+            warn!(
+                "TranscriptionCoordinator not initialized; suppressing {mode:?} publication \
+                 directly, without the coordinator queue's ordering guarantee against hub.begin()"
+            );
+            if let Some(hub) = crate::follow_stream::hub(app) {
+                hub.suppress_if_active(mode);
+            }
         }
     }
 }
@@ -786,10 +955,16 @@ fn run_explicit_outcome(
                 hub.refused(mode.into(), reason.into());
             }
             // Same courtesy `--toggle-assisted-notes` already gives: raise the
-            // app so the user can see the setting that refused it. A `Busy`
-            // refusal gets none — the fix is not in Settings, and raising the
-            // window would interrupt whatever capture is already running.
-            if matches!(reason, capture_command::RefusalReason::ModeDisabled) {
+            // app so the user can see the setting that refused it.
+            // `PublicationDisabled` joins `ModeDisabled` here for the same
+            // reason: both are fixed by flipping a switch in Settings. `Busy`
+            // gets none — the fix is not in Settings, and raising the window
+            // would interrupt whatever capture is already running.
+            if matches!(
+                reason,
+                capture_command::RefusalReason::ModeDisabled
+                    | capture_command::RefusalReason::PublicationDisabled
+            ) {
                 crate::show_main_window(app);
             }
         }
@@ -1460,6 +1635,7 @@ mod tests {
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert!(
@@ -1476,6 +1652,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::AssistedNotes,
         );
@@ -1500,6 +1677,7 @@ mod tests {
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert_eq!(first, ExplicitOutcome::NoOp, "nothing is capturing to stop");
@@ -1509,6 +1687,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::AssistedNotes,
         );
@@ -1528,6 +1707,7 @@ mod tests {
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert!(matches!(
@@ -1539,6 +1719,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::AssistedNotes,
         );
@@ -1558,6 +1739,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::AssistedNotes,
         );
@@ -1581,6 +1763,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::AssistedNotes,
         );
@@ -1608,6 +1791,7 @@ mod tests {
             &mut state,
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
+            true,
             true,
             Mode::Meeting,
         );
@@ -1641,6 +1825,7 @@ mod tests {
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert_eq!(
@@ -1670,6 +1855,7 @@ mod tests {
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert_eq!(outcome, ExplicitOutcome::NoOp);
@@ -1690,6 +1876,7 @@ mod tests {
             capture_command::ExplicitOp::Stop,
             ASSISTED_NOTES,
             true,
+            true,
             Mode::AssistedNotes,
         );
         assert_eq!(outcome, ExplicitOutcome::NoOp);
@@ -1709,6 +1896,7 @@ mod tests {
             capture_command::ExplicitOp::Start,
             ASSISTED_NOTES,
             false,
+            true,
             Mode::AssistedNotes,
         );
         assert_eq!(
@@ -1716,5 +1904,291 @@ mod tests {
             ExplicitOutcome::Refuse(capture_command::RefusalReason::ModeDisabled)
         );
         assert_eq!(state.stage, Stage::Idle);
+    }
+
+    /// The bug this change fixes: the mode can be enabled
+    /// (`assisted_notes.enabled`) while its own `--follow-stream`
+    /// publication toggle (`assisted_notes.follow_stream_enabled`) is off --
+    /// a different setting `actions.rs` gates `hub.begin` on. Forwarding
+    /// here would start a real capture that publishes no `begin`, leaving a
+    /// follower with no way to observe it, so this must refuse instead, and
+    /// must leave `Stage` exactly as it was.
+    #[test]
+    fn explicit_start_is_refused_when_publication_is_disabled_even_though_the_mode_is_enabled() {
+        let mut state = CoordinatorState::new();
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            false,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(
+            outcome,
+            ExplicitOutcome::Refuse(capture_command::RefusalReason::PublicationDisabled)
+        );
+        assert_eq!(state.stage, Stage::Idle);
+    }
+
+    /// Unlike Start, a Stop must not be gated on `publication_enabled` --
+    /// same rule as `mode_enabled` above it (see `capture_command::decide`'s
+    /// own comment on its `Stop` arm). A running capture must always be
+    /// stoppable even if its publication toggle no longer describes it.
+    #[test]
+    fn explicit_stop_is_not_refused_when_publication_is_disabled() {
+        let mut state = CoordinatorState::new();
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        assert_eq!(state.stage, recording_stage(ASSISTED_NOTES));
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            ASSISTED_NOTES,
+            true,
+            false,
+            Mode::AssistedNotes,
+        );
+        assert!(
+            matches!(outcome, ExplicitOutcome::Effect(Effect::Stop { .. })),
+            "a stop must still forward while publication is disabled"
+        );
+        assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
+    }
+
+    // -------------------------------------------------------------------
+    // An explicit command must leave behind no deferred input that
+    // contradicts the outcome it just reported -- otherwise a
+    // `pending_press`/`pending_release` left over from before the command
+    // arrived can fire afterwards and flip the capture the other way,
+    // silently contradicting what the caller was just told.
+    // -------------------------------------------------------------------
+
+    /// A press for the same mode arrived while the pipeline was still
+    /// draining (`pending_press`, set the way `on_input`'s busy branch would
+    /// set it). An explicit stop arriving in that same window reports
+    /// "stopped"/"already stopped" -- so the remembered press must not
+    /// survive to start a capture once the pipeline finishes draining.
+    #[test]
+    fn explicit_stop_during_processing_clears_a_same_mode_pending_press() {
+        let mut state = CoordinatorState::new();
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.pending_press = Some(PendingPress {
+            binding_id: ASSISTED_NOTES.to_string(),
+            hotkey_string: "keyboard".to_string(),
+        });
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+        assert!(
+            state.pending_press.is_none(),
+            "an explicit stop must clear a same-mode remembered press, or \
+             the pipeline draining afterwards starts a capture the caller \
+             was just told is stopped"
+        );
+
+        let effect = state.on_processing_finished();
+        assert!(
+            effect.is_none(),
+            "the cleared press must not start a capture once the pipeline drains"
+        );
+    }
+
+    /// Same setup, but the remembered press belongs to a *different* mode
+    /// than the one the stop targets -- it must survive untouched.
+    #[test]
+    fn explicit_stop_leaves_a_different_mode_pending_press_untouched() {
+        let mut state = CoordinatorState::new();
+        state.begin_recording("transcribe".to_string(), "keyboard".to_string());
+        state.begin_processing("transcribe".to_string(), "keyboard".to_string());
+        state.pending_press = Some(PendingPress {
+            binding_id: "transcribe".to_string(),
+            hotkey_string: "keyboard".to_string(),
+        });
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::Meeting,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+        assert!(
+            state.pending_press.is_some(),
+            "a stop for one mode must not clear a different mode's remembered press"
+        );
+
+        let effect = state.on_processing_finished();
+        assert!(
+            matches!(effect, Some(Effect::Start { .. })),
+            "the untouched press must still start its own mode's capture once its pipeline drains"
+        );
+    }
+
+    /// A release for the same mode was deferred (`pending_release`, set the
+    /// way a push-to-talk key-up would set it) while that mode was already
+    /// recording. An explicit start arriving in that window reports
+    /// "already running" -- so the deferred release must not survive to
+    /// stop the capture once `RELEASE_GRACE` elapses.
+    #[test]
+    fn explicit_start_while_already_recording_clears_a_same_mode_pending_release() {
+        let mut state = CoordinatorState::new();
+        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string());
+        state.pending_release = Some(PendingRelease {
+            binding_id: ASSISTED_NOTES.to_string(),
+            hotkey_string: "keyboard".to_string(),
+            deadline: Instant::now() + RELEASE_GRACE,
+        });
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+        assert!(
+            state.pending_release.is_none(),
+            "an explicit start must clear a same-mode deferred release, or \
+             the grace window expiring afterwards stops a capture the \
+             caller was just told is running"
+        );
+
+        let effect = state.on_grace_expired();
+        assert!(
+            effect.is_none(),
+            "the cleared release must not fire once its grace window elapses"
+        );
+    }
+
+    /// Same setup, but the deferred release belongs to a *different* mode
+    /// than the one the start targets -- it must survive untouched, and
+    /// `grace_deadline()` must keep reporting it so the coordinator loop
+    /// still wakes for it.
+    #[test]
+    fn explicit_start_leaves_a_different_mode_pending_release_untouched() {
+        let mut state = CoordinatorState::new();
+        let deadline = Instant::now() + RELEASE_GRACE;
+        // Synthesised directly rather than driven through `on_input`: this
+        // isolates `clear_contradicting_deferred_input`'s mode filter from
+        // the (unrelated) question of how a release ordinarily comes to be
+        // deferred alongside a *different* binding's `Stage`.
+        state.pending_release = Some(PendingRelease {
+            binding_id: "transcribe".to_string(),
+            hotkey_string: "keyboard".to_string(),
+            deadline,
+        });
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert!(matches!(
+            outcome,
+            ExplicitOutcome::Effect(Effect::Start { .. })
+        ));
+        assert!(
+            state.pending_release.is_some(),
+            "a start for one mode must not clear a different mode's deferred release"
+        );
+        assert_eq!(
+            state.grace_deadline(),
+            Some(deadline),
+            "the untouched release must still drive the coordinator loop's recv_timeout"
+        );
+    }
+
+    /// `assisted_notes` and `assisted_notes_with_post_process` are different
+    /// binding ids for the same `Mode::AssistedNotes` -- a stop targeting
+    /// the former must still clear a press remembered under the latter.
+    #[test]
+    fn explicit_stop_clears_a_pending_press_remembered_under_the_post_process_binding_id() {
+        let mut state = CoordinatorState::new();
+        state.begin_recording(
+            ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
+            "keyboard".to_string(),
+        );
+        state.begin_processing(
+            ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
+            "keyboard".to_string(),
+        );
+        state.pending_press = Some(PendingPress {
+            binding_id: ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
+            hotkey_string: "keyboard".to_string(),
+        });
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+        assert!(
+            state.pending_press.is_none(),
+            "assisted_notes and assisted_notes_with_post_process share \
+             Mode::AssistedNotes -- a stop targeting one must clear a press \
+             remembered under the other's binding id"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // `Command::SuppressPublication` is ordering-only: the coordinator
+    // loop's arm for it (in `TranscriptionCoordinator::new`) takes no
+    // `&mut CoordinatorState` at all, only `app` and `mode`, so it is
+    // structurally incapable of touching `Stage`, `pending_press`,
+    // `pending_release`, or `last_press` -- unlike `on_input`/`on_cancel`/
+    // `on_processing_finished`/`decide_explicit_capture` above, there is no
+    // `CoordinatorState`-mutating method behind this variant to drive
+    // through a fake sequence and assert on. That "untouched" guarantee is
+    // therefore enforced by the handler's function signature and verifiable
+    // by code review, not by a runtime assertion this test could add to.
+    // Exercising the real coordinator-loop arm end-to-end would additionally
+    // require a real `AppHandle` to construct `TranscriptionCoordinator` and
+    // to call `crate::follow_stream::hub` -- this crate has no harness for
+    // that anywhere (no test in this file or elsewhere spins up a Tauri
+    // `AppHandle`), so building one just for this would be new
+    // infrastructure, not a meaningful behavioural test.
+    //
+    // What the test below pins instead is the one thing that *is* reachable
+    // without that harness: `notify_publication_suppressed` -- the public
+    // method the three settings commands actually call -- enqueues exactly
+    // the `SuppressPublication` command carrying the `FollowMode` it was
+    // given, through the real channel, rather than restating that fact
+    // against a bare enum literal.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn notify_publication_suppressed_enqueues_a_suppress_publication_command() {
+        let (tx, rx) = mpsc::channel();
+        let coordinator = TranscriptionCoordinator { tx };
+
+        coordinator.notify_publication_suppressed(FollowMode::Dictation);
+
+        match rx.recv().expect("notify_publication_suppressed must send") {
+            Command::SuppressPublication { mode } => {
+                assert_eq!(mode, FollowMode::Dictation);
+            }
+            _ => panic!("expected Command::SuppressPublication"),
+        }
     }
 }

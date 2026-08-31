@@ -51,6 +51,12 @@ pub enum RefusalReason {
     Busy,
     /// The requested mode is switched off in Settings.
     ModeDisabled,
+    /// The requested mode is enabled, but its `--follow-stream` publication
+    /// toggle is off, so a real capture would begin with no way for a
+    /// follower to observe it. Additive: a follower built against an older
+    /// binary will see this as an unrecognized `reason` value and must
+    /// tolerate it, the same as any other open-ended string on this wire.
+    PublicationDisabled,
 }
 
 /// Which capture mode produced a session, as it appears on the wire.
@@ -343,6 +349,14 @@ mod tests {
                 None,
                 "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"mode-disabled\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
+            (
+                FollowEvent::Refused {
+                    mode: FollowMode::AssistedNotes,
+                    reason: RefusalReason::PublicationDisabled,
+                },
+                None,
+                "{\"t\":\"refused\",\"mode\":\"assisted-notes\",\"reason\":\"publication-disabled\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
         ];
 
         for (event, session_elapsed_ms, expected) in cases {
@@ -410,6 +424,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RefusalReason::ModeDisabled).unwrap(),
             "\"mode-disabled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RefusalReason::PublicationDisabled).unwrap(),
+            "\"publication-disabled\""
         );
     }
 

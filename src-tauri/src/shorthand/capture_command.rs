@@ -54,6 +54,13 @@ pub enum RefusalReason {
     Busy,
     /// The requested mode is switched off in Settings.
     ModeDisabled,
+    /// The requested mode is enabled, but its `--follow-stream` publication
+    /// toggle is off. Forwarding anyway would start a real capture that
+    /// publishes no `begin`, so a follower could never observe it starting,
+    /// distinguish it from a lost command, or learn what to fix -- refusing
+    /// keeps the command's outcome observable, the same guarantee `Busy` and
+    /// `ModeDisabled` already give.
+    PublicationDisabled,
 }
 
 impl From<RefusalReason> for crate::follow_stream::RefusalReason {
@@ -61,6 +68,7 @@ impl From<RefusalReason> for crate::follow_stream::RefusalReason {
         match reason {
             RefusalReason::Busy => Self::Busy,
             RefusalReason::ModeDisabled => Self::ModeDisabled,
+            RefusalReason::PublicationDisabled => Self::PublicationDisabled,
         }
     }
 }
@@ -81,14 +89,29 @@ pub enum Decision {
 }
 
 /// Decides what an explicit `op` for `mode` should do, given whether `mode`
-/// is enabled in Settings and what is presently capturing. Pure and
-/// exhaustively unit-tested below; see the module doc for why this must be
-/// the only place that makes this decision.
-pub fn decide(op: ExplicitOp, mode: Mode, mode_enabled: bool, capture: CaptureState) -> Decision {
+/// is enabled in Settings, whether `mode`'s `--follow-stream` publication is
+/// on, and what is presently capturing. Pure and exhaustively unit-tested
+/// below; see the module doc for why this must be the only place that makes
+/// this decision.
+pub fn decide(
+    op: ExplicitOp,
+    mode: Mode,
+    mode_enabled: bool,
+    publication_enabled: bool,
+    capture: CaptureState,
+) -> Decision {
     match op {
         ExplicitOp::Start => {
             if !mode_enabled {
                 return Decision::Refuse(RefusalReason::ModeDisabled);
+            }
+            // Checked before `publication_enabled` deliberately: `ModeDisabled`
+            // is the more fundamental problem, so when both switches are off it
+            // must be the one reported -- otherwise a user with the whole mode
+            // switched off would be told to fix publication, a setting that is
+            // moot until the mode itself is back on.
+            if !publication_enabled {
+                return Decision::Refuse(RefusalReason::PublicationDisabled);
             }
             match capture {
                 CaptureState::Idle => Decision::Forward,
@@ -108,10 +131,11 @@ pub fn decide(op: ExplicitOp, mode: Mode, mode_enabled: bool, capture: CaptureSt
                 CaptureState::Processing(_) => Decision::Refuse(RefusalReason::Busy),
             }
         }
-        // Unlike Start, Stop is not gated on `mode_enabled`: if `mode` is
-        // somehow capturing (e.g. it was disabled mid-capture), a stop must
-        // still be able to end it rather than being refused for a setting
-        // that no longer describes what is running.
+        // Unlike Start, Stop is not gated on `mode_enabled` or
+        // `publication_enabled`: if `mode` is somehow capturing (e.g. it was
+        // disabled, or its publication toggle was flipped off, mid-capture),
+        // a stop must still be able to end it rather than being refused for a
+        // setting that no longer describes what is running.
         ExplicitOp::Stop => match capture {
             CaptureState::Recording(active) if active == mode => Decision::Forward,
             _ => Decision::NoOp,
@@ -147,7 +171,7 @@ mod tests {
     #[test]
     fn start_while_idle_and_enabled_forwards() {
         assert_eq!(
-            decide(ExplicitOp::Start, TARGET, true, CaptureState::Idle),
+            decide(ExplicitOp::Start, TARGET, true, true, CaptureState::Idle),
             Decision::Forward
         );
     }
@@ -160,6 +184,7 @@ mod tests {
             decide(
                 ExplicitOp::Start,
                 TARGET,
+                true,
                 true,
                 CaptureState::Recording(TARGET)
             ),
@@ -174,6 +199,7 @@ mod tests {
                 decide(
                     ExplicitOp::Start,
                     TARGET,
+                    true,
                     true,
                     CaptureState::Recording(other)
                 ),
@@ -193,6 +219,7 @@ mod tests {
                 ExplicitOp::Start,
                 TARGET,
                 true,
+                true,
                 CaptureState::Processing(TARGET)
             ),
             Decision::Refuse(RefusalReason::Busy)
@@ -207,6 +234,7 @@ mod tests {
                     ExplicitOp::Start,
                     TARGET,
                     true,
+                    true,
                     CaptureState::Processing(other)
                 ),
                 Decision::Refuse(RefusalReason::Busy)
@@ -217,8 +245,49 @@ mod tests {
     #[test]
     fn start_while_the_mode_is_disabled_is_refused_regardless_of_capture_state() {
         for capture in every_capture_state() {
+            for publication_enabled in [true, false] {
+                assert_eq!(
+                    decide(
+                        ExplicitOp::Start,
+                        TARGET,
+                        false,
+                        publication_enabled,
+                        capture
+                    ),
+                    Decision::Refuse(RefusalReason::ModeDisabled),
+                    "capture={capture:?} publication_enabled={publication_enabled}"
+                );
+            }
+        }
+    }
+
+    /// The publication toggle is Assisted Notes' own `follow_stream_enabled`
+    /// (see `dictation::apply_mode`), a different switch from `mode_enabled`
+    /// (`assisted_notes.enabled`). A mode that is on but not publishing must
+    /// refuse a start rather than forward it: forwarding would begin a real
+    /// capture with no `begin` ever reaching a follower, which is exactly as
+    /// unobservable as `Busy` or `ModeDisabled` and defeats the whole point
+    /// of the explicit command.
+    #[test]
+    fn start_while_publication_is_disabled_is_refused_regardless_of_capture_state() {
+        for capture in every_capture_state() {
             assert_eq!(
-                decide(ExplicitOp::Start, TARGET, false, capture),
+                decide(ExplicitOp::Start, TARGET, true, false, capture),
+                Decision::Refuse(RefusalReason::PublicationDisabled),
+                "capture={capture:?}"
+            );
+        }
+    }
+
+    /// When both switches are off, `ModeDisabled` must win: it is the more
+    /// fundamental problem, and telling the caller to fix publication first
+    /// would send them chasing a setting that is moot until the mode itself
+    /// is back on.
+    #[test]
+    fn start_while_both_mode_and_publication_are_disabled_is_refused_as_mode_disabled() {
+        for capture in every_capture_state() {
+            assert_eq!(
+                decide(ExplicitOp::Start, TARGET, false, false, capture),
                 Decision::Refuse(RefusalReason::ModeDisabled),
                 "capture={capture:?}"
             );
@@ -232,16 +301,40 @@ mod tests {
                 ExplicitOp::Stop,
                 TARGET,
                 true,
+                true,
                 CaptureState::Recording(TARGET)
             ),
             Decision::Forward
         );
         // A disabled mode can still be the one actually running (e.g. the
         // setting changed mid-capture); stop must still be able to end it.
+        // Same for a mode whose publication toggle was flipped off
+        // mid-capture.
         assert_eq!(
             decide(
                 ExplicitOp::Stop,
                 TARGET,
+                false,
+                true,
+                CaptureState::Recording(TARGET)
+            ),
+            Decision::Forward
+        );
+        assert_eq!(
+            decide(
+                ExplicitOp::Stop,
+                TARGET,
+                true,
+                false,
+                CaptureState::Recording(TARGET)
+            ),
+            Decision::Forward
+        );
+        assert_eq!(
+            decide(
+                ExplicitOp::Stop,
+                TARGET,
+                false,
                 false,
                 CaptureState::Recording(TARGET)
             ),
@@ -252,10 +345,18 @@ mod tests {
     #[test]
     fn stop_while_idle_is_a_noop() {
         for mode_enabled in [true, false] {
-            assert_eq!(
-                decide(ExplicitOp::Stop, TARGET, mode_enabled, CaptureState::Idle),
-                Decision::NoOp
-            );
+            for publication_enabled in [true, false] {
+                assert_eq!(
+                    decide(
+                        ExplicitOp::Stop,
+                        TARGET,
+                        mode_enabled,
+                        publication_enabled,
+                        CaptureState::Idle
+                    ),
+                    Decision::NoOp
+                );
+            }
         }
     }
 
@@ -265,16 +366,19 @@ mod tests {
         // is success (nothing for this mode to stop), not a refusal.
         for other in [OTHER_A, OTHER_B] {
             for mode_enabled in [true, false] {
-                assert_eq!(
-                    decide(
-                        ExplicitOp::Stop,
-                        TARGET,
-                        mode_enabled,
-                        CaptureState::Recording(other)
-                    ),
-                    Decision::NoOp,
-                    "other={other:?} mode_enabled={mode_enabled}"
-                );
+                for publication_enabled in [true, false] {
+                    assert_eq!(
+                        decide(
+                            ExplicitOp::Stop,
+                            TARGET,
+                            mode_enabled,
+                            publication_enabled,
+                            CaptureState::Recording(other)
+                        ),
+                        Decision::NoOp,
+                        "other={other:?} mode_enabled={mode_enabled} publication_enabled={publication_enabled}"
+                    );
+                }
             }
         }
     }
@@ -285,16 +389,19 @@ mod tests {
     #[test]
     fn stop_while_this_mode_is_processing_is_a_noop() {
         for mode_enabled in [true, false] {
-            assert_eq!(
-                decide(
-                    ExplicitOp::Stop,
-                    TARGET,
-                    mode_enabled,
-                    CaptureState::Processing(TARGET)
-                ),
-                Decision::NoOp,
-                "mode_enabled={mode_enabled}"
-            );
+            for publication_enabled in [true, false] {
+                assert_eq!(
+                    decide(
+                        ExplicitOp::Stop,
+                        TARGET,
+                        mode_enabled,
+                        publication_enabled,
+                        CaptureState::Processing(TARGET)
+                    ),
+                    Decision::NoOp,
+                    "mode_enabled={mode_enabled} publication_enabled={publication_enabled}"
+                );
+            }
         }
     }
 
@@ -302,55 +409,71 @@ mod tests {
     fn stop_while_a_different_mode_is_processing_is_a_noop() {
         for other in [OTHER_A, OTHER_B] {
             for mode_enabled in [true, false] {
-                assert_eq!(
-                    decide(
-                        ExplicitOp::Stop,
-                        TARGET,
-                        mode_enabled,
-                        CaptureState::Processing(other)
-                    ),
-                    Decision::NoOp,
-                    "other={other:?} mode_enabled={mode_enabled}"
-                );
+                for publication_enabled in [true, false] {
+                    assert_eq!(
+                        decide(
+                            ExplicitOp::Stop,
+                            TARGET,
+                            mode_enabled,
+                            publication_enabled,
+                            CaptureState::Processing(other)
+                        ),
+                        Decision::NoOp,
+                        "other={other:?} mode_enabled={mode_enabled} publication_enabled={publication_enabled}"
+                    );
+                }
             }
         }
     }
 
     /// Exhaustive sweep: every op x every observable capture state x
-    /// enabled/disabled, cross-checked against the targeted cases above so
-    /// no combination is silently unmatched by `decide`'s own arms.
+    /// mode-enabled/disabled x publication-enabled/disabled, cross-checked
+    /// against the targeted cases above so no combination is silently
+    /// unmatched by `decide`'s own arms.
     #[test]
-    fn every_combination_of_op_capture_and_enabled_is_decided() {
+    fn every_combination_of_op_capture_enabled_and_publication_is_decided() {
         for op in [ExplicitOp::Start, ExplicitOp::Stop] {
             for capture in every_capture_state() {
                 for mode_enabled in [true, false] {
-                    let decision = decide(op, TARGET, mode_enabled, capture);
-                    let expected = match (op, capture, mode_enabled) {
-                        (ExplicitOp::Start, _, false) => {
-                            Decision::Refuse(RefusalReason::ModeDisabled)
-                        }
-                        (ExplicitOp::Start, CaptureState::Idle, true) => Decision::Forward,
-                        (ExplicitOp::Start, CaptureState::Recording(m), true) if m == TARGET => {
-                            Decision::NoOp
-                        }
-                        (ExplicitOp::Start, CaptureState::Recording(_), true) => {
-                            Decision::Refuse(RefusalReason::Busy)
-                        }
-                        // Processing always refuses on Start, same mode or
-                        // not -- see the targeted Processing tests above and
-                        // `decide`'s own comment on this arm.
-                        (ExplicitOp::Start, CaptureState::Processing(_), true) => {
-                            Decision::Refuse(RefusalReason::Busy)
-                        }
-                        (ExplicitOp::Stop, CaptureState::Recording(m), _) if m == TARGET => {
-                            Decision::Forward
-                        }
-                        (ExplicitOp::Stop, _, _) => Decision::NoOp,
-                    };
-                    assert_eq!(
-                        decision, expected,
-                        "op={op:?} capture={capture:?} mode_enabled={mode_enabled}"
-                    );
+                    for publication_enabled in [true, false] {
+                        let decision =
+                            decide(op, TARGET, mode_enabled, publication_enabled, capture);
+                        let expected = match (op, capture, mode_enabled, publication_enabled) {
+                            // ModeDisabled wins over PublicationDisabled when
+                            // both are off -- see `decide`'s own comment.
+                            (ExplicitOp::Start, _, false, _) => {
+                                Decision::Refuse(RefusalReason::ModeDisabled)
+                            }
+                            (ExplicitOp::Start, _, true, false) => {
+                                Decision::Refuse(RefusalReason::PublicationDisabled)
+                            }
+                            (ExplicitOp::Start, CaptureState::Idle, true, true) => {
+                                Decision::Forward
+                            }
+                            (ExplicitOp::Start, CaptureState::Recording(m), true, true)
+                                if m == TARGET =>
+                            {
+                                Decision::NoOp
+                            }
+                            (ExplicitOp::Start, CaptureState::Recording(_), true, true) => {
+                                Decision::Refuse(RefusalReason::Busy)
+                            }
+                            // Processing always refuses on Start, same mode or
+                            // not -- see the targeted Processing tests above and
+                            // `decide`'s own comment on this arm.
+                            (ExplicitOp::Start, CaptureState::Processing(_), true, true) => {
+                                Decision::Refuse(RefusalReason::Busy)
+                            }
+                            (ExplicitOp::Stop, CaptureState::Recording(m), _, _) if m == TARGET => {
+                                Decision::Forward
+                            }
+                            (ExplicitOp::Stop, _, _, _) => Decision::NoOp,
+                        };
+                        assert_eq!(
+                            decision, expected,
+                            "op={op:?} capture={capture:?} mode_enabled={mode_enabled} publication_enabled={publication_enabled}"
+                        );
+                    }
                 }
             }
         }

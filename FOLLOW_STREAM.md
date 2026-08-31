@@ -93,19 +93,24 @@ Before `idle` existed, an idle app was only inferable from the *absence* of a `b
 
 `--start-assisted-notes` and `--stop-assisted-notes` start or stop an Assisted Notes capture on a running instance, the same as `--toggle-assisted-notes`, but without toggle semantics: each is idempotent, so a caller can retry one without risking flipping the capture the wrong way. `--toggle-assisted-notes` still exists — fork-only and harmless for manual, interactive use — but a scripted or programmatic caller should prefer the explicit pair.
 
-| Command                   | Assisted Notes idle | Assisted Notes already capturing | A different mode capturing | Assisted Notes disabled     |
-| -------------------------- | -------------------- | --------------------------------- | --------------------------- | ----------------------------- |
-| `--start-assisted-notes`  | starts it            | no-op (success)                   | refused (`busy`)            | refused (`mode-disabled`)    |
-| `--stop-assisted-notes`   | no-op (success)      | stops it                          | no-op (success)             | no-op (success)              |
+| Command                   | Assisted Notes idle | Assisted Notes already capturing | A different mode capturing | Assisted Notes disabled     | Assisted Notes enabled but not publishing |
+| -------------------------- | -------------------- | --------------------------------- | --------------------------- | ----------------------------- | ------------------------------------------- |
+| `--start-assisted-notes`  | starts it            | no-op (success)                   | refused (`busy`)            | refused (`mode-disabled`)    | refused (`publication-disabled`)            |
+| `--stop-assisted-notes`   | no-op (success)      | stops it                          | no-op (success)             | no-op (success)              | no-op (success)                             |
 
 A refusal is reported on the wire instead of being left for the caller to infer from a timeout:
 
 ```jsonl
 {"t":"refused","mode":"assisted-notes","reason":"mode-disabled","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"refused","mode":"assisted-notes","reason":"busy","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"refused","mode":"assisted-notes","reason":"publication-disabled","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 ```
 
 `refused` carries no request id — this protocol is one-way, with no request/response correlation — so it only says "a start or stop for `mode` was just declined, and why", not which of possibly several outstanding commands it answers. A follower tells its own command's outcome apart from anyone else's by having attached first, read current state, then issued the command and watched the same connection for the resulting state change or `refused` — see "Level-triggered attachment" below.
+
+`reason` is an open set from a follower's perspective, not a closed enum to exhaustively match: `publication-disabled` was added after `busy` and `mode-disabled` shipped, and a follower built against an older binary will see it as a value it does not recognize. Such a follower must tolerate an unrecognized `reason` (treat the command as declined, without being able to say why) rather than fail to parse the record — the same open-ended-field contract the rest of this wire already documents. Adding `publication-disabled` did not bump `FOLLOW_PROTOCOL_VERSION`: it is a new value for an existing string field, not a shape change, and the protocol version is reserved for removals, renames, or a changed event meaning (see the `emitted_at`/`session_elapsed_ms` precedent above).
+
+`--start-assisted-notes` refuses with `publication-disabled` when Assisted Notes is enabled but its own `--follow-stream` publication toggle (the Modes pane's per-mode switch, `assisted_notes.follow_stream_enabled`) is off. Forwarding the start anyway would begin a real capture that never emits `begin` — the same switch `hub.begin` itself is gated on — leaving a follower with no way to observe it, distinguish it from a lost command, or learn what to fix. `--stop-assisted-notes` is never refused for this reason, the same as it is never refused for the mode being disabled (table above): it must still be able to end a capture already running, even one whose publication toggle was flipped off mid-capture.
 
 A command can be accepted (the CLI flag exits 0, and the running instance receives it) and still fail to actually start a capture — no input device, a denied microphone permission. That produces `start_failed` rather than `begin`:
 
