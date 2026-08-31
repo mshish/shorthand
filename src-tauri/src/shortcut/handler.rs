@@ -64,9 +64,11 @@ pub fn handle_shortcut_event(
     }
 
     // Remaining bindings (e.g. "test") use simple start/stop on press/release.
+    // Neither ever carries a follow-stream session -- only the coordinator's
+    // `Stage` does, and these bindings bypass it entirely.
     if is_pressed {
         action.start(app, binding_id, hotkey_string);
     } else {
-        action.stop(app, binding_id, hotkey_string);
+        action.stop(app, binding_id, hotkey_string, None);
     }
 }

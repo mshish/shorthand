@@ -754,11 +754,11 @@ mod tests {
         wait_until(|| hub.follower_count() == 1).await;
         wait_until(|| output.text().contains("\"t\":\"hello\"")).await;
 
-        hub.begin(true, FollowMode::Meeting);
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
         wait_until(|| output.text().contains("\"t\":\"begin\"")).await;
         hub.partial(StreamSource::Mic, "hello ", "wor");
         wait_until(|| output.text().contains("\"t\":\"partial\"")).await;
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
         wait_until(|| output.text().contains("\"t\":\"final\"")).await;
 
         server.stop();
@@ -778,7 +778,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}",
+                "{\"t\":\"idle\"}",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}",
@@ -811,12 +812,12 @@ mod tests {
 
         wait_until(|| hub.follower_count() == 1).await;
         clock.advance(100);
-        hub.begin(true, FollowMode::Meeting);
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
         clock.advance(1112);
         hub.partial(StreamSource::Mic, "hello ", "wor");
         wait_until(|| output.text().contains("\"t\":\"delta\"")).await;
         clock.advance(638);
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
         wait_until(|| output.text().contains("\"t\":\"end\"")).await;
 
         server.stop();

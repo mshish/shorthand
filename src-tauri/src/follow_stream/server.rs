@@ -20,7 +20,6 @@ use super::{socket_name_owned, FollowStreamHub};
 type TaskHandle = tauri::async_runtime::JoinHandle<()>;
 
 pub struct FollowStreamServer {
-    lifecycle: tokio::sync::Mutex<()>,
     inner: Mutex<Option<RunningServer>>,
 }
 
@@ -34,17 +33,12 @@ struct RunningServer {
 impl Default for FollowStreamServer {
     fn default() -> Self {
         Self {
-            lifecycle: tokio::sync::Mutex::new(()),
             inner: Mutex::new(None),
         }
     }
 }
 
 impl FollowStreamServer {
-    pub(crate) async fn lock_lifecycle(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.lifecycle.lock().await
-    }
-
     pub async fn start(&self, app: &AppHandle, hub: Arc<FollowStreamHub>) -> io::Result<()> {
         self.start_with_name(
             socket_name_owned()?,
@@ -383,9 +377,10 @@ mod tests {
 
         assert_eq!(
             read_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n"
         );
-        hub.begin(true, FollowMode::Meeting);
+        assert_eq!(read_line(&mut client).await, "{\"t\":\"idle\"}\n");
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
         assert_eq!(
             read_line(&mut client).await,
             "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n"
@@ -395,7 +390,7 @@ mod tests {
             read_line(&mut client).await,
             "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n"
         );
-        hub.finish(Some(Speaker::Me), "Hello world.");
+        hub.finish(session, Some(Speaker::Me), "Hello world.");
         assert_eq!(
             read_line(&mut client).await,
             "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n"
@@ -418,7 +413,11 @@ mod tests {
 
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+        );
+        assert_eq!(
+            read_raw_line(&mut client).await,
+            "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         clock.advance(100);
         hub.begin(true, FollowMode::Meeting);
@@ -455,7 +454,7 @@ mod tests {
         let mut late = connect(name).await;
         assert_eq!(
             read_line(&mut late).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"begin-mode\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"start-failed\"]}\n"
         );
         assert_eq!(
             read_line(&mut late).await,
@@ -512,6 +511,10 @@ mod tests {
             .unwrap();
         let mut client = connect(name.clone()).await;
         assert!(read_line(&mut client).await.contains("\"t\":\"hello\""));
+        // The backlog also carries `idle` (no active session); drain it too
+        // so the next read below observes the bounded EOF, not this line
+        // still sitting in the client's own buffer.
+        assert!(read_line(&mut client).await.contains("\"t\":\"idle\""));
 
         server.stop();
         assert!(!server.is_running());

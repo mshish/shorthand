@@ -47,22 +47,26 @@ pub async fn change_follow_stream_enabled_setting(
     app: AppHandle,
     enabled: bool,
 ) -> Result<(), String> {
-    // `enabled` is Meeting's own publication preference, not a listener
-    // on/off switch: an enabled Dictation or Assisted Notes mode can still
-    // need the shared listener after this turns Meeting's publication off,
-    // and `reconcile` is what keeps it running for them. See
-    // `follow_stream::lifecycle`.
+    // `enabled` is Meeting's own publication preference — whether Meeting's
+    // captures reach the hub at all — not a listener on/off switch. The
+    // listener itself is unconditional (started once at startup; see
+    // `lib.rs`) precisely so a `refused` record still has somewhere to
+    // arrive even when every publishing mode, including this one, is off.
+    // Nothing here needs to start or stop it.
     let mut settings = get_settings(&app);
     settings.follow_stream_enabled = enabled;
-
-    let server = app.state::<crate::follow_stream::FollowStreamServer>();
-    let hub = crate::follow_stream::hub(&app)
-        .ok_or_else(|| "Follow-stream hub is unavailable".to_string())?;
-    crate::follow_stream::reconcile(&app, &server, hub, &settings).await?;
-
-    // Persist only after the listener transition succeeds so the stored
-    // toggle always describes the server state that was actually applied.
     write_settings(&app, settings);
+
+    // Persisting the toggle alone used to be the whole regression: it left
+    // an already-active Meeting session publishing right through the user
+    // turning this off. `suppress_if_active` is a no-op unless Meeting is
+    // the mode actually capturing right now, so this is safe to call
+    // unconditionally whenever the toggle lands off.
+    if !enabled {
+        if let Some(hub) = crate::follow_stream::hub(&app) {
+            hub.suppress_if_active(crate::follow_stream::FollowMode::Meeting);
+        }
+    }
     Ok(())
 }
 

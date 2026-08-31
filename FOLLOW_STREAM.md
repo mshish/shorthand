@@ -5,7 +5,9 @@ The fork-only `handy --follow-stream` feature lets another process follow live t
 Two separate things decide whether a follower sees anything, and they must not be confused:
 
 - **Per-mode publication** — whether a given capture's transcript reaches the hub at all. This is each mode's own `follow_stream_enabled` (Meeting's top-level **Follow Live Transcript Output**, Dictation's and Assisted Notes' own Advanced toggles). Meeting and Assisted Notes ship this on; Dictation ships it off, because dictated text has already been delivered where it was wanted.
-- **Listener lifetime** — whether the local socket exists at all. The listener is process-wide, not per-mode, and stays up whenever _any_ mode that can currently publish wants it: Meeting's toggle, or an _enabled_ Dictation/Assisted Notes mode with its own publication toggle on. Turning Meeting's toggle off does not tear the socket down while another enabled mode still needs it, and a mode's publication preference does nothing while that mode itself is switched off.
+- **Listener lifetime** — whether the local socket exists at all. The listener is process-wide, not per-mode, and is **unconditional**: it starts once at startup and stays up for the life of the process, regardless of any mode's publication setting.
+
+These two used to be coupled — the listener only ran while some mode's publication setting could use it — but that made the socket unavailable in exactly the case a `refused` record exists to explain: if every publishing mode is off, "the mode is disabled" has no transport to arrive on, and the follower's documented attach-first flow (see "Level-triggered attachment" below) can never observe it. Making the listener unconditional is a **lifetime** change only; it does not change **who receives transcripts**. A follower can still attach at any time — disabled or not — and will always see `idle`/`begin`/`refused`/`start_failed` for the connection itself; whether a given capture's transcript ever reaches it is still entirely decided by that capture's own publication toggle, checked at the `hub.begin`/`hub.start_failed` call sites in `actions.rs`.
 
 | Mode                                 | Output                                                          |
 | ------------------------------------ | --------------------------------------------------------------- |
@@ -18,7 +20,8 @@ Two separate things decide whether a follower sees anything, and they must not b
 The stream is UTF-8, with exactly one JSON object per newline. Every object has a `t` discriminator; consumers should ignore fields they do not recognize so later protocol additions remain compatible. The current protocol is version 1:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","begin-mode"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","idle","refused","start-failed"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"idle","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":1,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":1,"speaker":"me","committed":"hello ","tentative":"wor","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"final","session":1,"speaker":"me","text":"Hello world.","emitted_at":"2026-08-15T14:03:22.050-07:00","session_elapsed_ms":1850}
@@ -27,14 +30,16 @@ The stream is UTF-8, with exactly one JSON object per newline. Every object has 
 {"t":"error","session":1,"message":"transcription failed","emitted_at":"...","session_elapsed_ms":900}
 ```
 
-`hello` is always the first event on a connection and reports the protocol and Handy versions. `capabilities` names the capabilities this binary supports: a control flag appears here as the CLI flag minus its `--`, while other capabilities name a feature of the wire format instead of a flag — `begin-mode`, for instance, means this binary's `begin` records carry a `mode` field. It advertises what this binary can do, not which settings are enabled — a follower still gets the app's own settings pane as the single description of behaviour, but this lets it tell an installed binary that predates a capability from one that merely has the corresponding mode switched off, without guessing from a version number. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. `mode` names the capture mode that produced the session — `meeting`, `assisted-notes` or `dictation` — so a follower can decide whether a session is any of its business. Which modes reach a follower at all is still each mode's own publication setting, described at the top of this document; `mode` says what a delivered session was, not what is enabled. A follower that needs this field must gate on the `begin-mode` capability rather than on the field's absence, because an app that predates it is indistinguishable from one that has simply not started a session yet. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
+`hello` is always the first event on a connection and reports the protocol and Handy versions. `capabilities` names the capabilities this binary supports: a control flag appears here as the CLI flag minus its `--`, while other capabilities name a feature of the wire format instead of a flag — `begin-mode`, for instance, means this binary's `begin` records carry a `mode` field, and `idle`/`refused`/`start-failed` mean this binary can emit the `idle`, `refused` and `start_failed` record types at all (each capability name is kebab-case regardless of the record's own `t` spelling). It advertises what this binary can do, not which settings are enabled — a follower still gets the app's own settings pane as the single description of behaviour, but this lets it tell an installed binary that predates a capability from one that merely has the corresponding mode switched off, without guessing from a version number. Each `begin` allocates a process-local, monotonically increasing `session` number; `streaming` says whether partial events are available for the selected model. `mode` names the capture mode that produced the session — `meeting`, `assisted-notes` or `dictation` — so a follower can decide whether a session is any of its business. Which modes reach a follower at all is still each mode's own publication setting, described at the top of this document; `mode` says what a delivered session was, not what is enabled. A follower that needs this field must gate on the `begin-mode` capability rather than on the field's absence, because an app that predates it is indistinguishable from one that has simply not started a session yet. A session ends with exactly one of `final`, `no_speech`, `cancel`, or `error`. Connection-level errors instead omit `session` and include a `code`, such as `follower_limit`.
+
+`idle` follows `hello` whenever subscribing finds no active session — see "Connection state: `idle` and `begin`" below. `refused` and `start_failed` are two more session-less records described in "Explicit start/stop commands" below; like `idle` they carry only `emitted_at`, no `session_elapsed_ms`, because none of the three belongs to a session.
 
 In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript.
 
 A dual-speaker session can therefore look like this:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","begin-mode"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","idle","refused","start-failed"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":42,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":42,"speaker":"me","committed":"Can you hear me?","tentative":"","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
 {"t":"partial","session":42,"speaker":"them","committed":"Yes, clearly.","tentative":"","emitted_at":"2026-08-15T14:03:22.900-07:00","session_elapsed_ms":2700}
@@ -54,7 +59,7 @@ Every event carries two time fields, stamped once when Handy produces the event:
 - `emitted_at` — RFC3339 civil time with millisecond precision and a numeric UTC offset, never `Z`. Use it for display and for correlating a transcript with logs or recordings.
 - `session_elapsed_ms` — milliseconds since this session's `begin`, read from a monotonic clock. **Use this as the ordering key.** Wall clocks move backward across NTP corrections, DST transitions, and suspend/resume, so `emitted_at` is not safe to sort by.
 
-`session_elapsed_ms` is absent on events that belong to no session: `hello`, and connection-level `error`. It restarts at zero for every `begin`.
+`session_elapsed_ms` is absent on events that belong to no session: `hello`, `idle`, `refused`, `start_failed`, and connection-level `error`. It restarts at zero for every `begin`.
 
 Both fields were added without bumping `protocol`, because they are additive and consumers are already told to ignore unrecognized fields. A bump is reserved for a removal, a rename, or a changed event meaning.
 
@@ -71,7 +76,52 @@ Handy deliberately does not expose the decoder's audio offsets. The microphone a
 
 Each follower receives every lifecycle event in order and eventually receives the latest partial state for each speaker; intermediate partial snapshots may be coalesced. If a follower falls far enough behind to exceed the bounded event or byte budget, Handy disconnects it rather than delivering a gap. There is no persistence or reconnect behavior.
 
-Up to eight followers may be connected at once. A ninth receives one `error` event with code `follower_limit` and is closed. A follower attached during an active session receives `hello`, then the active `begin`, then the latest available `partial` snapshot for each speaker; earlier events are not replayed. Those replayed lines keep the timestamps they were originally produced with, so a late follower still learns when the session actually began — only its own `hello` is stamped at attach time.
+Up to eight followers may be connected at once. A ninth receives one `error` event with code `follower_limit` and is closed. A follower attached during an active session receives `hello`, then the active `begin`, then the latest available `partial` snapshot for each speaker; earlier events are not replayed. Those replayed lines keep the timestamps they were originally produced with, so a late follower still learns when the session actually began — only its own `hello` is stamped at attach time. A follower attached while nothing is capturing receives `hello` then `idle` instead — see the next section.
+
+## Connection state: `idle` and `begin`
+
+A follower always learns current state immediately after `hello`: the active `begin` if a capture is already running (previous section), otherwise `idle`.
+
+```jsonl
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","idle","refused","start-failed"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"idle","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+```
+
+Before `idle` existed, an idle app was only inferable from the *absence* of a `begin` — indistinguishable, to a follower with a bounded read timeout, from "the app is between accepting my command and emitting `begin`". `idle` turns that into a record a follower reads rather than a silence it has to interpret. It only ever appears immediately after `hello`; a live session already answers the same question with its own `begin` and terminal event, so `idle` is never sent mid-connection.
+
+## Explicit start/stop commands
+
+`--start-assisted-notes` and `--stop-assisted-notes` start or stop an Assisted Notes capture on a running instance, the same as `--toggle-assisted-notes`, but without toggle semantics: each is idempotent, so a caller can retry one without risking flipping the capture the wrong way. `--toggle-assisted-notes` still exists — fork-only and harmless for manual, interactive use — but a scripted or programmatic caller should prefer the explicit pair.
+
+| Command                   | Assisted Notes idle | Assisted Notes already capturing | A different mode capturing | Assisted Notes disabled     |
+| -------------------------- | -------------------- | --------------------------------- | --------------------------- | ----------------------------- |
+| `--start-assisted-notes`  | starts it            | no-op (success)                   | refused (`busy`)            | refused (`mode-disabled`)    |
+| `--stop-assisted-notes`   | no-op (success)      | stops it                          | no-op (success)             | no-op (success)              |
+
+A refusal is reported on the wire instead of being left for the caller to infer from a timeout:
+
+```jsonl
+{"t":"refused","mode":"assisted-notes","reason":"mode-disabled","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"refused","mode":"assisted-notes","reason":"busy","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+```
+
+`refused` carries no request id — this protocol is one-way, with no request/response correlation — so it only says "a start or stop for `mode` was just declined, and why", not which of possibly several outstanding commands it answers. A follower tells its own command's outcome apart from anyone else's by having attached first, read current state, then issued the command and watched the same connection for the resulting state change or `refused` — see "Level-triggered attachment" below.
+
+A command can be accepted (the CLI flag exits 0, and the running instance receives it) and still fail to actually start a capture — no input device, a denied microphone permission. That produces `start_failed` rather than `begin`:
+
+```jsonl
+{"t":"start_failed","mode":"assisted-notes","message":"no input device","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+```
+
+`start_failed` is deliberately its own record rather than a session-less `error`: every other session-less `error` on this wire carries a `code` (`follower_limit`, `disabled`, `serialization_failed`), so reusing that shape here would give a follower two shapes to tell apart by the *absence* of a field instead of one record type to match on. It carries `mode` for the same reason `begin` does — without it a follower watching one mode could misattribute a different mode's failure to itself — and, like `begin`, only reaches a follower when that mode's own `follow_stream_enabled` publication toggle is on: a non-publishing mode's failures are exactly what that setting exists to keep off the wire.
+
+## Level-triggered attachment
+
+**Attach first, read current state, then issue a command — and treat every record on this connection as state to react to, not as a one-shot signal to wait for.** A follower that instead arms a timer for a single expected edge before issuing its command can lose the very confirmation it is waiting for.
+
+That is not hypothetical; it is the bug this design replaces. The previous integration spawned a second process to send `--toggle-assisted-notes`, then — only after that spawned process exited — opened a *separate* follow-stream connection and waited for `begin`. Handy emits `begin` roughly 20ms *before* the spawned process actually exits, so by the time the waiting connection attached, `begin` had already been sent and was gone. The wait timed out, the integration cancelled the capture it had itself just started, and told the user to enable a setting that was already enabled.
+
+The fix is not a faster timer; it is this ordering. Attach before issuing any command, so current state (`idle` or the active `begin`) is already known when the command goes out. Issue an *explicit* command rather than a toggle, so a retry sent because the first attempt's confirmation seemed lost can never fire the wrong edge. Then watch that same, already-open connection for the state to change, or for `refused` — never a fresh connection racing an event that may already have been sent and missed. A future "simplification" back to wait-for-one-edge-on-a-fresh-connection reintroduces exactly this race; the fix is the ordering, not the timeout value.
 
 ## Delta mode
 
@@ -108,4 +158,4 @@ Both `delta` and `text` are built only from `partial.committed`, so both require
 
 ## Local transport and security
 
-The follower is read-only and connects to a deterministic per-user local socket. On Windows, Handy creates a named pipe with a protected SDDL DACL granting access only to the current user's SID. On Unix, the listener uses mode `0600` and verifies each peer's effective user ID against Handy's own euid; this credential check also protects Linux abstract sockets where filesystem permissions do not apply. The listener and socket exist only while at least one mode can publish to it — see the note on per-mode publication vs. listener lifetime at the top of this document — and disappear once none can, disconnecting current followers.
+The follower is read-only and connects to a deterministic per-user local socket. On Windows, Handy creates a named pipe with a protected SDDL DACL granting access only to the current user's SID. On Unix, the listener uses mode `0600` and verifies each peer's effective user ID against Handy's own euid; this credential check also protects Linux abstract sockets where filesystem permissions do not apply. The listener and socket exist for the life of the process — see the note on per-mode publication vs. listener lifetime at the top of this document — regardless of which modes, if any, currently publish to it.
