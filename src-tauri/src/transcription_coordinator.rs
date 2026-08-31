@@ -814,6 +814,25 @@ impl TranscriptionCoordinator {
             if let Err(e) = result {
                 error!("Transcription coordinator panicked: {e:?}");
             }
+            // Whether the loop above exited normally or panicked out, this
+            // thread is the capture lifecycle's only owner, so nothing can
+            // manage an in-flight publication any more: no stop can be
+            // decided for it, and no `SuppressPublication` still sitting in
+            // the queue will ever be dequeued. A session left open here
+            // would keep publishing a transcript with nothing able to end
+            // it.
+            //
+            // This is also what closes the last gap in `suppress_publication`
+            // below: that function falls back to a direct hub call when its
+            // `send` fails, but a successful `send` only proves the receiver
+            // existed at enqueue time -- a panic between the enqueue and the
+            // dequeue drops the queued suppression after the settings
+            // command has already returned. Ending the session from the exit
+            // path covers that without making every publication toggle wait
+            // on a synchronous acknowledgement from this thread.
+            if let Some(hub) = crate::follow_stream::hub(&app) {
+                hub.cancel_active();
+            }
         });
 
         Self { tx }
