@@ -27,6 +27,7 @@ import { AssistedNotesClipboardHandling } from "../assisted-notes/AssistedNotesC
 import { AssistedNotesEnableToggle } from "../assisted-notes/AssistedNotesEnableToggle";
 import { AssistedNotesPostProcessPrompt } from "../assisted-notes/AssistedNotesPostProcessPrompt";
 import { AssistedNotesToggleField } from "../assisted-notes/AssistedNotesToggleField";
+import { NoteTakingSetupNote } from "./NoteTakingSetupNote";
 import { AdvancedOnly } from "../ui/AdvancedOnly";
 import { Dependents } from "../ui/Dependents";
 import { useAdvanced } from "../useAdvanced";
@@ -191,6 +192,11 @@ export const ModesSettings: React.FC = () => {
           {notetakingTab === "meetings" && (
             <TabPanel id="meetings">
               <Sheet>
+                {/* First row in both notetaking tabs: the note is written by a
+                    follower driving a signed-in Claude Code or Codex CLI, and
+                    nothing else here would tell anyone that. See
+                    NoteTakingSetupNote. */}
+                <NoteTakingSetupNote grouped={true} />
                 <ShortcutInput
                   shortcutId="transcribe"
                   descriptionMode="inline"
@@ -265,6 +271,7 @@ export const ModesSettings: React.FC = () => {
           {notetakingTab === "assisted" && (
             <TabPanel id="assisted">
               <Sheet>
+                <NoteTakingSetupNote grouped={true} />
                 <AssistedNotesEnableToggle />
                 {/* Everything below is hidden, not greyed, while assisted notes
                     is off — the same reasoning as the Dictation tab: a
