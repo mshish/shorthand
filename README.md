@@ -2,7 +2,7 @@
 
 Shorthand turns speech into text on your computer. It can transcribe your microphone and the audio from a meeting, label them separately, and share the live transcript with tools such as the [Shorthand Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin).
 
-Transcription runs on your machine, so your audio never leaves it. Writing that transcript up into a note is a separate step, and that step uses an AI assistant — see [AI note taking](#ai-note-taking). Shorthand drives the Claude Code or Codex CLI you are already signed in to, so note taking comes out of a subscription you already pay for instead of a per-token API bill.
+Transcription runs on your machine, so your audio never leaves it. Turning a transcript into a written note is a separate step that uses an AI assistant. Shorthand drives the Claude Code or Codex CLI you are already signed in to, so note taking comes out of a subscription you already pay for rather than a per-token API bill. See [AI note taking](#ai-note-taking).
 
 Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), so it includes Handy's local dictation and transcription features.
 
@@ -10,9 +10,9 @@ Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), so it includes 
 
 Published Windows and Linux builds appear on the [Releases page](../../releases).
 
-Only Windows has been tested so far. The Linux builds are published but untried. macOS is not in the release build at all, because there is no Apple signing certificate yet, so macOS users need to [build from source](#build-from-source) for now — see [macOS](#macos) below. Shorthand needs macOS 14.6 or later.
+Only Windows has been tested so far. The Linux builds are published but untried. macOS is not in the release build at all, because there is no Apple signing certificate yet, so macOS users need to [build from source](#macos) for now. Shorthand needs macOS 14.6 or later.
 
-Installers are unsigned. Windows SmartScreen warns the first time: choose **More info → Run anyway**.
+Installers are unsigned. Windows SmartScreen warns the first time; choose More info, then Run anyway.
 
 ## What you can do
 
@@ -26,16 +26,16 @@ Shorthand builds and runs on Windows, macOS, and Linux; [Install](#install) says
 
 ## AI note taking
 
-Dictation and transcription need nothing else installed. Note taking does. Assisted notes and meeting notes work by streaming the live transcript to a follower — the Obsidian plugin, or [`shorthand-core`](https://github.com/mshish/shorthand-core) on its own — which asks an AI assistant to keep the written note up to date as you talk. That assistant is a command-line tool you install and sign in to yourself.
+Dictation and transcription need nothing else installed. Note taking needs an AI assistant. Assisted notes and meeting notes stream the live transcript to a follower, either the Obsidian plugin or [`shorthand-core`](https://github.com/mshish/shorthand-core), and the follower asks that assistant to keep the written note up to date as you talk. The assistant is a command-line tool you install and sign in to yourself.
 
-This is where the saving is, and it is not widely known: **a paid Claude or ChatGPT subscription already includes one of these assistants.**
+A paid Claude or ChatGPT subscription already includes one:
 
-- A Claude subscription (Pro or Max) includes **Claude Code**.
-- A ChatGPT subscription (Plus or Pro) includes **Codex**.
+- A Claude subscription (Pro or Max) includes Claude Code.
+- A ChatGPT subscription (Plus or Pro) includes Codex.
 
 Shorthand uses whichever one you are signed in to, so your notes are covered by the subscription you already pay for. There is no API key to create and no per-token bill.
 
-Set this up **before** your first capture:
+Set this up before your first capture:
 
 1. Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup) or [Codex](https://github.com/openai/codex).
 2. Run `claude` (or `codex`) once in a terminal and finish signing in.
@@ -43,9 +43,15 @@ Set this up **before** your first capture:
 
 Claude Code is the default. Core takes `--backend codex` for Codex, and `--backend llm` for an API-key provider (OpenAI, Anthropic, Ollama, or another OpenAI-compatible endpoint) if you would rather pay per token.
 
-Without a signed-in assistant, recording and transcription still work — it is the note writing that fails.
+Shorthand's own AI cleanup, under Modes then Advanced, is a separate feature that calls an API provider with a key you supply. It is not part of this path.
 
-Shorthand's own AI cleanup, under Modes → Advanced, is a separate feature that calls an API provider with a key you supply. It is not part of this path.
+Without a signed-in assistant, recording and transcription still work, but no note is written.
+
+### What is kept
+
+Meeting mode saves no recording and no transcript by default, because a meeting can include people who did not choose to be recorded. Assisted notes captures only your own microphone, so it keeps both; either can be turned off under Modes.
+
+The assistant's session history is deleted when the capture ends. Core uses a resumable Claude or Codex session as memory for one capture and then disposes of it: the Claude backend deletes the session through the Agent SDK, and the Codex backend throws away the temporary home it ran in. Keeping that history is an advanced opt-in, off by default. This covers the copy on your machine, not the provider's own usage and billing records.
 
 ## Obsidian notes
 
@@ -77,13 +83,17 @@ bun run tauri build
 
 ### macOS
 
-There is no published macOS build yet, so this is the only way to run Shorthand on a Mac. Nothing about it needs an Apple developer account — the same `bun run tauri build` produces an unsigned `.dmg` and an ad-hoc signed `.app`, which is enough to run on the machine that built it.
+There is no published macOS build yet, so this is the only way to run Shorthand on a Mac, and none of it needs an Apple developer account. `bun run tauri build` produces an unsigned `.dmg` and an ad-hoc signed `.app`, which is enough to run on the machine that built it.
 
-Three things worth knowing:
+Leave `TAURI_SIGNING_PRIVATE_KEY` unset. It exists for update signing in CI, and a value that is present but empty fails the build rather than skipping the step.
 
-- Leave `TAURI_SIGNING_PRIVATE_KEY` unset. It exists for update signing in CI, and a value that is present but empty fails the build rather than skipping the step.
-- A build copied to a different Mac arrives quarantined. Clear it once with `xattr -dr com.apple.quarantine /Applications/Shorthand.app`.
-- Intel Macs need ONNX Runtime from Homebrew and two environment variables; [BUILD.md](BUILD.md#macos) has the exact command.
+A build copied to a different Mac arrives quarantined. Clear it once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Shorthand.app
+```
+
+Intel Macs need ONNX Runtime from Homebrew and two environment variables; [BUILD.md](BUILD.md#macos) has the exact command.
 
 For just the binary, without bundling an installer:
 
