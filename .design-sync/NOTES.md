@@ -61,14 +61,14 @@ the alternative and is worse — it bakes one machine's layout into the artifact
 
 ## Known render warns
 
-Both are expected; a warn *not* listed here is new.
+Both are expected; a warn _not_ listed here is new.
 
 - **`[FONT_MISSING]` for "Atkinson Hyperlegible Next", "Fraunces", "Source Code
   Pro"** — false positive, and **not** an accepted substitution. The stacks in
-  `brand/theme.css` lead with the *Variable* family names, and those three
+  `brand/theme.css` lead with the _Variable_ family names, and those three
   (`Atkinson Hyperlegible Next Variable`, `Fraunces Variable`, `Source Code Pro
-  Variable`) do ship as `@font-face` in `fonts/`. The flagged names are the
-  static-family fallbacks listed *after* them. Nothing renders in a system font.
+Variable`) do ship as `@font-face` in `fonts/`. The flagged names are the
+  static-family fallbacks listed _after_ them. Nothing renders in a system font.
   Verified by comparing `fonts/fonts.css` family names against the `--brand-font-*`
   stacks.
 - **`tokens: 1 missing`** — below the converter's own threshold, unchanged since
@@ -78,7 +78,7 @@ Both are expected; a warn *not* listed here is new.
 
 - **No dark-ground story for `ShorthandWordmark`.** Its cream-inked variant is
   chosen by CSS from `:root[data-theme]` / `prefers-color-scheme`
-  (`.sh-wordmark-*` in `brand/marks.css`), so a dark panel *inside* one card
+  (`.sh-wordmark-*` in `brand/marks.css`), so a dark panel _inside_ one card
   would still show the navy variant and misrepresent the component. Documented
   in its `.md` instead. To see it, switch the whole preview to dark.
 - `Button`'s variant sweep is a fixed `grid-cols-4`, not `flex-wrap` — seven
@@ -88,7 +88,7 @@ Both are expected; a warn *not* listed here is new.
   cell and the product card cropped them. Column mode gives each story the full
   card width.
 - `.design-sync/docs/*.md` exist because the synthesized `.prompt.md` spliced
-  each example onto the *next* export's JSDoc. Their frontmatter `category` also
+  each example onto the _next_ export's JSDoc. Their frontmatter `category` also
   supplies the groups (Brand, Actions); without them everything lands in
   `general`.
 - `cfg.dtsPropsFor` is not optional here. With no `.d.ts` tree to extract from,

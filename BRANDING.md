@@ -292,16 +292,16 @@ and keeps future merges cheap.
 
 The approved source pack is in `brand-assets/`:
 
-| File                                      | Authority                                                                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `direction.md`                            | the bird/pen story and why each colour exists                                                                                                                 |
-| `colours.md`                              | production token values, usage rules and measured WCAG ratios                                                                                                 |
-| `FONT.md`                                 | Fraunces, Source Code Pro and the surviving live-type settings                                                                                                |
-| `mark-silhouette.svg`                     | source of truth for the one-colour mark                                                                                                                       |
-| `mark-full-colour-transparent.png`        | source of truth for the coloured bird-and-pen mark on its own, for uses without the product name                                                              |
-| `wordmark-full-colour.png`                | the word and its coral swash alone — superseded as the lockup source by `logo-full-colour-transparent.png`, kept as the delivered word-only artwork           |
-| `wordmark-full-colour-no-stroke.png`      | the same word without the swash — delivered alongside it, currently unused; the shipped lockup wants the swash                                                |
-| `logo-full-colour-transparent.png`/`.svg` | **source of truth for the shipped lockup**; `gen-brand-wordmark.mjs` derives both theme variants from it. The nib-into-S interlock exists only here          |
+| File                                      | Authority                                                                                                                                           |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `direction.md`                            | the bird/pen story and why each colour exists                                                                                                       |
+| `colours.md`                              | production token values, usage rules and measured WCAG ratios                                                                                       |
+| `FONT.md`                                 | Fraunces, Source Code Pro and the surviving live-type settings                                                                                      |
+| `mark-silhouette.svg`                     | source of truth for the one-colour mark                                                                                                             |
+| `mark-full-colour-transparent.png`        | source of truth for the coloured bird-and-pen mark on its own, for uses without the product name                                                    |
+| `wordmark-full-colour.png`                | the word and its coral swash alone — superseded as the lockup source by `logo-full-colour-transparent.png`, kept as the delivered word-only artwork |
+| `wordmark-full-colour-no-stroke.png`      | the same word without the swash — delivered alongside it, currently unused; the shipped lockup wants the swash                                      |
+| `logo-full-colour-transparent.png`/`.svg` | **source of truth for the shipped lockup**; `gen-brand-wordmark.mjs` derives both theme variants from it. The nib-into-S interlock exists only here |
 
 The fork-owned implementation is in `src/shorthand/brand/`:
 

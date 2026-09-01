@@ -20,7 +20,14 @@
  *    cannot be pasted back into the app.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,7 +37,15 @@ const ENTRY = join(HERE, "tailwind-entry.css");
 const OUT_DIR = join(HERE, "build");
 const OUT = join(OUT_DIR, "shorthand-ds.css");
 const FILES_DIR = join(OUT_DIR, "files");
-const CLI = join(ROOT, ".ds-sync", "node_modules", "@tailwindcss", "cli", "dist", "index.mjs");
+const CLI = join(
+  ROOT,
+  ".ds-sync",
+  "node_modules",
+  "@tailwindcss",
+  "cli",
+  "dist",
+  "index.mjs",
+);
 
 // The font packages the brand stylesheet imports. Kept as roots to search
 // rather than a filename list, because the exact subset Fontsource emits
@@ -41,10 +56,16 @@ const FONT_ROOTS = [
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
-execFileSync(process.execPath, [CLI, "-i", ENTRY, "-o", OUT], { stdio: "inherit" });
+execFileSync(process.execPath, [CLI, "-i", ENTRY, "-o", OUT], {
+  stdio: "inherit",
+});
 
 const css = readFileSync(OUT, "utf8");
-const wanted = [...new Set([...css.matchAll(/url\(\.\/files\/([^)"']+)\)/g)].map((m) => m[1]))];
+const wanted = [
+  ...new Set(
+    [...css.matchAll(/url\(\.\/files\/([^)"']+)\)/g)].map((m) => m[1]),
+  ),
+];
 
 function findFile(root, name) {
   if (!safeStat(root)?.isDirectory()) return null;
@@ -83,8 +104,12 @@ for (const name of wanted) {
   cpSync(src, join(FILES_DIR, name));
 }
 
-console.error(`css: ${(css.length / 1024).toFixed(0)}KB, fonts: ${wanted.length - missing.length}/${wanted.length}`);
+console.error(
+  `css: ${(css.length / 1024).toFixed(0)}KB, fonts: ${wanted.length - missing.length}/${wanted.length}`,
+);
 if (missing.length) {
-  console.error(`! font files not found in node_modules: ${missing.join(", ")}`);
+  console.error(
+    `! font files not found in node_modules: ${missing.join(", ")}`,
+  );
   process.exit(1);
 }

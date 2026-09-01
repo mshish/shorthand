@@ -2,7 +2,7 @@
 
 Shorthand is an offline speech-to-text desktop app. Its identity is a clay bird
 carrying a fountain pen: a fleeting voice, committed to the page. Ink blue is
-the written-confidence colour, coral is the one thing happening *now*, and the
+the written-confidence colour, coral is the one thing happening _now_, and the
 ground is warm paper rather than white — the interface should feel written-on,
 not displayed-on.
 
@@ -31,17 +31,17 @@ Tailwind, so `bg-`, `text-`, `border-` and `ring-` take these token names —
 and only these. There is no `bg-blue-600` in this system's vocabulary; reaching
 for a stock Tailwind palette colour is how a page stops looking like Shorthand.
 
-| Class root | Token | What it is |
-| --- | --- | --- |
-| `background` | `--color-background` | The paper. `#faf5ea` light, `#111820` night. Page and section grounds. |
-| `text` | `--color-text` | Body ink. Blue-black `#14202b` / cream `#f6f1e8`. 15.19:1 on paper. |
-| `mid-gray` | `--color-mid-gray` | Secondary text. Theme-flipping, and cleared for 4.5:1 in both. |
-| `logo-primary` | `--color-logo-primary` | Ocean-blue accent. `#0b5f8a` light, `#63b7d6` night. Foreground, focus ring, and tints (`/20`, `/30`). |
-| `logo-stroke` | `--color-logo-stroke` | The accent's partner edge. Pair it with `logo-primary` from the same theme; never use it as body ink. |
-| `background-ui` | `--color-background-ui` | Ink at full strength, `#2e6f9e`, theme-invariant. The primary action fill. **Carries white text only.** |
-| `highlighter` | `--brand-highlighter` | Coral `#f3673c`. Means "happening now" — never a warning, never a success. |
-| `highlighter-ink` | `--brand-highlighter-ink` | The only text colour permitted on coral. |
-| `warning` / `error` | `--color-warning` / `--color-error` | Semantic status. Not brand emphasis. |
+| Class root          | Token                               | What it is                                                                                              |
+| ------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `background`        | `--color-background`                | The paper. `#faf5ea` light, `#111820` night. Page and section grounds.                                  |
+| `text`              | `--color-text`                      | Body ink. Blue-black `#14202b` / cream `#f6f1e8`. 15.19:1 on paper.                                     |
+| `mid-gray`          | `--color-mid-gray`                  | Secondary text. Theme-flipping, and cleared for 4.5:1 in both.                                          |
+| `logo-primary`      | `--color-logo-primary`              | Ocean-blue accent. `#0b5f8a` light, `#63b7d6` night. Foreground, focus ring, and tints (`/20`, `/30`).  |
+| `logo-stroke`       | `--color-logo-stroke`               | The accent's partner edge. Pair it with `logo-primary` from the same theme; never use it as body ink.   |
+| `background-ui`     | `--color-background-ui`             | Ink at full strength, `#2e6f9e`, theme-invariant. The primary action fill. **Carries white text only.** |
+| `highlighter`       | `--brand-highlighter`               | Coral `#f3673c`. Means "happening now" — never a warning, never a success.                              |
+| `highlighter-ink`   | `--brand-highlighter-ink`           | The only text colour permitted on coral.                                                                |
+| `warning` / `error` | `--color-warning` / `--color-error` | Semantic status. Not brand emphasis.                                                                    |
 
 Opacity modifiers work as usual (`bg-logo-primary/20`, `border-mid-gray/20`) and
 are how this system builds tints and hairlines.
@@ -108,7 +108,9 @@ scale to `text-9xl`, `max-w-*`, borders, shadows, opacity, transitions, and the
     </p>
     <div className="mt-10 flex flex-wrap justify-center gap-3">
       <Button size="lg">Download for macOS</Button>
-      <Button size="lg" variant="ghost">See how it works</Button>
+      <Button size="lg" variant="ghost">
+        See how it works
+      </Button>
     </div>
   </div>
 </section>

@@ -17,10 +17,7 @@
   },
   "cssEntry": ".design-sync/build/shorthand-ds.css",
   "docsDir": ".design-sync/docs",
-  "guidelinesGlob": [
-    "BRANDING.md",
-    "BRAND_BRIEF.md"
-  ],
+  "guidelinesGlob": ["BRANDING.md", "BRAND_BRIEF.md"],
   "readmeHeader": ".design-sync/conventions.md",
   "overrides": {
     "ShorthandWordmark": {
