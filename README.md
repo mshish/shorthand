@@ -119,13 +119,26 @@ Run `shorthand --help` to see every option. Common controls include:
 | ------------------------- | --------------------------------------------------------- |
 | `--toggle-transcription`  | Start or stop recording                                   |
 | `--toggle-assisted-notes` | Start or stop assisted notes                              |
+| `--start-assisted-notes`  | Start assisted notes; succeeds if already started         |
+| `--stop-assisted-notes`   | Stop assisted notes; succeeds if already stopped          |
 | `--cancel`                | Cancel the current recording                              |
 | `--follow-stream [MODE]`  | Read live transcript events as `json`, `delta`, or `text` |
 | `--start-hidden`          | Start in the system tray                                  |
 | `--no-tray`               | Run without a tray icon                                   |
 | `--debug`                 | Turn on verbose logging                                   |
 
-The full live transcript protocol is documented in [FOLLOW_STREAM.md](FOLLOW_STREAM.md).
+Prefer `--start-assisted-notes` / `--stop-assisted-notes` over the toggle in
+scripts and integrations. A toggle flips state on every delivery, so a caller
+that retries one because it never saw a confirmation can stop the very capture
+it meant to confirm. The explicit pair is idempotent: starting what is already
+started, or stopping what is already stopped, succeeds and changes nothing.
+`--toggle-assisted-notes` remains for interactive use, where you can see what
+happened.
+
+Each explicit command reports its outcome on any attached `--follow-stream`
+connection, so a caller can tell "started" from "declined, because that mode is
+switched off" rather than inferring it from a timeout. The full live transcript
+protocol is documented in [FOLLOW_STREAM.md](FOLLOW_STREAM.md).
 
 ## Contributing
 
