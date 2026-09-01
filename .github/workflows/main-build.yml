@@ -38,20 +38,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is deliberately absent. This fork's repository is private, so
-          # Actions minutes come out of the account quota, and GitHub bills macOS
-          # runners at a 10x multiplier — two full Tauri release builds on every
-          # push to main is enough to exhaust a monthly allowance in a handful of
-          # merges. Build macOS on demand instead: run the "Build Test" workflow
-          # (build-test.yml), which covers all seven platforms via
-          # workflow_dispatch, or "PR Test Build" for a specific PR.
+          # macOS was absent while this repository was private, because Actions
+          # minutes came out of the account quota and GitHub bills macOS runners
+          # at a 10x multiplier. The repository is public now, and GitHub does
+          # not bill public repositories for standard runners at all, so the
+          # reason is gone and macOS builds on every push and pull request like
+          # every other platform.
           #
-          # This is a cost decision, not a support decision — macOS is a
-          # supported target and release.yml still builds it. If the repository
-          # becomes public, or a cheaper check-only macOS job lands (see
-          # docs/superpowers/plans/2026-08-28-plan-d-ci-verification-gaps.md),
-          # revisit this.
+          # Both rows run on arm64 runners; the Intel row cross-compiles. There
+          # are no Intel macOS runners left to build on natively.
           #
+          # These artifacts are unsigned — no Apple certificate exists — so a
+          # downloaded .app is quarantined and needs
+          # `xattr -dr com.apple.quarantine <app>` or Open Anyway under Privacy
+          # & Security. That is the same bargain as the unsigned Windows
+          # installers here: main builds are 30-day testing artifacts, not
+          # releases.
+          - platform: "macos-26" # arm64, and the Apple Intelligence SDK.
+            args: "--target aarch64-apple-darwin"
+            target: "aarch64-apple-darwin"
+          - platform: "macos-latest" # Intel binaries, cross-compiled from arm64.
+            args: "--target x86_64-apple-darwin"
+            target: "x86_64-apple-darwin"
           # ubuntu-22.04 is out because libspa fails to compile against the
           # libpipewire headers 22.04 ships (7 errors). The fork's system-audio
           # capture needs a newer libpipewire; ubuntu-24.04 builds it fine and

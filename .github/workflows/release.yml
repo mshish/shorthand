@@ -52,14 +52,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is out of the release matrix until Apple signing credentials
-          # exist. It would now build -- build.yml leaves the Apple variables
-          # genuinely unset when sign-binaries is off, so the bundler no longer
-          # dies in `security import` -- but an unsigned .app is quarantined on
-          # download and needs `xattr -dr com.apple.quarantine` before it will
-          # open, which is not a release we want to hand to anyone. Add the two
-          # macOS rows back once there is a Developer ID certificate to sign with.
+          # macOS ships unsigned, deliberately. There is no Developer ID
+          # certificate, so a downloaded .app is quarantined and will not open
+          # until the user runs `xattr -dr com.apple.quarantine <app>` or picks
+          # Open Anyway under Privacy & Security. Shipping that is a worse first
+          # run than Windows SmartScreen, and it is still better than shipping
+          # nothing: a Mac user who is willing to run one command can now use
+          # Shorthand without a Rust toolchain. The README says so plainly, and
+          # says the builds are untested. Drop the incantation the day a
+          # certificate exists — sign-binaries below is the only switch.
           #
+          # Both rows run on arm64 runners; the Intel row cross-compiles. There
+          # are no Intel macOS runners left to build on natively.
+          - platform: "macos-26" # arm64, and the Apple Intelligence SDK.
+            args: "--target aarch64-apple-darwin"
+            target: "aarch64-apple-darwin"
+          - platform: "macos-latest" # Intel binaries, cross-compiled from arm64.
+            args: "--target x86_64-apple-darwin"
+            target: "x86_64-apple-darwin"
           # ubuntu-22.04 is out because libspa fails to compile against the
           # libpipewire headers 22.04 ships (7 errors). The fork's system-audio
           # capture needs a newer libpipewire; ubuntu-24.04 builds it fine and still

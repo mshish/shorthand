@@ -17,10 +17,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-26" # for Arm based macs (M1 and above). Uses macOS 26 for Apple Intelligence SDK.
+          - platform: "macos-26" # arm64, and the Apple Intelligence SDK.
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
-          - platform: "macos-latest" # for Intel based macs.
+          # Intel binaries, cross-compiled from an arm64 runner. There are no
+          # Intel macOS runners left to build on natively.
+          - platform: "macos-latest"
             args: "--target x86_64-apple-darwin"
             target: "x86_64-apple-darwin"
           # ubuntu-22.04 is out because libspa fails to compile against the

@@ -77,11 +77,13 @@ These settings cover files on your computer. Your selected AI provider may keep 
 
 ## Platform status
 
-Published Windows and Linux builds are available on the [Releases page](../../releases).
+Published Windows, Linux, and macOS builds are available on the [Releases page](../../releases).
 
 - **Windows:** Tested. Installers are unsigned, so SmartScreen warns on first install.
 - **Linux:** Builds are published but have not been tested yet.
-- **macOS:** No release build is published yet because Shorthand does not have an Apple signing certificate. macOS 14.6 or later can [build Shorthand from source](BUILD.md#macos).
+- **macOS:** Builds are published but have not been tested yet. They are also unsigned, because Shorthand does not have an Apple signing certificate, so macOS quarantines the downloaded app. Clear it once with `xattr -dr com.apple.quarantine /Applications/Shorthand.app`, or open the app from **Privacy & Security** in System Settings. macOS 14.6 or later is required. You can also [build from source](BUILD.md#macos).
+
+Reports and pull requests for the untested platforms are welcome.
 
 For transcription models, permissions, platform notes, and troubleshooting inherited from Handy, see [HANDY.md](HANDY.md).
 
@@ -108,7 +110,7 @@ Use `bun run tauri build --no-bundle` when you need the release binary without a
 
 ### macOS development
 
-There is no published macOS build yet. Building locally produces an unsigned `.dmg` and an ad-hoc signed `.app`, which can run on the Mac that built it without an Apple developer account.
+Building locally produces an unsigned `.dmg` and an ad-hoc signed `.app`, which can run on the Mac that built it without an Apple developer account.
 
 Leave `TAURI_SIGNING_PRIVATE_KEY` unset. An empty value still asks Tauri to sign the build and causes it to fail. A build copied to another Mac arrives quarantined; clear it once with:
 
