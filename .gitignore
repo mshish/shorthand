@@ -48,3 +48,12 @@ __pycache__/
 
 # Local git worktrees (SDD scratch)
 .worktrees/
+
+# design-sync: staged converter, its build output, and machine-local state.
+# The durable inputs (config, notes, conventions, previews, docs) are committed.
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/build/

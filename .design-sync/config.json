@@ -1,0 +1,25 @@
+{
+  "pkg": "shorthand-app",
+  "globalName": "Shorthand",
+  "projectId": "17aeefc2-32c3-499e-8957-131771d2a69c",
+  "shape": "package",
+  "srcDir": "src",
+  "tsconfig": "tsconfig.json",
+  "componentSrcMap": {
+    "Button": "src/components/ui/Button.tsx",
+    "ShorthandMark": "src/shorthand/brand/ShorthandMark.tsx",
+    "ShorthandWordmark": "src/shorthand/brand/ShorthandWordmark.tsx"
+  },
+  "dtsPropsFor": {
+    "Button": "variant?: \"primary\" | \"primary-soft\" | \"secondary\" | \"warning\" | \"danger\" | \"danger-ghost\" | \"ghost\";\n  size?: \"sm\" | \"md\" | \"lg\";\n  children?: React.ReactNode;\n  className?: string;\n  disabled?: boolean;\n  type?: \"button\" | \"submit\" | \"reset\";\n  onClick?: React.MouseEventHandler<HTMLButtonElement>;\n  [key: string]: unknown;",
+    "ShorthandMark": "/** Convenience for the square case; sets both width and height. */\n  size?: number | string;\n  width?: number | string;\n  height?: number | string;\n  className?: string;\n  style?: React.CSSProperties;\n  [key: string]: unknown;",
+    "ShorthandWordmark": "/** Cap height of the word in px. The mark and swash scale from it, so the rendered element is roughly 3x taller. */\n  height?: number;\n  className?: string;"
+  },
+  "cssEntry": ".design-sync/build/shorthand-ds.css",
+  "docsDir": ".design-sync/docs",
+  "guidelinesGlob": [
+    "BRANDING.md",
+    "BRAND_BRIEF.md"
+  ],
+  "readmeHeader": ".design-sync/conventions.md"
+}
