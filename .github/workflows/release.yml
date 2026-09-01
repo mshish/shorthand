@@ -10,6 +10,7 @@ jobs:
     outputs:
       release-id: ${{ steps.create-release.outputs.result }}
       version: ${{ steps.get-version.outputs.version }}
+      tag: ${{ steps.get-version.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -21,6 +22,11 @@ jobs:
           VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version from tauri.conf.json: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # The one place the tag is spelled. The release below and the
+          # `latest.json` tauri-action writes in build.yml both read it from
+          # here, because when they each derived it themselves they disagreed
+          # and every updater download URL 404'd.
+          echo "tag=shorthand-v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create Draft Release
         id: create-release
@@ -30,7 +36,7 @@ jobs:
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: `shorthand-v${{ steps.get-version.outputs.version }}`,
+              tag_name: `${{ steps.get-version.outputs.tag }}`,
               name: `Shorthand v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
@@ -81,6 +87,7 @@ jobs:
       asset-prefix: "shorthand"
       upload-artifacts: false
       release-id: ${{ needs.create-release.outputs.release-id }}
+      release-tag: ${{ needs.create-release.outputs.tag }}
       # Releases always build from scratch — never restore the Rust cache, so a
       # stale cached native lib can never be linked into a shipped artifact.
       no-cache: true

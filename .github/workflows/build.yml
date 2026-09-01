@@ -16,6 +16,17 @@ on:
       release-id:
         required: false
         type: string
+      release-tag:
+        # The tag of the release `release-id` names. Passed in rather than
+        # rebuilt from the version here: tauri-action writes this value into
+        # every download URL in `latest.json`, so a spelling that disagrees
+        # with the release's actual tag produces a manifest whose every URL is
+        # a 404. That is exactly what shipped -- this job said `v0.2.0` while
+        # the release was tagged `shorthand-v0.2.0`, and the in-app updater
+        # offered an update it could never download. One caller, one tag.
+        required: false
+        type: string
+        default: ""
       asset-prefix:
         required: false
         type: string
@@ -633,8 +644,8 @@ jobs:
           # X-AppImage-Version for desktop integration tools such as Gear Lever.
           LINUXDEPLOY_OUTPUT_VERSION: ${{ contains(inputs.platform, 'ubuntu') && steps.get-version.outputs.version || '' }}
         with:
-          tagName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
-          releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
+          tagName: ${{ inputs.release-id && inputs.release-tag || '' }}
+          releaseName: ${{ inputs.release-id && inputs.release-tag || '' }}
           releaseId: ${{ inputs.release-id }}
           assetNamePattern: ${{ steps.patch-release-name.outputs.platform }}
           args: ${{ steps.tauri-args.outputs.args }}
