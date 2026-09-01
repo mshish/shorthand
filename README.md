@@ -1,67 +1,95 @@
 # Shorthand
 
-Shorthand turns speech into text on your computer. It can transcribe your microphone and the audio from a meeting, label them separately, and share the live transcript with tools such as the [Shorthand Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin).
+Shorthand is AI-assisted note taking for meetings and spoken thinking. It listens while you talk, transcribes the audio on your computer, and keeps a structured Obsidian note up to date throughout the conversation.
 
-Transcription runs on your machine, so your audio never leaves it. Turning a transcript into a written note is a separate step that uses an AI assistant. Shorthand drives the Claude Code or Codex CLI you are already signed in to, so note taking comes out of a subscription you already pay for rather than a per-token API bill. See [AI note taking](#ai-note-taking).
+- **Meeting notes:** Capture your microphone and meeting audio as separate speakers, then turn both sides of the conversation into one useful note.
+- **Assisted notes:** Talk through an idea, plan, or rough draft and let Shorthand organize it as you go.
+- **Your notes stay yours:** The plugin updates only its marked section. Anything you write outside that section stays untouched.
 
-Shorthand is a fork of [Handy](https://github.com/cjpais/Handy), so it includes Handy's local dictation and transcription features.
+The desktop app also includes all of [Handy](https://github.com/cjpais/Handy)'s local transcription and dictation features, including keyboard-shortcut dictation, local model choices, history, and audio controls.
 
-## Install
+## Use your existing AI subscription
 
-Published Windows and Linux builds appear on the [Releases page](../../releases).
+Shorthand can write notes with:
 
-Only Windows has been tested so far. The Linux builds are published but untried. macOS is not in the release build at all, because there is no Apple signing certificate yet, so macOS users need to [build from source](#macos) for now. Shorthand needs macOS 14.6 or later.
+- **Claude Code**, included with Claude Pro and Max subscriptions.
+- **Codex**, included with ChatGPT plans, including Plus and Pro.
+- **An LLM provider**, including OpenAI, Anthropic, Ollama, or another OpenAI-compatible endpoint.
 
-Installers are unsigned. Windows SmartScreen warns the first time; choose More info, then Run anyway.
+With Claude Code or Codex, install the command-line app once and sign in. The [Shorthand Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin) uses that login, so AI-assisted notes can use the subscription you already pay for without a separate API key or API billing account.
 
-## What you can do
+You can also connect an LLM provider if you prefer an API key, a local model, or your own endpoint. Recording and transcription still work without an AI connection.
 
-- Dictate into any app with a keyboard shortcut.
-- Capture your microphone and meeting audio as separate speakers.
-- Choose a local transcription model that fits your computer.
-- Stream a live transcript to another program with [`--follow-stream`](FOLLOW_STREAM.md).
-- Use assisted notes to speak freely while another program maintains the note.
+## Quick start
 
-Shorthand builds and runs on Windows, macOS, and Linux; [Install](#install) says what is tested today. See [HANDY.md](HANDY.md) for model choices, permissions, and troubleshooting that still apply from Handy.
+This walkthrough covers Windows and desktop Obsidian, the combination tested today.
 
-## AI note taking
+1. **Install the Shorthand desktop app.**
 
-Dictation and transcription need nothing else installed. Note taking needs an AI assistant. Assisted notes and meeting notes stream the live transcript to a follower, either the Obsidian plugin or [`shorthand-core`](https://github.com/mshish/shorthand-core), and the follower asks that assistant to keep the written note up to date as you talk. The assistant is a command-line tool you install and sign in to yourself.
+   - Download the Windows installer from the [latest release](../../releases/latest).
+   - Run the installer and open Shorthand.
+   - Follow the first-run setup to choose and download a transcription model.
+   - Windows SmartScreen may warn that the installer is unsigned. Select **More info**, then **Run anyway**.
 
-A paid Claude or ChatGPT subscription already includes one:
+2. **Install the Obsidian plugin with BRAT.**
 
-- A Claude subscription (Pro or Max) includes Claude Code.
-- A ChatGPT subscription (Plus or Pro) includes Codex.
+   1. In Obsidian, open **Settings → Community plugins → Browse**.
+   2. Find **Obsidian42 - BRAT**, then install and enable it.
+   3. Open the command palette and run **Add a beta plugin for testing**.
+   4. Paste `https://github.com/mshish/shorthand-obsidian-plugin` and add the plugin.
+   5. Return to **Settings → Community plugins** and enable **Shorthand**.
 
-Shorthand uses whichever one you are signed in to, so your notes are covered by the subscription you already pay for. There is no API key to create and no per-token bill.
+3. **Choose how Shorthand writes your notes.** Open the Shorthand plugin settings in Obsidian, find **Enhancement backend**, and choose one:
 
-Set this up before your first capture:
+   - **Claude Code (default):** Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup). Open PowerShell or Terminal, run `claude login`, and sign in with your Claude account.
+   - **Codex:** Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Open PowerShell or Terminal, run `codex login`, and sign in with your ChatGPT account.
+   - **LLM provider:** Enter the provider, model, endpoint, and API key if one is required.
 
-1. Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup) or [Codex](https://github.com/openai/codex).
-2. Run `claude` (or `codex`) once in a terminal and finish signing in.
-3. Then start assisted notes or meeting capture in Shorthand.
+4. **Create your first note.**
 
-Claude Code is the default. Core takes `--backend codex` for Codex, and `--backend llm` for an API-key provider (OpenAI, Anthropic, Ollama, or another OpenAI-compatible endpoint) if you would rather pay per token.
+   1. Keep the Shorthand desktop app running and open a Markdown note in Obsidian.
+   2. Open the command palette and run **Shorthand: Start meeting capture on this note**.
+   3. Talk normally. Shorthand transcribes the meeting and the plugin updates the note.
+   4. Run **Shorthand: Stop capture** when you finish.
 
-Shorthand's own AI cleanup, under Modes then Advanced, is a separate feature that calls an API provider with a key you supply. It is not part of this path.
+For a solo thinking session, enable **Assisted notes** under **Shorthand Settings → Modes → Notetaking**, then run **Shorthand: Start assisted notes capture on this note** in Obsidian.
 
-Without a signed-in assistant, recording and transcription still work, but no note is written.
+## How it works
 
-### What is kept
+| Part | What it does |
+| --- | --- |
+| Shorthand desktop app | Records your microphone and, in Meetings mode, can also capture computer audio. It transcribes both locally. |
+| Shorthand Obsidian plugin | Follows the live transcript and updates the note you chose. Your own writing stays outside the section managed by Shorthand. |
+| Claude Code, Codex, or an LLM endpoint | Turns the transcript and your existing note into a structured note. |
 
-Meeting mode saves no recording and no transcript by default, because a meeting can include people who did not choose to be recorded. Assisted notes captures only your own microphone, so it keeps both; either can be turned off under Modes.
+The desktop app and Obsidian plugin are separate installs. Keep Shorthand running during a capture; the plugin cannot record or transcribe audio by itself.
 
-The assistant's session history is deleted when the capture ends. Core uses a resumable Claude or Codex session as memory for one capture and then disposes of it: the Claude backend deletes the session through the Agent SDK, and the Codex backend throws away the temporary home it ran in. Keeping that history is an advanced opt-in, off by default. This covers the copy on your machine, not the provider's own usage and billing records.
+Audio stays on your computer for transcription. The note-writing AI receives the transcript and current note, not the recording.
 
-## Obsidian notes
+## What Shorthand keeps
 
-The [Shorthand Obsidian plugin](https://github.com/mshish/shorthand-obsidian-plugin) uses the live transcript to update a meeting note while you talk. Install the plugin separately and keep Shorthand running during capture.
+- **Meetings:** Recordings and transcripts are not saved by default.
+- **Assisted notes:** Recordings and transcripts are saved by default; you can turn either off under **Modes**.
+- **AI sessions:** Local Claude Code and Codex session history is deleted when the capture ends unless you enable the advanced history setting.
+- **Obsidian notes:** The plugin edits only the marked Shorthand section. The rest of the note remains yours.
 
-## Build from source
+These settings cover files on your computer. Your selected AI provider may keep its own usage and billing records.
 
-Install [Rust](https://rustup.rs/), [Bun](https://bun.sh/), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your operating system. [BUILD.md](BUILD.md) lists the required platform packages and known build issues.
+## Platform status
 
-Then install the dependencies and download the voice-activity model:
+Published Windows and Linux builds are available on the [Releases page](../../releases).
+
+- **Windows:** Tested. Installers are unsigned, so SmartScreen warns on first install.
+- **Linux:** Builds are published but have not been tested yet.
+- **macOS:** No release build is published yet because Shorthand does not have an Apple signing certificate. macOS 14.6 or later can [build Shorthand from source](BUILD.md#macos).
+
+For transcription models, permissions, platform notes, and troubleshooting inherited from Handy, see [HANDY.md](HANDY.md).
+
+## Development
+
+Install [Rust](https://rustup.rs/), [Bun](https://bun.sh/), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your operating system. [BUILD.md](BUILD.md) lists the platform packages and known build issues.
+
+Install dependencies and download the voice-activity model:
 
 ```sh
 bun install
@@ -69,37 +97,28 @@ mkdir -p src-tauri/resources/models
 curl --output src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.computer/silero_vad_v4.onnx
 ```
 
-Run the app in development:
+Run the app in development or build an installer:
 
 ```sh
 bun run tauri dev
-```
-
-Build an installer or application bundle:
-
-```sh
 bun run tauri build
 ```
 
-### macOS
+Use `bun run tauri build --no-bundle` when you need the release binary without an installer or application bundle.
 
-There is no published macOS build yet, so this is the only way to run Shorthand on a Mac, and none of it needs an Apple developer account. `bun run tauri build` produces an unsigned `.dmg` and an ad-hoc signed `.app`, which is enough to run on the machine that built it.
+### macOS development
 
-Leave `TAURI_SIGNING_PRIVATE_KEY` unset. It exists for update signing in CI, and a value that is present but empty fails the build rather than skipping the step.
+There is no published macOS build yet. Building locally produces an unsigned `.dmg` and an ad-hoc signed `.app`, which can run on the Mac that built it without an Apple developer account.
 
-A build copied to a different Mac arrives quarantined. Clear it once:
+Leave `TAURI_SIGNING_PRIVATE_KEY` unset. An empty value still asks Tauri to sign the build and causes it to fail. A build copied to another Mac arrives quarantined; clear it once with:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Shorthand.app
 ```
 
-Intel Macs need ONNX Runtime from Homebrew and two environment variables; [BUILD.md](BUILD.md#macos) has the exact command.
+Intel Macs need ONNX Runtime from Homebrew and two additional environment variables. [BUILD.md](BUILD.md#macos) has the commands.
 
-For just the binary, without bundling an installer:
-
-```sh
-bun run tauri build --no-bundle
-```
+### Checks
 
 Before opening a pull request, run the relevant checks:
 
@@ -108,16 +127,20 @@ bun run lint
 bun run format:check
 bun run test:unit
 bun run check:translations
+bun run check:locale-drift
+bun run check:fork-translations
 bun run check:branding
 ```
 
-## Command line
+### Command line and integrations
 
 Run `shorthand --help` to see every option. Common controls include:
 
 | Flag                      | What it does                                              |
 | ------------------------- | --------------------------------------------------------- |
-| `--toggle-transcription`  | Start or stop recording                                   |
+| `--toggle-transcription`  | Start or stop a meeting recording                         |
+| `--start-transcription`   | Start a meeting recording; succeeds if already started    |
+| `--stop-transcription`    | Stop a meeting recording; succeeds if already stopped     |
 | `--toggle-assisted-notes` | Start or stop assisted notes                              |
 | `--start-assisted-notes`  | Start assisted notes; succeeds if already started         |
 | `--stop-assisted-notes`   | Stop assisted notes; succeeds if already stopped          |
@@ -127,22 +150,13 @@ Run `shorthand --help` to see every option. Common controls include:
 | `--no-tray`               | Run without a tray icon                                   |
 | `--debug`                 | Turn on verbose logging                                   |
 
-Prefer `--start-assisted-notes` / `--stop-assisted-notes` over the toggle in
-scripts and integrations. A toggle flips state on every delivery, so a caller
-that retries one because it never saw a confirmation can stop the very capture
-it meant to confirm. The explicit pair is idempotent: starting what is already
-started, or stopping what is already stopped, succeeds and changes nothing.
-`--toggle-assisted-notes` remains for interactive use, where you can see what
-happened.
+Use the explicit start and stop pair for the mode you want in scripts and integrations. They are safe to retry; a toggle changes state on every delivery and is better suited to interactive use, where you can see what happened.
 
-Each explicit command reports its outcome on any attached `--follow-stream`
-connection, so a caller can tell "started" from "declined, because that mode is
-switched off" rather than inferring it from a timeout. The full live transcript
-protocol is documented in [FOLLOW_STREAM.md](FOLLOW_STREAM.md).
+Explicit commands report their outcome over an attached `--follow-stream` connection. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) documents the live transcript protocol, and [`shorthand-core`](https://github.com/mshish/shorthand-core) provides the shared follower and note-writing logic used by integrations.
 
-## Contributing
+### Contributing
 
-Open Shorthand changes against `main`. See [AGENTS.md](AGENTS.md) for the fork's branch and architecture guidance. [CONTRIBUTING.md](CONTRIBUTING.md) describes the separate process for changes sent to Handy.
+Open Shorthand changes against `main`. [AGENTS.md](AGENTS.md) covers the fork's branch and architecture guidance. [CONTRIBUTING.md](CONTRIBUTING.md) describes the separate process for changes sent to Handy.
 
 ## License
 
