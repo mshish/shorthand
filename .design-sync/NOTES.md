@@ -83,6 +83,10 @@ Both are expected; a warn *not* listed here is new.
   in its `.md` instead. To see it, switch the whole preview to dark.
 - `Button`'s variant sweep is a fixed `grid-cols-4`, not `flex-wrap` — seven
   items wrapped 6+1 and read as an accident.
+- `ShorthandWordmark` is `cardMode: "column"`. The lockup is 4.93 cap heights
+  wide, so `AtCapHeights` and `InAPageHeader` overflowed a multi-column grid
+  cell and the product card cropped them. Column mode gives each story the full
+  card width.
 - `.design-sync/docs/*.md` exist because the synthesized `.prompt.md` spliced
   each example onto the *next* export's JSDoc. Their frontmatter `category` also
   supplies the groups (Brand, Actions); without them everything lands in
@@ -123,9 +127,9 @@ re-verifies what actually changed.
 cannot grant. If a future run fails on that, the fix is `/design-login` once from
 an interactive Claude Code terminal; the authorization is then reused headlessly.
 
-**The brand rasters inline into the bundle as data URIs.** The wordmark artwork
-(`brand-assets/mark-full-colour-transparent.png` and the `MARK_ASPECT_RATIO`
-constant in `ShorthandWordmark.tsx`) changed mid-run, and only a full rebuild
-picked it up — esbuild's `.png` loader is `dataurl`, so the image lives inside
-`_ds_bundle.js`. Any change to those files means rebuild **and** re-upload;
-nothing downstream will notice on its own.
+**The brand rasters inline into the bundle as data URIs.** esbuild's `.png`
+loader is `dataurl`, so `logo-light.png` and `logo-dark.png` live inside
+`_ds_bundle.js`. Any change to the brand artwork means re-running
+`scripts/gen-brand-wordmark.mjs`, then a full design-sync rebuild **and**
+re-upload; nothing downstream notices on its own. This bit twice in one session
+— once when the mark PNG changed, once when the lockup was replaced.

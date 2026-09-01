@@ -13,7 +13,7 @@ stacked above the word "Shorthand" and its coral swash.
 
 This is the prop people get wrong. `height` is the cap height of the **word** in
 px; the mark above it and the swash below both scale from that. The rendered
-element is roughly 3× taller and about 4.3× wider than the number you pass,
+element is roughly 3.25× taller and 4.9× wider than the number you pass,
 because the artwork carries the swash and its surrounding air.
 
 So: size it by how big the word should read, then leave room around it. Do not

@@ -124,30 +124,44 @@ artwork changes, re-transcribe it; do not hand-tune either copy into a fork of
 the source of truth.
 
 **The full-colour clay render** (`brand-assets/mark-full-colour-transparent.png`)
-is what `ShorthandWordmark.tsx` actually places in the UI — the sidebar, and
-the onboarding/About lockup. An initial version reused the one-colour
-silhouette here too, reasoning that the word carrying the theme’s ink was
-enough colour for one lockup; the raster mark replaced it because the approved
-artwork’s own colour is part of what makes it read as the product’s identity
-rather than a generic line icon, and the illustration’s palette (ocean blue,
-coral, cream) doesn’t need to flip for the theme the way a silhouette’s ink
-does. The PNG is already tightly cropped to the drawing, so `ShorthandWordmark`
-sizes it by its own aspect ratio (845:498) rather than by measured bounds
-inside a viewBox, the way it sizes the silhouette elsewhere.
+is the bird and pen on their own, for the places that want the mark without the
+product name. An initial version reused the one-colour silhouette here too,
+reasoning that the word carrying the theme’s ink was enough colour for one
+lockup; the raster mark replaced it because the approved artwork’s own colour is
+part of what makes it read as the product’s identity rather than a generic line
+icon, and the illustration’s palette (ocean blue, coral, cream) doesn’t need to
+flip for the theme the way a silhouette’s ink does.
+
+It is **not** what the lockup is built from. `ShorthandWordmark.tsx` used to
+stack this crop above the separately-rendered word, sized against it by a pair
+of ratios. That could not reproduce the artwork’s actual composition, in which
+the pen’s nib flows into the S and the bird perches on the barrel: the pen ended
+where this crop ends, the S began separately below it, and the lockup read as a
+bird hovering over a word. Sizing two crops to meet convincingly is not a
+solvable problem — the interlock exists only in the composition — so the lockup
+now ships as the one delivered image (see below).
 
 The old `[mark]horthand` lockup substituted the written “s” for the initial S.
 Its argument was coherent — a separate bug beside “Shorthand” would print two
 S’s — but the approved artwork settled the question differently. The shipped
-lockup stacks the coloured bird and pen above the complete word **Shorthand**,
-with its coral swash beneath, matching the composition of the raster.
+lockup is the complete word **Shorthand** with the bird and pen above it and the
+coral swash beneath, exactly as the raster composes them.
 
-### The word is artwork, not type
+### The lockup is artwork, not type
 
-`brand-assets/wordmark-full-colour.png` is the approved clay render of the
-word and its swash, and it is what ships. `scripts/gen-brand-wordmark.mjs`
-derives the two assets the UI loads into `src/shorthand/brand/`:
-`wordmark-light.png` (the artwork, resized) and `wordmark-dark.png` (the same,
-with the ink remapped to cream).
+`brand-assets/logo-full-colour-transparent.png` is the approved clay render of
+the whole lockup, and it is what ships. `scripts/gen-brand-wordmark.mjs` derives
+the two assets the UI loads into `src/shorthand/brand/`: `logo-light.png` (the
+artwork, trimmed and resized) and `logo-dark.png` (the same, with the **word’s**
+ink remapped to cream).
+
+That emphasis is the one subtlety in the generator. The blue-dominance test that
+separates ink from the coral swash cannot tell the word’s navy from the bird’s
+blue body, so remapping by colour alone turns the bird cream. The two are
+separated vertically instead: the bird’s navy ends well above where the word’s
+begins, with a band of rows carrying neither between them. The generator finds
+that seam per run and fails loudly if it is not clearly there, rather than
+bleeding cream into the illustration.
 
 The word used to be live Fraunces type. That was never a type decision — it was
 a workaround for one problem: the artwork’s ink is a fixed navy, and fixed navy
@@ -284,10 +298,10 @@ The approved source pack is in `brand-assets/`:
 | `colours.md`                              | production token values, usage rules and measured WCAG ratios                                                                                                 |
 | `FONT.md`                                 | Fraunces, Source Code Pro and the surviving live-type settings                                                                                                |
 | `mark-silhouette.svg`                     | source of truth for the one-colour mark                                                                                                                       |
-| `mark-full-colour-transparent.png`        | source of truth for the coloured mark `ShorthandWordmark.tsx` renders                                                                                         |
-| `wordmark-full-colour.png`                | source of truth for the word and its coral swash; `gen-brand-wordmark.mjs` derives both theme variants from it                                                |
+| `mark-full-colour-transparent.png`        | source of truth for the coloured bird-and-pen mark on its own, for uses without the product name                                                              |
+| `wordmark-full-colour.png`                | the word and its coral swash alone — superseded as the lockup source by `logo-full-colour-transparent.png`, kept as the delivered word-only artwork           |
 | `wordmark-full-colour-no-stroke.png`      | the same word without the swash — delivered alongside it, currently unused; the shipped lockup wants the swash                                                |
-| `logo-full-colour-transparent.png`/`.svg` | the full lockup as delivered, mark and word composited together — reference only; the UI stacks the two separately so each can be sized and themed on its own |
+| `logo-full-colour-transparent.png`/`.svg` | **source of truth for the shipped lockup**; `gen-brand-wordmark.mjs` derives both theme variants from it. The nib-into-S interlock exists only here          |
 
 The fork-owned implementation is in `src/shorthand/brand/`:
 
@@ -296,9 +310,9 @@ The fork-owned implementation is in `src/shorthand/brand/`:
 | `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection                                                                                 |
 | `marks.css`             | The active-tab indicator and the wordmark's theme selection; all brand selectors                                                                 |
 | `ShorthandMark.tsx`     | Four-path silhouette component, filled with `currentColor` — used by the icon generator's reference, not currently placed directly in any screen |
-| `ShorthandWordmark.tsx` | Stacked lockup: the full-colour raster mark above the raster word                                                                                |
-| `wordmark-light.png`    | Generated: the approved word, resized. Do not hand-edit — re-run the generator                                                                   |
-| `wordmark-dark.png`     | Generated: the same word with its ink remapped to cream. Do not hand-edit                                                                        |
+| `ShorthandWordmark.tsx` | The delivered lockup as one raster, sized by the word's cap height                                                                               |
+| `logo-light.png`        | Generated: the approved lockup, trimmed and resized. Do not hand-edit — re-run the generator                                                     |
+| `logo-dark.png`         | Generated: the same lockup with the word's ink remapped to cream. Do not hand-edit                                                               |
 | `mark.paths.ts`         | Path data transcribed from the approved silhouette                                                                                               |
 | `mark.svg`              | Standalone approved silhouette read by the icon generator                                                                                        |
 
@@ -377,7 +391,7 @@ The mark itself is not generated. Change the source pack, then re-transcribe
 
 ```bash
 node scripts/gen-brand-icons.mjs     # node, not bun — app icon + every tray state
-node scripts/gen-brand-wordmark.mjs  # node, not bun — both wordmark variants
+node scripts/gen-brand-wordmark.mjs  # node, not bun — both lockup variants
 cd src-tauri && bun x tauri icon     # slices app-icon.png to every platform
 ```
 
@@ -386,13 +400,20 @@ scripts rasterise through Playwright’s Chromium, which is already a
 devDependency — deliberately avoiding a native image toolchain in a fork whose
 `package.json` has to stay mergeable.
 
-Re-run `gen-brand-wordmark.mjs` whenever `brand-assets/wordmark-full-colour.png`
-is re-rendered. It re-measures the artwork’s own ink range each run rather than
-assuming fixed values, so a re-render maps correctly without anyone editing
-constants — but it will fail loudly if the ink stops being blue-dominant, since
-the dark variant would silently come out identical to the light one. If the word
-is re-rendered at a different size, the ratios in `ShorthandWordmark.tsx` need
-re-measuring too; they are noted there with the numbers they came from.
+Re-run `gen-brand-wordmark.mjs` whenever
+`brand-assets/logo-full-colour-transparent.png` is re-rendered. It re-measures
+the artwork each run rather than assuming fixed values — the trim bounds, the
+seam between the bird’s blue and the word’s navy, the word’s own ink range, and
+the cap-height ratios — so a re-render maps correctly without anyone editing
+constants. It fails loudly in two cases rather than shipping something subtly
+wrong: if the ink stops being blue-dominant (the dark variant would come out
+identical to the light one), and if there is no longer a clear gap between bird
+and word (recolouring would bleed cream into the illustration).
+
+It prints the two cap-height ratios on every run. If the composition shifts,
+they change, and `ShorthandWordmark.tsx` needs the new numbers — that print is
+the reconciliation point, so a shifted lockup shows up as a value to update
+rather than as a silently mis-scaled logo.
 
 Every tray state draws the mark **84 units wide in a 64-unit frame,
 left-aligned, bleeding off the right edge.** That is deliberate, and it is the

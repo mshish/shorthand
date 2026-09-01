@@ -21,5 +21,10 @@
     "BRANDING.md",
     "BRAND_BRIEF.md"
   ],
-  "readmeHeader": ".design-sync/conventions.md"
+  "readmeHeader": ".design-sync/conventions.md",
+  "overrides": {
+    "ShorthandWordmark": {
+      "cardMode": "column"
+    }
+  }
 }
