@@ -25,14 +25,12 @@ You can also connect an LLM provider if you prefer an API key, a local model, or
 This walkthrough covers Windows and desktop Obsidian, the combination tested today.
 
 1. **Install the Shorthand desktop app.**
-
    - Download the Windows installer from the [latest release](../../releases/latest).
    - Run the installer and open Shorthand.
    - Follow the first-run setup to choose and download a transcription model.
    - Windows SmartScreen may warn that the installer is unsigned. Select **More info**, then **Run anyway**.
 
 2. **Install the Obsidian plugin with BRAT.**
-
    1. In Obsidian, open **Settings → Community plugins → Browse**.
    2. Find **Obsidian42 - BRAT**, then install and enable it.
    3. Open the command palette and run **Add a beta plugin for testing**.
@@ -40,13 +38,11 @@ This walkthrough covers Windows and desktop Obsidian, the combination tested tod
    5. Return to **Settings → Community plugins** and enable **Shorthand**.
 
 3. **Choose how Shorthand writes your notes.** Open the Shorthand plugin settings in Obsidian, find **Enhancement backend**, and choose one:
-
    - **Claude Code (default):** Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup). Open PowerShell or Terminal, run `claude login`, and sign in with your Claude account.
    - **Codex:** Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Open PowerShell or Terminal, run `codex login`, and sign in with your ChatGPT account.
    - **LLM provider:** Enter the provider, model, endpoint, and API key if one is required.
 
 4. **Create your first note.**
-
    1. Keep the Shorthand desktop app running and open a Markdown note in Obsidian.
    2. Open the command palette and run **Shorthand: Start meeting capture on this note**.
    3. Talk normally. Shorthand transcribes the meeting and the plugin updates the note.
@@ -56,11 +52,11 @@ For a solo thinking session, enable **Assisted notes** under **Shorthand Setting
 
 ## How it works
 
-| Part | What it does |
-| --- | --- |
-| Shorthand desktop app | Records your microphone and, in Meetings mode, can also capture computer audio. It transcribes both locally. |
-| Shorthand Obsidian plugin | Follows the live transcript and updates the note you chose. Your own writing stays outside the section managed by Shorthand. |
-| Claude Code, Codex, or an LLM endpoint | Turns the transcript and your existing note into a structured note. |
+| Part                                   | What it does                                                                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Shorthand desktop app                  | Records your microphone and, in Meetings mode, can also capture computer audio. It transcribes both locally.                 |
+| Shorthand Obsidian plugin              | Follows the live transcript and updates the note you chose. Your own writing stays outside the section managed by Shorthand. |
+| Claude Code, Codex, or an LLM endpoint | Turns the transcript and your existing note into a structured note.                                                          |
 
 The desktop app and Obsidian plugin are separate installs. Keep Shorthand running during a capture; the plugin cannot record or transcribe audio by itself.
 
@@ -77,11 +73,13 @@ These settings cover files on your computer. Your selected AI provider may keep 
 
 ## Platform status
 
-Published Windows and Linux builds are available on the [Releases page](../../releases).
+Published Windows, Linux, and macOS builds are available on the [Releases page](../../releases).
 
 - **Windows:** Tested. Installers are unsigned, so SmartScreen warns on first install.
 - **Linux:** Builds are published but have not been tested yet.
-- **macOS:** No release build is published yet because Shorthand does not have an Apple signing certificate. macOS 14.6 or later can [build Shorthand from source](BUILD.md#macos).
+- **macOS:** Builds are published but have not been tested yet. They are also unsigned, because Shorthand does not have an Apple signing certificate, so macOS quarantines the downloaded app. Clear it once with `xattr -dr com.apple.quarantine /Applications/Shorthand.app`, or open the app from **Privacy & Security** in System Settings. macOS 14.6 or later is required. You can also [build from source](BUILD.md#macos).
+
+Reports and pull requests for the untested platforms are welcome.
 
 For transcription models, permissions, platform notes, and troubleshooting inherited from Handy, see [HANDY.md](HANDY.md).
 
@@ -108,7 +106,7 @@ Use `bun run tauri build --no-bundle` when you need the release binary without a
 
 ### macOS development
 
-There is no published macOS build yet. Building locally produces an unsigned `.dmg` and an ad-hoc signed `.app`, which can run on the Mac that built it without an Apple developer account.
+Building locally produces an unsigned `.dmg` and an ad-hoc signed `.app`, which can run on the Mac that built it without an Apple developer account.
 
 Leave `TAURI_SIGNING_PRIVATE_KEY` unset. An empty value still asks Tauri to sign the build and causes it to fail. A build copied to another Mac arrives quarantined; clear it once with:
 

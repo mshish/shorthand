@@ -1,0 +1,127 @@
+/*
+ * Design-sync stylesheet entry. Fork-only, not imported by the app.
+ *
+ * Mirrors the token half of `src/App.css` — Tailwind, then upstream's palette,
+ * then the fork's values, then the `@theme inline` bridge that turns those
+ * custom properties into Tailwind colour utilities. The order is load-bearing
+ * and is the same order App.css uses: brand/theme.css re-declares values
+ * unlayered so they outrank Tailwind's own `@layer theme` copies.
+ *
+ * App.css's own selectors (.container, scrollbar chrome, the log surface) are
+ * deliberately left out — they are settings-window furniture, not brand.
+ *
+ * What this file adds over App.css is the `@source inline(...)` safelist below.
+ * Tailwind only emits utilities it finds in scanned markup, and the markup that
+ * will consume this sheet does not exist yet — it is written later, by the
+ * design agent, against a landing page. So the vocabulary a page needs is
+ * declared here explicitly rather than discovered.
+ */
+@import "tailwindcss";
+@import "../src/styles/theme.css";
+@import "../src/shorthand/brand/theme.css";
+@import "../src/shorthand/brand/marks.css";
+
+@theme inline {
+  --color-text: var(--color-text);
+  --color-background: var(--color-background);
+  --color-background-ui: var(--color-background-ui);
+  --color-logo-primary: var(--color-logo-primary);
+  --color-logo-stroke: var(--color-logo-stroke);
+  --color-text-stroke: var(--color-text-stroke);
+  --color-mid-gray: var(--color-mid-gray);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-error);
+
+  /* Fork-only, and absent from App.css's bridge because the app only ever uses
+     the coral as a raw `var()` in marks.css. A landing page needs it as a real
+     utility (`bg-highlighter`), so it is bridged here. Background only — see
+     the contract in brand/theme.css. */
+  --color-highlighter: var(--brand-highlighter);
+  --color-highlighter-ink: var(--brand-highlighter-ink);
+
+  /* The three brand faces as Tailwind font utilities. */
+  --font-sans: var(--brand-font-sans);
+  --font-display: var(--brand-font-display);
+  --font-mono: var(--brand-font-mono);
+}
+
+/* Fraunces is variable and its brand voice is a specific point in that space —
+   `opsz 72, SOFT 75, WONK 1` at weight 650. A bare family utility would render
+   it at defaults and lose the wonk, so the utility carries the settings. */
+@utility font-display {
+  font-family: var(--brand-font-display);
+  font-variation-settings: var(--brand-font-display-variation-settings);
+  font-weight: var(--brand-font-display-weight);
+}
+
+/* ---- Safelist ---------------------------------------------------------- */
+/* Colour: every bridged token across the four colour utilities, with the
+   opacity steps the app's own components use (Button reaches for /20 and /30)
+   and hover/focus states. */
+@source inline("{hover:,focus:,}{bg,text,border,ring}-{text,background,background-ui,logo-primary,logo-stroke,mid-gray,warning,error,highlighter,highlighter-ink,white,black,transparent,current}{,/5,/10,/20,/30,/40,/50,/60,/70,/80,/90}");
+
+/* Type scale, weights, leading, tracking, alignment — responsive, because a
+   landing page's headline sizes are the thing that most needs to change. */
+@source inline("{sm:,md:,lg:,xl:,}text-{xs,sm,base,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,8xl,9xl}");
+@source inline("font-{sans,display,mono}");
+@source inline("font-{thin,light,normal,medium,semibold,bold,extrabold,black}");
+@source inline("leading-{none,tight,snug,normal,relaxed,loose}");
+@source inline("tracking-{tighter,tight,normal,wide,wider,widest}");
+@source inline("{sm:,md:,lg:,}text-{left,center,right,justify}");
+@source inline("{uppercase,lowercase,capitalize,normal-case,italic,not-italic,underline,line-through,no-underline,text-balance,text-pretty,antialiased}");
+
+/* Layout. */
+@source inline("{sm:,md:,lg:,xl:,}{block,inline-block,inline,flex,inline-flex,grid,inline-grid,hidden,contents}");
+@source inline("{sm:,md:,lg:,xl:,}grid-cols-{1..12}");
+@source inline("{sm:,md:,lg:,xl:,}col-span-{1..12}");
+@source inline("{sm:,md:,lg:,}flex-{row,row-reverse,col,col-reverse,wrap,nowrap,1,auto,initial,none}");
+@source inline("{items,self}-{start,center,end,stretch,baseline}");
+@source inline("justify-{start,center,end,between,around,evenly}");
+@source inline("{sm:,md:,lg:,}{gap,gap-x,gap-y}-{0..16}");
+@source inline("order-{1..12}");
+
+/* Spacing. The 0-16 range covers ordinary rhythm; the sparse larger steps are
+   the section padding a landing page needs. */
+@source inline("{sm:,md:,lg:,}{p,px,py,pt,pr,pb,pl}-{0..16}");
+@source inline("{sm:,md:,lg:,}{p,px,py,pt,pr,pb,pl}-{20,24,28,32,40,48,56,64}");
+@source inline("{sm:,md:,lg:,}{m,mx,my,mt,mr,mb,ml}-{0..16}");
+@source inline("{m,mx,my,mt,mb}-auto");
+@source inline("{sm:,md:,lg:,}{space-x,space-y}-{0..12}");
+
+/* Sizing. */
+@source inline("{sm:,md:,lg:,}w-{0..16}");
+@source inline("{sm:,md:,lg:,}w-{auto,full,screen,min,max,fit,px,1/2,1/3,2/3,1/4,3/4,1/5,2/5,3/5,4/5,1/6,5/6,1/12,5/12,7/12,11/12}");
+@source inline("{sm:,md:,lg:,}h-{0..16}");
+@source inline("h-{auto,full,screen,min,max,fit,px}");
+@source inline("{sm:,md:,lg:,}max-w-{none,xs,sm,md,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,full,prose}");
+@source inline("{min-h,max-h}-{0,full,screen,min,max,fit}");
+@source inline("aspect-{auto,square,video}");
+@source inline("object-{cover,contain,center,top,bottom,left,right}");
+@source inline("bg-{cover,contain,center,no-repeat}");
+
+/* Borders, radii, rings, shadows. `rounded-full` is the fork's own mark shape —
+   see the geometry note in brand/theme.css. */
+@source inline("rounded{,-t,-r,-b,-l,-tl,-tr,-br,-bl}-{none,xs,sm,md,lg,xl,2xl,3xl,full}");
+@source inline("border{,-t,-r,-b,-l,-x,-y}-{0,2,4,8}");
+@source inline("{border,border-t,border-r,border-b,border-l,border-x,border-y}");
+@source inline("{hover:,focus:,}{ring,ring-offset}-{0,1,2,4,8}");
+@source inline("{shadow,drop-shadow}-{none,xs,sm,md,lg,xl,2xl}");
+@source inline("divide-{x,y}");
+
+/* Position, stacking, overflow. */
+@source inline("{static,relative,absolute,fixed,sticky}");
+@source inline("{inset,inset-x,inset-y,top,right,bottom,left}-{0,auto,px,1,2,4,6,8,12,16,full}");
+@source inline("z-{0,10,20,30,40,50,auto}");
+@source inline("overflow-{auto,hidden,visible,scroll,x-auto,y-auto,x-hidden,y-hidden}");
+@source inline("isolate");
+
+/* Effects and motion. */
+@source inline("{hover:,focus:,group-hover:,}opacity-{0,5,10,20,25,30,40,50,60,70,75,80,90,95,100}");
+@source inline("{transition,transition-colors,transition-opacity,transition-transform,transition-all}");
+@source inline("duration-{75,100,150,200,300,500,700,1000}");
+@source inline("ease-{linear,in,out,in-out}");
+@source inline("{hover:,}{scale,translate-x,translate-y}-{0,1,2,4,95,100,105,110}");
+@source inline("{cursor-pointer,cursor-default,cursor-not-allowed,select-none,pointer-events-none,pointer-events-auto,group,sr-only,not-sr-only,truncate,whitespace-nowrap,break-words}");
+@source inline("bg-linear-to-{t,tr,r,br,b,bl,l,tl}");
+@source inline("{from,via,to}-{background,background-ui,logo-primary,logo-stroke,highlighter,transparent,white,black}{,/0,/10,/20,/30,/50,/70,/90}");
+@source inline("{list-none,list-disc,list-decimal}");
