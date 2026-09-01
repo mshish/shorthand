@@ -25,14 +25,12 @@ You can also connect an LLM provider if you prefer an API key, a local model, or
 This walkthrough covers Windows and desktop Obsidian, the combination tested today.
 
 1. **Install the Shorthand desktop app.**
-
    - Download the Windows installer from the [latest release](../../releases/latest).
    - Run the installer and open Shorthand.
    - Follow the first-run setup to choose and download a transcription model.
    - Windows SmartScreen may warn that the installer is unsigned. Select **More info**, then **Run anyway**.
 
 2. **Install the Obsidian plugin with BRAT.**
-
    1. In Obsidian, open **Settings → Community plugins → Browse**.
    2. Find **Obsidian42 - BRAT**, then install and enable it.
    3. Open the command palette and run **Add a beta plugin for testing**.
@@ -40,13 +38,11 @@ This walkthrough covers Windows and desktop Obsidian, the combination tested tod
    5. Return to **Settings → Community plugins** and enable **Shorthand**.
 
 3. **Choose how Shorthand writes your notes.** Open the Shorthand plugin settings in Obsidian, find **Enhancement backend**, and choose one:
-
    - **Claude Code (default):** Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup). Open PowerShell or Terminal, run `claude login`, and sign in with your Claude account.
    - **Codex:** Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Open PowerShell or Terminal, run `codex login`, and sign in with your ChatGPT account.
    - **LLM provider:** Enter the provider, model, endpoint, and API key if one is required.
 
 4. **Create your first note.**
-
    1. Keep the Shorthand desktop app running and open a Markdown note in Obsidian.
    2. Open the command palette and run **Shorthand: Start meeting capture on this note**.
    3. Talk normally. Shorthand transcribes the meeting and the plugin updates the note.
@@ -56,11 +52,11 @@ For a solo thinking session, enable **Assisted notes** under **Shorthand Setting
 
 ## How it works
 
-| Part | What it does |
-| --- | --- |
-| Shorthand desktop app | Records your microphone and, in Meetings mode, can also capture computer audio. It transcribes both locally. |
-| Shorthand Obsidian plugin | Follows the live transcript and updates the note you chose. Your own writing stays outside the section managed by Shorthand. |
-| Claude Code, Codex, or an LLM endpoint | Turns the transcript and your existing note into a structured note. |
+| Part                                   | What it does                                                                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Shorthand desktop app                  | Records your microphone and, in Meetings mode, can also capture computer audio. It transcribes both locally.                 |
+| Shorthand Obsidian plugin              | Follows the live transcript and updates the note you chose. Your own writing stays outside the section managed by Shorthand. |
+| Claude Code, Codex, or an LLM endpoint | Turns the transcript and your existing note into a structured note.                                                          |
 
 The desktop app and Obsidian plugin are separate installs. Keep Shorthand running during a capture; the plugin cannot record or transcribe audio by itself.
 
