@@ -14,8 +14,8 @@ pub use hub::{
 };
 pub use name::{socket_name, socket_name_owned};
 pub use protocol::{
-    FollowEvent, FollowMode, RefusalReason, Speaker, ERR_DISABLED, ERR_FOLLOWER_LIMIT,
-    ERR_SERIALIZATION_FAILED, FOLLOW_PROTOCOL_VERSION,
+    CapturePhase, FollowEvent, FollowMode, RefusalReason, Speaker, StartFailureCode, ERR_DISABLED,
+    ERR_FOLLOWER_LIMIT, ERR_SERIALIZATION_FAILED, FOLLOW_PROTOCOL_VERSION,
 };
 pub use server::FollowStreamServer;
 

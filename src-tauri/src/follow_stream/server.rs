@@ -317,6 +317,7 @@ mod tests {
 
     use super::*;
     use crate::follow_stream::{FollowMode, Speaker};
+    use crate::shorthand::{capture_command::CaptureState, mode::Mode};
 
     static NEXT_TEST_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -377,9 +378,12 @@ mod tests {
 
         assert_eq!(
             read_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n"
         );
-        assert_eq!(read_line(&mut client).await, "{\"t\":\"idle\"}\n");
+        assert_eq!(
+            read_line(&mut client).await,
+            "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n"
+        );
         let session = hub.begin(true, FollowMode::Meeting).unwrap();
         assert_eq!(
             read_line(&mut client).await,
@@ -413,13 +417,14 @@ mod tests {
 
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         assert_eq!(
             read_raw_line(&mut client).await,
-            "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
+            "{\"t\":\"capture_state\",\"phase\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n"
         );
         clock.advance(100);
+        hub.set_capture_state(CaptureState::Recording(Mode::Meeting), true);
         hub.begin(true, FollowMode::Meeting);
         clock.advance(1112);
         hub.partial(StreamSource::Mic, "hello ", "wor");
@@ -448,13 +453,18 @@ mod tests {
         let mut first = connect(name.clone()).await;
         assert!(read_line(&mut first).await.contains("\"t\":\"hello\""));
 
+        hub.set_capture_state(CaptureState::Recording(Mode::Meeting), true);
         hub.begin(true, FollowMode::Meeting);
         hub.partial(StreamSource::System, "system", " audio");
 
         let mut late = connect(name).await;
         assert_eq!(
             read_line(&mut late).await,
-            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n"
+            "{\"t\":\"hello\",\"protocol\":1,\"version\":\"test-version\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n"
+        );
+        assert_eq!(
+            read_line(&mut late).await,
+            "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":1}\n"
         );
         assert_eq!(
             read_line(&mut late).await,
@@ -511,10 +521,12 @@ mod tests {
             .unwrap();
         let mut client = connect(name.clone()).await;
         assert!(read_line(&mut client).await.contains("\"t\":\"hello\""));
-        // The backlog also carries `idle` (no active session); drain it too
+        // The backlog also carries idle `capture_state`; drain it too
         // so the next read below observes the bounded EOF, not this line
         // still sitting in the client's own buffer.
-        assert!(read_line(&mut client).await.contains("\"t\":\"idle\""));
+        assert!(read_line(&mut client)
+            .await
+            .contains("\"t\":\"capture_state\""));
 
         server.stop();
         assert!(!server.is_running());

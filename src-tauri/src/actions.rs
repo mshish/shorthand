@@ -2,7 +2,7 @@
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
-use crate::follow_stream::Speaker;
+use crate::follow_stream::{Speaker, StartFailureCode};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
@@ -34,6 +34,21 @@ const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 struct RecordingErrorEvent {
     error_type: String,
     detail: Option<String>,
+}
+
+/// Classifies the concrete errors `try_start_recording` can return without
+/// making consumers match their platform-specific messages. The two typed
+/// distinctions are the same ones the existing UI already recognizes; every
+/// other recorder/VAD/device-open failure remains one honest catch-all until
+/// the audio layer exposes a stronger error type.
+fn start_failure_code(error: &str) -> StartFailureCode {
+    if is_microphone_access_denied(error) {
+        StartFailureCode::MicrophonePermissionDenied
+    } else if is_no_input_device_error(error) {
+        StartFailureCode::NoInputDevice
+    } else {
+        StartFailureCode::AudioCaptureFailed
+    }
 }
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
@@ -676,6 +691,37 @@ impl ShortcutAction for TranscribeAction {
         // one still finishing (see `Stage`'s doc comment in
         // transcription_coordinator.rs).
         let mut follow_stream_session: Option<u64> = None;
+        // `run_effect` in transcription_coordinator.rs resolves this via
+        // `apply_mode` for both the explicit and hotkey/PTT start paths (see
+        // `Effect::Start`'s doc comment) and always calls `action.start` with
+        // `Some(...)`. The only other caller of `action.start`
+        // (`shortcut/handler.rs`) does pass `None`, but only ever for the
+        // "cancel" and "test" bindings, which route to
+        // `CancelAction`/`TestAction` -- both ignore this parameter entirely
+        // (see `ShortcutAction::start`'s doc comment). So `None` never
+        // reaches `TranscribeAction::start` today.
+        //
+        // The fallback resolves it here instead, and is sound *at this call
+        // site specifically*: `mode::set_active` is the first thing this
+        // method does, far above, so `resolve_settings` reads the mode of the
+        // capture now starting rather than the previous one. That is not true
+        // of the coordinator, which decides before any `set_active` has run
+        // for the capture in question -- which is why `decide_explicit_capture`
+        // uses `apply_mode(settings, requested_mode)` and must never be
+        // "simplified" to this call. Do not copy this line there.
+        //
+        // Deliberately not an `expect()`: this branch is unreachable today,
+        // but `TranscribeAction::start` runs on the coordinator thread inside
+        // `run_effect`, and a panic there unwinds out of the loop's
+        // `catch_unwind` and takes the whole capture lifecycle with it --
+        // including, since that exit path ends any live publication, the
+        // user's in-flight recording. Failing loudly is the right instinct
+        // for an invariant, but not when "loudly" costs every future capture
+        // until the app restarts and the correct value was available here all
+        // along.
+        let publication_enabled = publication_enabled.unwrap_or_else(|| {
+            crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled
+        });
         let recording_start_time = Instant::now();
         match rm.try_start_recording(&binding_id, vad_policy) {
             Ok(readiness) => {
@@ -698,30 +744,18 @@ impl ShortcutAction for TranscribeAction {
                 // first and silently no-op without one (pinned in
                 // follow_stream::hub::tests).
                 //
-                // `publication_enabled` is `Some` only when the caller is
-                // `decide_explicit_capture`, which already read this exact
-                // setting (via `apply_mode`) before deciding to forward the
-                // start at all — see `Effect::Start`'s doc comment in
-                // transcription_coordinator.rs. Using it verbatim here,
-                // instead of calling `resolve_settings` again, is the fix: the
-                // old code read the setting twice on this thread — once in
-                // `decide_explicit_capture` to decide whether to forward, and
-                // again right here — straddling the entire pre-recording
-                // prefix above (model kickoff, tray, overlay, settings/stream
-                // plan) plus `try_start_recording`. A publication toggle
-                // flipped off inside that window made the first read stand
-                // (so the capture was forwarded and actually recorded) while
-                // this second read saw the new value and skipped `hub.begin`
-                // — no `refused` (nothing was refused, the start already
-                // succeeded), no `start_failed` (nothing failed), just a live
-                // capture with no `begin` a follower could ever see. The
-                // hotkey/PTT path still has no earlier decision to honour
-                // (`None`), so it keeps resolving fresh here, same as always
-                // — publication being off there is a private capture nobody
-                // asked to stream, not a bug to route around.
-                follow_stream_session = if publication_enabled.unwrap_or_else(|| {
-                    crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled
-                }) {
+                // The coordinator resolves `publication_enabled` before this
+                // start for both explicit and hotkey/PTT paths, then mirrors
+                // that same value into `capture_state`. Using it verbatim here
+                // is the invariant: another settings read anywhere in this
+                // pre-recording prefix could let the snapshot say
+                // `publishing:true` while `hub.begin` silently chose false (or
+                // the reverse). Explicit starts also rely on the same read
+                // having already passed `capture_command::decide`; a later read
+                // that skipped `begin` would create a real capture with no
+                // observable success, the exact race the explicit command and
+                // capture-state record exist to remove.
+                follow_stream_session = if publication_enabled {
                     crate::follow_stream::hub(app).and_then(|hub| {
                         hub.begin(
                             model_supports_streaming,
@@ -792,9 +826,13 @@ impl ShortcutAction for TranscribeAction {
                 // failure. `mode` rides along for the same reason `begin`
                 // carries it — without it a follower watching one mode could
                 // misattribute a different mode's failure to itself.
-                if crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled {
+                if publication_enabled {
                     if let Some(hub) = crate::follow_stream::hub(app) {
-                        hub.start_failed(crate::shorthand::mode::active(app).into(), &e);
+                        hub.start_failed(
+                            crate::shorthand::mode::active(app).into(),
+                            start_failure_code(&e),
+                            &e,
+                        );
                     }
                 }
                 // No session was allocated for this capture either (`begin`
@@ -814,12 +852,10 @@ impl ShortcutAction for TranscribeAction {
             utils::hide_recording_overlay(app);
             set_tray_state(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
-                let error_type = if is_microphone_access_denied(&err) {
-                    "microphone_permission_denied"
-                } else if is_no_input_device_error(&err) {
-                    "no_input_device"
-                } else {
-                    "unknown"
+                let error_type = match start_failure_code(&err) {
+                    StartFailureCode::MicrophonePermissionDenied => "microphone_permission_denied",
+                    StartFailureCode::NoInputDevice => "no_input_device",
+                    StartFailureCode::AudioCaptureFailed => "unknown",
                 };
                 let _ = app.emit(
                     "recording-error",
@@ -1388,8 +1424,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 mod tests {
     use super::{
         combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
-        is_blank_transcription, should_use_streaming_overlay, strip_think_block,
+        is_blank_transcription, should_use_streaming_overlay, start_failure_code,
+        strip_think_block,
     };
+    use crate::follow_stream::StartFailureCode;
     use crate::settings::OverlayStyle;
     use std::future;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1408,6 +1446,22 @@ mod tests {
     fn non_blank_transcription_is_kept() {
         assert!(!is_blank_transcription("hello"));
         assert!(!is_blank_transcription("  hello  "));
+    }
+
+    #[test]
+    fn recording_start_failures_map_existing_error_classifiers_to_wire_codes() {
+        assert_eq!(
+            start_failure_code("permission denied"),
+            StartFailureCode::MicrophonePermissionDenied
+        );
+        assert_eq!(
+            start_failure_code("No input device found"),
+            StartFailureCode::NoInputDevice
+        );
+        assert_eq!(
+            start_failure_code("Failed to start recorder: worker unavailable"),
+            StartFailureCode::AudioCaptureFailed
+        );
     }
 
     #[test]

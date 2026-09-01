@@ -5,10 +5,10 @@ use serde::Serialize;
 
 use crate::managers::transcription::StreamSource;
 
-/// Additive only. `emitted_at` and `session_elapsed_ms` were introduced without
-/// a bump because the documented contract already tells consumers to ignore
-/// fields they do not recognize. Reserve a bump for a removal, a rename, or a
-/// changed event meaning.
+/// Protocol 1 uses `hello.capabilities` to describe optional record and field
+/// vocabulary. Additive fields and capability-described record replacements
+/// stay on version 1; reserve a bump for an incompatible framing or semantic
+/// change that a follower cannot discover before parsing the affected record.
 pub const FOLLOW_PROTOCOL_VERSION: u32 = 1;
 pub const ERR_DISABLED: &str = "disabled";
 pub const ERR_FOLLOWER_LIMIT: &str = "follower_limit";
@@ -74,6 +74,34 @@ pub enum FollowMode {
     Dictation,
 }
 
+/// Where the coordinator is in the lifecycle of the one capture it owns.
+/// Kept separate from [`FollowMode`] because an idle process has a phase but
+/// no mode. Wire values are stable protocol vocabulary, not names borrowed
+/// from the coordinator's private `Stage` variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CapturePhase {
+    Idle,
+    Recording,
+    Processing,
+}
+
+/// Stable, machine-readable classification of a recording start failure.
+/// The free-text `message` on [`FollowEvent::StartFailed`] remains the detail
+/// for a person or log; followers branch on this value instead of matching
+/// platform-specific English error text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartFailureCode {
+    MicrophonePermissionDenied,
+    NoInputDevice,
+    /// The recorder can also fail while loading VAD, selecting/configuring or
+    /// opening a device, or starting its worker. Those errors do not expose a
+    /// more stable typed cause today, so they deliberately share this honest
+    /// catch-all instead of manufacturing distinctions from message text.
+    AudioCaptureFailed,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum FollowEvent {
@@ -129,12 +157,22 @@ pub enum FollowEvent {
         code: Option<&'static str>,
         message: String,
     },
-    /// Emitted right after `hello` when subscribing finds no active session.
-    /// Idle was previously only inferable from the absence of a `begin`,
-    /// which a follower cannot tell apart from "attached before anything has
-    /// started yet". This makes idle a state a follower can read directly
-    /// instead of a guess from silence.
-    Idle,
+    /// Emitted immediately after `hello` for every successful subscription,
+    /// before any active `begin` replay. `phase` and `mode` come from the
+    /// coordinator's authoritative `Stage` classification; `session` comes
+    /// from the hub's active publication so, when present, it is exactly the
+    /// id on the following `begin`. A non-publishing capture therefore still
+    /// reports `recording`/`processing` and `publishing:false`, but has no
+    /// session and no `begin` to replay.
+    CaptureState {
+        phase: CapturePhase,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<FollowMode>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        publishing: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session: Option<u64>,
+    },
     /// A capture request was accepted but never produced a `begin`, because
     /// `begin` now fires only once `try_start_recording` has actually
     /// succeeded (see `TranscribeAction::start`). Session-less: no session
@@ -142,10 +180,9 @@ pub enum FollowEvent {
     /// terminal event to close, and a follower that got `Response::Accepted`
     /// on its command would otherwise wait forever for a `begin` that is
     /// never coming. Deliberately its own record rather than a session-less
-    /// `error`: every other session-less `error` on this wire carries a
-    /// `code` (`follower_limit`, `disabled`, `serialization_failed`), so
-    /// reusing that shape here would give a follower two things to
-    /// distinguish by the *absence* of a field instead of one to match on.
+    /// `error`: this is the outcome of a capture start for a named `mode`, not
+    /// a connection failure. A dedicated discriminator lets a follower match
+    /// that semantic directly while `code` classifies the cause.
     ///
     /// Reaches a follower only when the failed mode's own
     /// `follow_stream_enabled` is on — the same publication gate `begin`
@@ -154,6 +191,7 @@ pub enum FollowEvent {
     /// different mode's failure to itself.
     StartFailed {
         mode: FollowMode,
+        code: StartFailureCode,
         message: String,
     },
     /// The app declined an explicit `--start-assisted-notes` /
@@ -173,7 +211,8 @@ pub enum FollowEvent {
 /// `emitted_at` is civil time for display and log correlation; `session_elapsed_ms`
 /// is the monotonic ordering key, because wall clocks move backward across NTP
 /// corrections, DST transitions, and suspend/resume. It is absent on events that
-/// belong to no session (`hello`, connection-level `error`).
+/// belong to no session (`hello`, `capture_state`, `refused`, `start_failed`,
+/// and connection-level `error`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stamp {
     pub emitted_at: String,
@@ -329,17 +368,23 @@ mod tests {
                 "{\"t\":\"error\",\"code\":\"serialization_failed\",\"message\":\"serialization failed\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
             (
-                FollowEvent::Idle,
+                FollowEvent::CaptureState {
+                    phase: CapturePhase::Idle,
+                    mode: None,
+                    publishing: None,
+                    session: None,
+                },
                 None,
-                "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
             (
                 FollowEvent::StartFailed {
                     mode: FollowMode::AssistedNotes,
+                    code: StartFailureCode::NoInputDevice,
                     message: "no input device".to_string(),
                 },
                 None,
-                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"code\":\"no-input-device\",\"message\":\"no input device\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
             ),
             (
                 FollowEvent::Refused {
@@ -412,6 +457,60 @@ mod tests {
                     "{{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"{expected}\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\",\"session_elapsed_ms\":0}}\n"
                 )
             );
+        }
+    }
+
+    #[test]
+    fn capture_state_serializes_each_phase_and_omits_capture_fields_while_idle() {
+        let cases = [
+            (
+                FollowEvent::CaptureState {
+                    phase: CapturePhase::Idle,
+                    mode: None,
+                    publishing: None,
+                    session: None,
+                },
+                "{\"t\":\"capture_state\",\"phase\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+            (
+                FollowEvent::CaptureState {
+                    phase: CapturePhase::Recording,
+                    mode: Some(FollowMode::Dictation),
+                    publishing: Some(false),
+                    session: None,
+                },
+                "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"dictation\",\"publishing\":false,\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+            (
+                FollowEvent::CaptureState {
+                    phase: CapturePhase::Processing,
+                    mode: Some(FollowMode::Meeting),
+                    publishing: Some(true),
+                    session: Some(42),
+                },
+                "{\"t\":\"capture_state\",\"phase\":\"processing\",\"mode\":\"meeting\",\"publishing\":true,\"session\":42,\"emitted_at\":\"2026-08-15T14:03:21.412-07:00\"}\n",
+            ),
+        ];
+
+        for (event, expected) in cases {
+            assert_eq!(&*event.to_line(&stamp(None)), expected);
+        }
+    }
+
+    #[test]
+    fn start_failure_codes_serialize_to_stable_kebab_case_values() {
+        for (code, expected) in [
+            (
+                StartFailureCode::MicrophonePermissionDenied,
+                "\"microphone-permission-denied\"",
+            ),
+            (StartFailureCode::NoInputDevice, "\"no-input-device\""),
+            (
+                StartFailureCode::AudioCaptureFailed,
+                "\"audio-capture-failed\"",
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&code).unwrap(), expected);
         }
     }
 
