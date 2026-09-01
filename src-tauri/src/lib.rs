@@ -140,22 +140,30 @@ pub(crate) fn show_main_window(app: &AppHandle) {
     );
 }
 
-/// Forwards an explicit `--start-assisted-notes` / `--stop-assisted-notes`
-/// command to the coordinator. The decision (forward, no-op, or refuse) and
-/// its execution both happen atomically inside `TranscriptionCoordinator`'s
-/// own serialized command loop, which owns the authoritative `Stage` — see
+/// Forwards an explicit start/stop command — `--start-assisted-notes` /
+/// `--stop-assisted-notes`, or `--start-transcription` /
+/// `--stop-transcription` — to the coordinator. The decision (forward,
+/// no-op, or refuse) and its execution both happen atomically inside
+/// `TranscriptionCoordinator`'s own serialized command loop, which owns the
+/// authoritative `Stage` — see
 /// `transcription_coordinator::decide_explicit_capture` for why that must be
 /// where this happens rather than here. Whether the mode is enabled is
 /// likewise read inside that loop, at dequeue time, rather than here: this
 /// function can run well before the coordinator thread gets to the command
 /// it sends, and resolving Settings here would risk deciding against a
 /// snapshot a later settings change had already made stale.
-fn handle_explicit_assisted_notes_command(
+///
+/// `binding_id` is the mode's canonical binding — `"assisted_notes"`,
+/// `"transcribe"` — which the coordinator maps back to a `Mode`. A stop
+/// targets whatever binding is actually recording instead, so passing the
+/// canonical one here never loses a `_with_post_process` distinction.
+fn handle_explicit_capture_command(
     app: &AppHandle,
     op: crate::shorthand::capture_command::ExplicitOp,
+    binding_id: &str,
 ) {
     if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
-        coordinator.send_explicit_capture(op, "assisted_notes");
+        coordinator.send_explicit_capture(op, binding_id);
     } else {
         log::warn!("TranscriptionCoordinator not initialized");
     }
@@ -959,14 +967,28 @@ pub fn run(cli_args: CliArgs) {
                     show_main_window(app);
                 }
             } else if args.iter().any(|a| a == "--start-assisted-notes") {
-                handle_explicit_assisted_notes_command(
+                handle_explicit_capture_command(
                     app,
                     crate::shorthand::capture_command::ExplicitOp::Start,
+                    "assisted_notes",
                 );
             } else if args.iter().any(|a| a == "--stop-assisted-notes") {
-                handle_explicit_assisted_notes_command(
+                handle_explicit_capture_command(
                     app,
                     crate::shorthand::capture_command::ExplicitOp::Stop,
+                    "assisted_notes",
+                );
+            } else if args.iter().any(|a| a == "--start-transcription") {
+                handle_explicit_capture_command(
+                    app,
+                    crate::shorthand::capture_command::ExplicitOp::Start,
+                    "transcribe",
+                );
+            } else if args.iter().any(|a| a == "--stop-transcription") {
+                handle_explicit_capture_command(
+                    app,
+                    crate::shorthand::capture_command::ExplicitOp::Stop,
+                    "transcribe",
                 );
             } else {
                 // A second process was launched without remote-control flags

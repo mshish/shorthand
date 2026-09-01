@@ -20,7 +20,7 @@ These two used to be coupled — the listener only ran while some mode's publica
 The stream is UTF-8, with exactly one JSON object per newline. Every object has a `t` discriminator; consumers should ignore fields they do not recognize and skip record types they do not support so later protocol additions remain compatible. The current protocol is version 1:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","start-transcription","stop-transcription","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"capture_state","phase":"idle","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":1,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":1,"speaker":"me","committed":"hello ","tentative":"wor","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
@@ -39,7 +39,7 @@ In `partial` events, `committed` is the stable, append-only prefix and `tentativ
 A dual-speaker session can therefore look like this:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","start-transcription","stop-transcription","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"capture_state","phase":"recording","mode":"meeting","publishing":true,"session":42,"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"begin","session":42,"streaming":true,"mode":"meeting","emitted_at":"2026-08-15T14:03:20.200-07:00","session_elapsed_ms":0}
 {"t":"partial","session":42,"speaker":"me","committed":"Can you hear me?","tentative":"","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
@@ -84,7 +84,7 @@ Up to eight followers may be connected at once. A ninth receives one `error` eve
 A follower always learns the coordinator's current phase immediately after `hello`, whether or not the capture is published:
 
 ```jsonl
-{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"hello","protocol":1,"version":"0.9.7","capabilities":["toggle-assisted-notes","start-assisted-notes","stop-assisted-notes","start-transcription","stop-transcription","begin-mode","capture-state","refused","refused-publication-disabled","start-failed","start-failed-code"],"emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"capture_state","phase":"idle","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 ```
 
@@ -103,18 +103,23 @@ Phase and mode come from the transcription coordinator's authoritative `Stage`, 
 
 ## Explicit start/stop commands
 
-`--start-assisted-notes` and `--stop-assisted-notes` start or stop an Assisted Notes capture on a running instance, the same as `--toggle-assisted-notes`, but without toggle semantics: each is idempotent, so a caller can retry one without risking flipping the capture the wrong way. `--toggle-assisted-notes` still exists — fork-only and harmless for manual, interactive use — but a scripted or programmatic caller should prefer the explicit pair.
+Two capture modes have an explicit start/stop pair: `--start-assisted-notes` / `--stop-assisted-notes` for Assisted Notes, and `--start-transcription` / `--stop-transcription` for Meeting. Each starts or stops that mode's capture on a running instance, the same as the mode's toggle (`--toggle-assisted-notes`, `--toggle-transcription`), but without toggle semantics: each is idempotent, so a caller can retry one without risking flipping the capture the wrong way. Both toggles still exist — harmless for manual, interactive use, where a human notices and corrects a wrong flip immediately — but a scripted or programmatic caller should prefer the explicit pair. Dictation has no explicit pair: its output has already been delivered where it was wanted, so nothing follows a dictation capture to need one.
 
-| Command                   | Assisted Notes idle | Assisted Notes already capturing | A different mode capturing | Assisted Notes disabled     | Assisted Notes enabled but not publishing |
-| -------------------------- | -------------------- | --------------------------------- | --------------------------- | ----------------------------- | ------------------------------------------- |
-| `--start-assisted-notes`  | starts it            | no-op (success)                   | refused (`busy`)            | refused (`mode-disabled`)    | refused (`publication-disabled`)            |
-| `--stop-assisted-notes`   | no-op (success)      | stops it                          | no-op (success)             | no-op (success)              | no-op (success)                             |
+The two pairs are the same command with a different mode, not two features: the app decides both in one place (`shorthand::capture_command::decide`, called from the coordinator's own serialized command loop), and the table below describes both. Read "this mode" as the mode the command names.
+
+| Command                                        | This mode idle  | This mode already capturing | A different mode capturing | This mode disabled        | Enabled but not publishing       |
+| ---------------------------------------------- | ---------------- | ---------------------------- | --------------------------- | -------------------------- | --------------------------------- |
+| `--start-assisted-notes`, `--start-transcription` | starts it        | no-op (success)              | refused (`busy`)            | refused (`mode-disabled`)  | refused (`publication-disabled`)  |
+| `--stop-assisted-notes`, `--stop-transcription`   | no-op (success)  | stops it                     | no-op (success)             | no-op (success)            | no-op (success)                   |
+
+Only Assisted Notes can be disabled, so `mode-disabled` is reachable only for it: Meeting has no on/off switch in Settings, and `--start-transcription` therefore has no way to produce that refusal. Every other column applies to both pairs equally — Meeting's own publication toggle (**Follow Live Transcript Output**) refuses a start with `publication-disabled` exactly as Assisted Notes' does.
 
 A refusal is reported on the wire instead of being left for the caller to infer from a timeout:
 
 ```jsonl
 {"t":"refused","mode":"assisted-notes","reason":"mode-disabled","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"refused","mode":"assisted-notes","reason":"busy","emitted_at":"2026-08-15T14:03:20.100-07:00"}
+{"t":"refused","mode":"meeting","reason":"busy","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 {"t":"refused","mode":"assisted-notes","reason":"publication-disabled","emitted_at":"2026-08-15T14:03:20.100-07:00"}
 ```
 
@@ -124,7 +129,7 @@ A refusal is reported on the wire instead of being left for the caller to infer 
 
 Be clear about what that capability does and does not buy, though: this protocol is one-way, so a follower cannot negotiate the value away. The capability lets a *new* follower discover in advance that this binary may send `publication-disabled`; it cannot stop an *older* follower with a closed `reason` enum from receiving one and rejecting the record. That residual risk is accepted deliberately rather than designed away, on the grounds that no follower deployed today can hit it: `shorthand-core`'s `parseWireRecord` requires a numeric `session` on every record except `hello` and a session-less `error`, so it drops every `refused` record whatever its reason. The alternative — bumping the protocol — would break every existing follower outright over a purely additive value, which is strictly worse. If a strict third-party follower ever does exist, that calculus changes and this decision should be revisited.
 
-`--start-assisted-notes` refuses with `publication-disabled` when Assisted Notes is enabled but its own `--follow-stream` publication toggle (the Modes pane's per-mode switch, `assisted_notes.follow_stream_enabled`) is off. Forwarding the start anyway would begin a real capture that never emits `begin` — the same switch `hub.begin` itself is gated on — leaving a follower with no way to observe it, distinguish it from a lost command, or learn what to fix. `--stop-assisted-notes` is never refused for this reason, the same as it is never refused for the mode being disabled (table above): it must still be able to end a capture already running, even one whose publication toggle was flipped off mid-capture.
+An explicit start refuses with `publication-disabled` when the mode is enabled but its own `--follow-stream` publication toggle is off — `assisted_notes.follow_stream_enabled` (the Modes pane's per-mode switch) for `--start-assisted-notes`, the top-level `follow_stream_enabled` for `--start-transcription`. Forwarding the start anyway would begin a real capture that never emits `begin` — the same switch `hub.begin` itself is gated on — leaving a follower with no way to observe it, distinguish it from a lost command, or learn what to fix. An explicit stop is never refused for this reason, the same as it is never refused for the mode being disabled (table above): it must still be able to end a capture already running, even one whose publication toggle was flipped off mid-capture.
 
 A command can be accepted (the CLI flag exits 0, and the running instance receives it) and still fail to actually start a capture — no input device, a denied microphone permission. That produces `start_failed` rather than `begin`:
 

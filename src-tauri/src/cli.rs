@@ -90,6 +90,50 @@ pub struct CliArgs {
     )]
     pub stop_assisted_notes: bool,
 
+    /// Start a Meeting capture (sent to running instance). Idempotent: a
+    /// no-op if that capture is already running, refused (not a toggle-off)
+    /// if a different capture is running.
+    //
+    // The explicit half of `--toggle-transcription`, and the same pairing
+    // `--start-assisted-notes` is to `--toggle-assisted-notes`: named after
+    // the toggle it replaces rather than after the mode's wire spelling
+    // (`meeting`), so the flag family reads as one. See
+    // `start_assisted_notes`'s own comment for why the conflict list names
+    // every other remote-control flag rather than just this pair.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "stop_transcription",
+            "toggle_transcription",
+            "toggle_post_process",
+            "cancel",
+            "toggle_assisted_notes",
+            "start_assisted_notes",
+            "stop_assisted_notes",
+            "follow_stream",
+        ]
+    )]
+    pub start_transcription: bool,
+
+    /// Stop a Meeting capture (sent to running instance). Idempotent: a
+    /// no-op if that capture is not the one running.
+    //
+    // See `start_transcription`'s own comment.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "start_transcription",
+            "toggle_transcription",
+            "toggle_post_process",
+            "cancel",
+            "toggle_assisted_notes",
+            "start_assisted_notes",
+            "stop_assisted_notes",
+            "follow_stream",
+        ]
+    )]
+    pub stop_transcription: bool,
+
     /// Enable debug mode with verbose logging
     #[arg(long)]
     pub debug: bool,
@@ -135,7 +179,7 @@ pub struct CliArgs {
         value_name = "MODE",
         num_args = 0..=1,
         default_missing_value = "json",
-        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel", "toggle_assisted_notes", "start_assisted_notes", "stop_assisted_notes"]
+        conflicts_with_all = ["toggle_transcription", "toggle_post_process", "cancel", "toggle_assisted_notes", "start_assisted_notes", "stop_assisted_notes", "start_transcription", "stop_transcription"]
     )]
     pub follow_stream: Option<FollowStreamMode>,
 }
@@ -238,6 +282,8 @@ mod tests {
             "--toggle-post-process",
             "--cancel",
             "--follow-stream",
+            "--start-transcription",
+            "--stop-transcription",
         ] {
             let error =
                 CliArgs::try_parse_from(["handy", "--start-assisted-notes", other]).unwrap_err();
@@ -255,5 +301,53 @@ mod tests {
                 "--stop-assisted-notes with {other} should conflict"
             );
         }
+    }
+
+    #[test]
+    fn explicit_meeting_flags_parse_independently_of_the_toggle() {
+        assert!(!CliArgs::parse_from(["handy"]).start_transcription);
+        assert!(!CliArgs::parse_from(["handy"]).stop_transcription);
+        assert!(CliArgs::parse_from(["handy", "--start-transcription"]).start_transcription);
+        assert!(CliArgs::parse_from(["handy", "--stop-transcription"]).stop_transcription);
+        // Kept alongside the toggle for the same reason
+        // `--toggle-assisted-notes` is: fork-only and harmless for manual use.
+        assert!(CliArgs::parse_from(["handy", "--toggle-transcription"]).toggle_transcription);
+    }
+
+    #[test]
+    fn explicit_meeting_flags_conflict_with_every_other_remote_control_flag() {
+        // Same hazard the assisted-notes pair documents: the single-instance
+        // dispatch in `lib.rs` is an `else if` chain, so any accepted
+        // combination would silently drop all but the first match.
+        for other in [
+            "--toggle-transcription",
+            "--toggle-post-process",
+            "--cancel",
+            "--follow-stream",
+            "--toggle-assisted-notes",
+            "--start-assisted-notes",
+            "--stop-assisted-notes",
+        ] {
+            let error =
+                CliArgs::try_parse_from(["handy", "--start-transcription", other]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::ArgumentConflict,
+                "--start-transcription with {other} should conflict"
+            );
+
+            let error =
+                CliArgs::try_parse_from(["handy", "--stop-transcription", other]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::ArgumentConflict,
+                "--stop-transcription with {other} should conflict"
+            );
+        }
+
+        let error =
+            CliArgs::try_parse_from(["handy", "--start-transcription", "--stop-transcription"])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 }

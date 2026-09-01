@@ -37,6 +37,8 @@ const CAPABILITIES: &[&str] = &[
     "toggle-assisted-notes",
     "start-assisted-notes",
     "stop-assisted-notes",
+    "start-transcription",
+    "stop-transcription",
     "begin-mode",
     "capture-state",
     "refused",
@@ -1487,7 +1489,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
             ]
         );
@@ -1517,7 +1519,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
             ]
         );
@@ -1835,7 +1837,7 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":1}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
@@ -1898,7 +1900,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
             ]
         );
@@ -1986,7 +1988,7 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":1,\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
@@ -2051,7 +2053,7 @@ mod tests {
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":2}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
@@ -2205,7 +2207,7 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"start-transcription\",\"stop-transcription\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
                 "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",

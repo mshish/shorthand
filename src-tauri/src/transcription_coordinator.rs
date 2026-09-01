@@ -819,7 +819,6 @@ impl TranscriptionCoordinator {
                             // disagree about which settings snapshot they
                             // describe.
                             let settings = crate::settings::get_settings(&app);
-                            let mode_enabled = settings.assisted_notes.enabled;
                             // The mode this command would start, derived the
                             // same way `Stage` itself will label it — not
                             // `mode::active`, which names the *previously*
@@ -833,6 +832,7 @@ impl TranscriptionCoordinator {
                             // capture with no `begin` ever reaching a
                             // follower.
                             let requested_mode = mode::mode_for_binding(&binding_id);
+                            let mode_enabled = mode::enabled(&settings, requested_mode);
                             let publication_enabled = crate::shorthand::dictation::apply_mode(
                                 settings.clone(),
                                 requested_mode,
@@ -1872,6 +1872,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     const ASSISTED_NOTES: &str = "assisted_notes";
+    const MEETING: &str = "transcribe";
     const ASSISTED_NOTES_WITH_POST_PROCESS: &str = "assisted_notes_with_post_process";
 
     #[test]
@@ -1926,6 +1927,104 @@ mod tests {
                 publication_session: None,
             },
             "the capture started by the first call must still be the one running"
+        );
+    }
+
+    /// The whole point of `--start-transcription`/`--stop-transcription`:
+    /// Meeting reaches exactly the same decision path Assisted Notes already
+    /// used, with nothing mode-specific left in it. `decide_explicit_capture`
+    /// derives the mode from the binding id, so the only thing that made this
+    /// assisted-notes-only was the absence of a CLI flag that could deliver
+    /// the command.
+    #[test]
+    fn explicit_start_then_stop_drives_the_meeting_binding_the_same_way() {
+        let mut state = CoordinatorState::new();
+
+        let started = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            MEETING,
+            true,
+            true,
+            Mode::Meeting,
+        );
+        assert!(
+            matches!(started, ExplicitOutcome::Effect(Effect::Start { .. })),
+            "an explicit meeting start must forward"
+        );
+        assert_eq!(
+            state.stage,
+            Stage::Recording {
+                binding_id: MEETING.to_string(),
+                mode: Mode::Meeting,
+                publication_enabled: Some(true),
+                publication_session: None,
+            }
+        );
+
+        // The retry that a toggle could never survive.
+        let retried = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            MEETING,
+            true,
+            true,
+            Mode::Meeting,
+        );
+        assert_eq!(
+            retried,
+            ExplicitOutcome::NoOp,
+            "a retried meeting start must be a no-op, not a toggle-off"
+        );
+
+        let stopped = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            MEETING,
+            true,
+            true,
+            Mode::Meeting,
+        );
+        assert!(
+            matches!(stopped, ExplicitOutcome::Effect(Effect::Stop { .. })),
+            "an explicit meeting stop must forward"
+        );
+
+        // And the stop is idempotent too -- the failure that made a
+        // toggle-driven stop start a fresh recording instead.
+        let stopped_again = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Stop,
+            MEETING,
+            true,
+            true,
+            Mode::Meeting,
+        );
+        assert_eq!(
+            stopped_again,
+            ExplicitOutcome::NoOp,
+            "a retried meeting stop must never start a recording"
+        );
+    }
+
+    /// A meeting stop must not be refused for a mode that has no on/off
+    /// switch -- and a start must not be either. `mode::enabled` is what
+    /// guarantees `mode_enabled` is `true` for Meeting; this pins the
+    /// behaviour that depends on it.
+    #[test]
+    fn explicit_meeting_start_is_never_refused_as_mode_disabled() {
+        let mut state = CoordinatorState::new();
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            MEETING,
+            mode::enabled(&crate::settings::get_default_settings(), Mode::Meeting),
+            true,
+            Mode::Meeting,
+        );
+        assert!(
+            matches!(outcome, ExplicitOutcome::Effect(Effect::Start { .. })),
+            "meeting has no enable switch, so its start can never be ModeDisabled"
         );
     }
 

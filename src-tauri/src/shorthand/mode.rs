@@ -75,6 +75,21 @@ pub fn mode_for_binding(binding_id: &str) -> Mode {
     }
 }
 
+/// Whether `mode` is switched on in Settings at all — the `mode_enabled`
+/// input to `capture_command::decide`, and so the only thing that can refuse
+/// an explicit start with `ModeDisabled`.
+///
+/// Matched exhaustively rather than read off one mode's settings: Meeting and
+/// Dictation have no on/off switch — there is no setting that could ever
+/// refuse them — and only Assisted Notes does. Adding a `Mode` variant is
+/// then a compile error here rather than a silently-`true` default.
+pub fn enabled(settings: &crate::settings::AppSettings, mode: Mode) -> bool {
+    match mode {
+        Mode::Meeting | Mode::Dictation => true,
+        Mode::AssistedNotes => settings.assisted_notes.enabled,
+    }
+}
+
 /// Records the mode of the capture that is starting. Called once, from
 /// `TranscribeAction::start`. Never cleared: "the mode of the most recently
 /// started capture" is always the right answer for work belonging to that
@@ -114,6 +129,18 @@ mod tests {
         );
         assert_eq!(mode_for_binding("cancel"), Mode::Meeting);
         assert_eq!(mode_for_binding("unknown"), Mode::Meeting);
+    }
+
+    #[test]
+    fn only_assisted_notes_can_be_switched_off() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.assisted_notes.enabled = false;
+        assert!(enabled(&settings, Mode::Meeting));
+        assert!(enabled(&settings, Mode::Dictation));
+        assert!(!enabled(&settings, Mode::AssistedNotes));
+
+        settings.assisted_notes.enabled = true;
+        assert!(enabled(&settings, Mode::AssistedNotes));
     }
 
     #[test]
