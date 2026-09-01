@@ -11,10 +11,11 @@ use chrono::{DateTime, FixedOffset, Local};
 use tokio::sync::Notify;
 
 use crate::managers::transcription::StreamSource;
+use crate::shorthand::capture_command::CaptureState as CoordinatorCaptureState;
 
 use super::protocol::{
-    FollowEvent, FollowMode, RefusalReason, Speaker, Stamp, ERR_DISABLED, ERR_FOLLOWER_LIMIT,
-    FOLLOW_PROTOCOL_VERSION,
+    CapturePhase, FollowEvent, FollowMode, RefusalReason, Speaker, Stamp, StartFailureCode,
+    ERR_DISABLED, ERR_FOLLOWER_LIMIT, FOLLOW_PROTOCOL_VERSION,
 };
 
 /// Capabilities this binary advertises on `hello`. A control flag appears
@@ -37,10 +38,11 @@ const CAPABILITIES: &[&str] = &[
     "start-assisted-notes",
     "stop-assisted-notes",
     "begin-mode",
-    "idle",
+    "capture-state",
     "refused",
     "refused-publication-disabled",
     "start-failed",
+    "start-failed-code",
 ];
 
 pub const MAX_FOLLOWERS: usize = 8;
@@ -279,7 +281,30 @@ struct HubState {
     next_session: u64,
     next_follower_id: u64,
     active: Option<ActiveSession>,
+    /// The coordinator's authoritative lifecycle classification, mirrored
+    /// here only so a newly accepted socket can receive it atomically with
+    /// the hub's active `begin`. The hub never derives phase or mode from
+    /// `active`: a non-publishing capture has no active session at all, which
+    /// is exactly why the old hub-only `idle` inference was insufficient.
+    capture_state: CaptureStateSnapshot,
     followers: Vec<Arc<Follower>>,
+}
+
+#[derive(Clone, Copy)]
+struct CaptureStateSnapshot {
+    phase: CapturePhase,
+    mode: Option<FollowMode>,
+    publishing: Option<bool>,
+}
+
+impl Default for CaptureStateSnapshot {
+    fn default() -> Self {
+        Self {
+            phase: CapturePhase::Idle,
+            mode: None,
+            publishing: None,
+        }
+    }
 }
 
 struct ActiveSession {
@@ -354,6 +379,7 @@ impl FollowStreamHub {
                 next_session: 1,
                 next_follower_id: 1,
                 active: None,
+                capture_state: CaptureStateSnapshot::default(),
                 followers: Vec::new(),
             }),
             clock,
@@ -500,21 +526,66 @@ impl FollowStreamHub {
     /// responsive would be a new failure mode of its own. The hub already
     /// tracks its own active session (`HubState.active`) for the orphan
     /// check in `begin`, so asking it directly needs no id passed in and no
-    /// second copy of the id resurrected to hold one. A session that gets
-    /// superseded between reading its id here and `cancel` below is simply
-    /// a no-op, the same tolerance the old cell-based path already had.
+    /// second copy of the id resurrected to hold one.
+    ///
+    /// Also corrects the `capture_state` mirror's `publishing` bit in the
+    /// same lock as ending the session, for the same reason
+    /// `suppress_if_active` already does: `cancel_current_operation` calls
+    /// this synchronously and only *afterward* notifies the coordinator
+    /// asynchronously (`TranscriptionCoordinator::notify_cancel`), which is
+    /// what eventually calls `set_capture_state` with the coordinator's own
+    /// correction. Between those two points — which can be an arbitrarily
+    /// long window, since the coordinator thread may be mid-`run_effect`
+    /// doing model kickoff, tray or overlay work — a subscriber would
+    /// otherwise see `capture_state` still claim `publishing:true` for a
+    /// session this call has just ended: `session` is already correctly
+    /// absent (derived from `active`, which is cleared below), but
+    /// `publishing` was not, which is a positive claim that a live,
+    /// publishing capture exists when it does not.
+    ///
+    /// This intentionally does *not* touch `phase`/`mode`, and does not reset
+    /// to `Idle`: `CoordinatorState::on_cancel` deliberately leaves `Stage`
+    /// alone while `Processing` (the pipeline can legitimately keep running
+    /// after a cancel), and only the coordinator knows which is true.
+    /// `publishing:false` is the one thing this call can assert honestly
+    /// regardless of that — no session is left running here to publish
+    /// anything — so it never over-reports a live publishing capture; at
+    /// worst it briefly under-reports a phase the coordinator's own
+    /// `set_capture_state` call corrects moments later. That later call is
+    /// never blocked by this one: `set_capture_state` replaces the whole
+    /// snapshot rather than merging into it, so nothing set here is sticky.
+    ///
+    /// Skipped when the mirror is not currently claiming any mode (i.e. it
+    /// is already `Idle`): forcing `publishing:Some(false)` onto an idle
+    /// snapshot would violate FOLLOW_STREAM.md's "while idle, `mode`,
+    /// `publishing`, and `session` are omitted" and gain nothing, since idle
+    /// already implies nothing is publishing.
+    ///
+    /// A session that gets superseded between this call reading `active` and
+    /// clearing it is simply a no-op, the same tolerance the old cell-based
+    /// path already had — there is only one lock acquisition now, so that
+    /// can only happen across two separate calls to `cancel_active`, not
+    /// within one.
     pub fn cancel_active(&self) {
-        let Some(session) = self.active_session_id() else {
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        let mut state = self.inner.lock().unwrap();
+        if !self.enabled.load(Ordering::Acquire) {
+            return;
+        }
+
+        if state.capture_state.mode.is_some() {
+            state.capture_state.publishing = Some(false);
+        }
+
+        let Some(active) = state.active.take() else {
             return;
         };
-        self.cancel(session);
-    }
-
-    fn active_session_id(&self) -> Option<u64> {
-        if !self.enabled.load(Ordering::Acquire) {
-            return None;
-        }
-        self.inner.lock().unwrap().active.as_ref().map(|a| a.id)
+        let stamp = self.stamp(Some(active.started));
+        let line = FollowEvent::Cancel { session: active.id }.to_line(&stamp);
+        Self::broadcast(&mut state, line, BroadcastKind::Event);
     }
 
     /// See `finish`'s doc comment: `session` gates this the same way.
@@ -531,7 +602,7 @@ impl FollowStreamHub {
     /// one, by construction (`begin` only fires after `try_start_recording`
     /// succeeds) — so it is stamped session-less like `hello` rather than
     /// against a session origin.
-    pub fn start_failed(&self, mode: FollowMode, message: &str) {
+    pub fn start_failed(&self, mode: FollowMode, code: StartFailureCode, message: &str) {
         if !self.enabled.load(Ordering::Acquire) {
             return;
         }
@@ -543,6 +614,7 @@ impl FollowStreamHub {
 
         let line = FollowEvent::StartFailed {
             mode,
+            code,
             message: message.to_string(),
         }
         .to_line(&self.stamp(None));
@@ -601,6 +673,14 @@ impl FollowStreamHub {
             return;
         }
 
+        // The settings command supplies `mode`; the hub still does not read
+        // settings itself. Update the mirrored publication bit even when no
+        // session exists (a non-publishing capture has none) so a late
+        // subscriber sees why this in-flight capture cannot produce a begin.
+        if state.capture_state.mode == Some(mode) {
+            state.capture_state.publishing = Some(false);
+        }
+
         match state.active.as_ref() {
             Some(active) if active.mode == mode => {}
             _ => return,
@@ -632,6 +712,31 @@ impl FollowStreamHub {
         self.enabled.load(Ordering::Acquire)
     }
 
+    /// Mirrors the coordinator's authoritative capture classification for
+    /// the next subscriber snapshot. `publishing` is already resolved by the
+    /// coordinator where `AppHandle` and per-mode settings are available;
+    /// this settings-free hub merely stores the supplied value.
+    ///
+    /// This update intentionally happens even while the listener is disabled.
+    /// Listener lifetime and capture lifetime are independent, and a listener
+    /// restarted during a capture must not regress to reporting idle.
+    pub fn set_capture_state(&self, capture: CoordinatorCaptureState, publishing: bool) {
+        let capture_state = match capture {
+            CoordinatorCaptureState::Idle => CaptureStateSnapshot::default(),
+            CoordinatorCaptureState::Recording(mode) => CaptureStateSnapshot {
+                phase: CapturePhase::Recording,
+                mode: Some(mode.into()),
+                publishing: Some(publishing),
+            },
+            CoordinatorCaptureState::Processing(mode) => CaptureStateSnapshot {
+                phase: CapturePhase::Processing,
+                mode: Some(mode.into()),
+                publishing: Some(publishing),
+            },
+        };
+        self.inner.lock().unwrap().capture_state = capture_state;
+    }
+
     pub fn subscribe(
         &self,
         app_version: &str,
@@ -660,16 +765,39 @@ impl FollowStreamHub {
             capabilities: CAPABILITIES.to_vec(),
         }
         .to_line(&self.stamp(None))];
+        let capture = state.capture_state;
+        // Derived from `state.active` alone, on purpose -- the same condition
+        // the `begin` replay below tests -- rather than cross-checked against
+        // `capture.mode`/`capture.publishing`. An earlier version gated
+        // `session` on that pair matching `active.mode`, but the `begin`
+        // replay a few lines down was never gated on it: if the mirror ever
+        // disagreed with the hub's own `active` (the mirror is the
+        // coordinator's copy, kept in step by `publish_capture_state`, not
+        // this hub's own source of truth), `session` could come out absent
+        // while `begin` was replayed anyway, contradicting the invariant this
+        // module already promises in FOLLOW_STREAM.md: "the hub contributes
+        // only the active session ID it owns, which is what guarantees the ID
+        // matches the replayed `begin`". The hub owns both `active` and its
+        // `begin_line`, so deriving `session` from `active` directly makes
+        // that guarantee hold by construction instead of by two independent
+        // conditions happening to agree. No production caller has been found
+        // that can make the mirror and `active` disagree (see
+        // `suppress_if_active` and `publish_capture_state`, which keep them
+        // in step), so this is hardening the stated invariant, not fixing an
+        // observed wire bug.
+        let session = state.active.as_ref().map(|active| active.id);
+        backlog.push(
+            FollowEvent::CaptureState {
+                phase: capture.phase,
+                mode: capture.mode,
+                publishing: capture.publishing,
+                session,
+            }
+            .to_line(&self.stamp(None)),
+        );
         if let Some(active) = &state.active {
             backlog.push(Arc::clone(&active.begin_line));
             backlog.extend(active.partial_lines.iter().flatten().map(Arc::clone));
-        } else {
-            // Idle is otherwise only inferable from the absence of a `begin`,
-            // which looks identical to "attached before the first capture
-            // ever started". A follower that attaches first and reads this
-            // record learns real state instead of arming a timer and hoping
-            // silence means idle rather than a `begin` still in flight.
-            backlog.push(FollowEvent::Idle.to_line(&self.stamp(None)));
         }
 
         state.followers.push(Arc::clone(&follower));
@@ -779,6 +907,7 @@ impl FollowStreamHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shorthand::mode::Mode;
 
     fn strings(lines: Vec<Arc<str>>) -> Vec<String> {
         lines.into_iter().map(|line| line.to_string()).collect()
@@ -1054,11 +1183,147 @@ mod tests {
     }
 
     #[test]
+    fn cancel_active_marks_the_mirror_not_publishing_so_a_subscriber_sees_no_live_capture() {
+        // FIX 1 (regression): `utils::cancel_current_operation` calls
+        // `hub.cancel_active()` synchronously, then only *afterward* notifies
+        // the coordinator asynchronously, which is what eventually corrects
+        // `capture_state` via `set_capture_state`. Before this fix, a
+        // subscriber attaching in that window saw `capture_state` still claim
+        // `publishing:true` for a session `cancel_active` had just ended --
+        // `session` was already correctly absent, but `publishing` was not, a
+        // positive claim that a live, publishing capture exists when it does
+        // not. This pins that `cancel_active` corrects `publishing` itself,
+        // atomically with ending the session, without waiting for the
+        // coordinator to catch up. `phase`/`mode` are deliberately left
+        // alone -- they are the coordinator's to correct (see the doc
+        // comment on `cancel_active` for why forcing `idle` would
+        // over-correct the `Processing` case).
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Meeting), true);
+        hub.begin(true, FollowMode::Meeting).unwrap();
+
+        hub.cancel_active();
+
+        let (_, initial) = hub.subscribe("0.9.5").unwrap();
+        let initial = events(initial);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(initial[1].trim()).unwrap(),
+            serde_json::json!({
+                "t": "capture_state",
+                "phase": "recording",
+                "mode": "meeting",
+                "publishing": false
+            }),
+            "a subscriber must not see publishing:true for a session cancel_active just ended"
+        );
+    }
+
+    #[test]
+    fn cancel_active_leaves_the_mirror_idle_alone() {
+        // Companion to the test above: if the mirror is already `Idle` (no
+        // mode claimed), `cancel_active` must not introduce a `publishing`
+        // value into it. FOLLOW_STREAM.md is explicit that an idle
+        // `capture_state` omits `mode`, `publishing`, and `session` --
+        // forcing `publishing:Some(false)` in here would violate that for no
+        // benefit, since idle already implies nothing is publishing.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+
+        hub.cancel_active();
+
+        let (_, initial) = hub.subscribe("0.9.5").unwrap();
+        let initial = events(initial);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(initial[1].trim()).unwrap(),
+            serde_json::json!({"t": "capture_state", "phase": "idle"})
+        );
+    }
+
+    #[test]
+    fn set_capture_state_still_overwrites_what_cancel_active_set() {
+        // FIX 1's other half: `cancel_active`'s correction must not be
+        // sticky. Once the coordinator's own `Command::Cancel` handling
+        // dequeues and calls `set_capture_state` (see
+        // `transcription_coordinator.rs`), that call must win outright --
+        // `set_capture_state` replaces the whole snapshot rather than merging
+        // into it, so there is nothing here for `cancel_active` to have left
+        // behind that could resist being overwritten.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Meeting), true);
+        hub.begin(true, FollowMode::Meeting).unwrap();
+
+        hub.cancel_active();
+
+        // The coordinator's own correction, arriving later: `on_cancel`
+        // leaves `Stage::Processing` alone, so it can report `processing`
+        // rather than `idle` even after this cancel.
+        hub.set_capture_state(CoordinatorCaptureState::Processing(Mode::Meeting), true);
+
+        let (_, initial) = hub.subscribe("0.9.5").unwrap();
+        let initial = events(initial);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(initial[1].trim()).unwrap(),
+            serde_json::json!({
+                "t": "capture_state",
+                "phase": "processing",
+                "mode": "meeting",
+                "publishing": true
+            }),
+            "the coordinator's later set_capture_state must fully overwrite cancel_active's \
+             correction, proving nothing sticky was introduced"
+        );
+    }
+
+    #[test]
+    fn subscribe_session_always_matches_the_replayed_begin_even_if_the_mirror_disagrees() {
+        // FIX 2 (hardening): `session` must be derived from the same
+        // condition that decides whether `begin` is replayed
+        // (`state.active`), not cross-checked against the coordinator's
+        // `capture_state` mirror's `mode`/`publishing`. Forcing a mismatch
+        // here -- a shape the reviewer could not reach through any
+        // production caller, only through the hub's own public API, see
+        // FOLLOW_STREAM.md's "Connection state" section -- pins that even
+        // when the mirror disagrees with the hub's own active session, a
+        // subscriber still gets a `session` that matches the `begin` it
+        // replays, never one without the other.
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+
+        // Mirror claims a different, non-publishing mode is recording --
+        // deliberately at odds with the hub's own active session below.
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Dictation), false);
+        let session = hub.begin(true, FollowMode::Meeting).unwrap();
+
+        let (_, initial) = hub.subscribe("0.9.5").unwrap();
+        let initial = events(initial);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(initial[1].trim()).unwrap(),
+            serde_json::json!({
+                "t": "capture_state",
+                "phase": "recording",
+                "mode": "dictation",
+                "publishing": false,
+                "session": session
+            }),
+            "session must be present and match the active session even though the mirror's \
+             own mode/publishing disagree with it"
+        );
+        assert_eq!(
+            initial[2], "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
+            "begin must still be replayed for the same session id capture_state just reported"
+        );
+    }
+
+    #[test]
     fn cancel_active_does_not_touch_a_session_it_did_not_read() {
-        // Guards the race `cancel_active`'s own doc comment calls out: if the
-        // active session changes between reading its id and cancelling it,
-        // the stale id must be dropped by `cancel`'s own session check
-        // rather than cancelling whatever replaced it.
+        // A stale session id presented through some other path (e.g. a
+        // terminal call queued before session 1 ended) must not cancel
+        // whatever replaced it, and `cancel_active` itself -- which now reads
+        // and clears `state.active` under one lock acquisition rather than
+        // two (see its own doc comment) -- must still end whichever session
+        // is actually current when it runs.
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
@@ -1222,8 +1487,8 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
-                "{\"t\":\"idle\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
             ]
         );
         let mut observed = Vec::new();
@@ -1245,16 +1510,66 @@ mod tests {
     }
 
     #[test]
-    fn hello_advertises_begin_mode_so_a_follower_need_not_guess_from_a_version() {
+    fn hello_advertises_capture_state_and_start_failed_code_capabilities() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
         let (_follower, initial) = hub.subscribe("0.9.5").unwrap();
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
-                "{\"t\":\"idle\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
             ]
+        );
+    }
+
+    #[test]
+    fn subscription_emits_capture_state_for_every_phase_and_matches_the_following_begin_session() {
+        let hub = FollowStreamHub::default();
+        hub.set_enabled(true);
+
+        let (_, idle) = hub.subscribe("0.9.5").unwrap();
+        let idle = events(idle);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(idle[1].trim()).unwrap(),
+            serde_json::json!({"t": "capture_state", "phase": "idle"})
+        );
+
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Dictation), false);
+        let (_, recording) = hub.subscribe("0.9.5").unwrap();
+        let recording = events(recording);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(recording[1].trim()).unwrap(),
+            serde_json::json!({
+                "t": "capture_state",
+                "phase": "recording",
+                "mode": "dictation",
+                "publishing": false
+            })
+        );
+        assert_eq!(recording.len(), 2, "a non-publishing capture has no begin");
+
+        hub.set_capture_state(
+            CoordinatorCaptureState::Processing(Mode::AssistedNotes),
+            true,
+        );
+        let session = hub.begin(true, FollowMode::AssistedNotes).unwrap();
+        let (_, processing) = hub.subscribe("0.9.5").unwrap();
+        let processing = events(processing);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(processing[1].trim()).unwrap(),
+            serde_json::json!({
+                "t": "capture_state",
+                "phase": "processing",
+                "mode": "assisted-notes",
+                "publishing": true,
+                "session": session
+            })
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(processing[2].trim()).unwrap()["session"],
+            session,
+            "capture_state.session must identify the immediately following begin"
         );
     }
 
@@ -1276,18 +1591,26 @@ mod tests {
         hub.set_enabled(true);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
 
-        hub.start_failed(FollowMode::AssistedNotes, "no input device");
+        hub.start_failed(
+            FollowMode::AssistedNotes,
+            StartFailureCode::NoInputDevice,
+            "no input device",
+        );
 
         assert_eq!(
             events(follower.drain()),
-            ["{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\"}\n"]
+            ["{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"code\":\"no-input-device\",\"message\":\"no input device\"}\n"]
         );
     }
 
     #[test]
     fn start_failed_is_ignored_while_the_hub_is_disabled() {
         let hub = FollowStreamHub::default();
-        hub.start_failed(FollowMode::AssistedNotes, "ignored");
+        hub.start_failed(
+            FollowMode::AssistedNotes,
+            StartFailureCode::AudioCaptureFailed,
+            "ignored",
+        );
 
         hub.set_enabled(true);
         let (follower, _) = hub.subscribe("0.9.5").unwrap();
@@ -1397,12 +1720,16 @@ mod tests {
         follower.drain();
 
         hub.partial(StreamSource::Mic, "hello ", "wor");
-        hub.start_failed(FollowMode::AssistedNotes, "no input device");
+        hub.start_failed(
+            FollowMode::AssistedNotes,
+            StartFailureCode::NoInputDevice,
+            "no input device",
+        );
 
         assert_eq!(
             events(follower.drain()),
             [
-                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"message\":\"no input device\"}\n",
+                "{\"t\":\"start_failed\",\"mode\":\"assisted-notes\",\"code\":\"no-input-device\",\"message\":\"no input device\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
             ]
         );
@@ -1498,6 +1825,7 @@ mod tests {
     fn late_attach_receives_active_session_and_both_partial_snapshots() {
         let hub = FollowStreamHub::default();
         hub.set_enabled(true);
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Meeting), true);
         hub.begin(true, FollowMode::Meeting);
         hub.partial(StreamSource::System, "system", " audio");
         hub.partial(StreamSource::Mic, "hello", " there");
@@ -1507,7 +1835,8 @@ mod tests {
         assert_eq!(
             events(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":1}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"them\",\"committed\":\"system\",\"tentative\":\" audio\"}\n",
@@ -1564,13 +1893,13 @@ mod tests {
         let hub = enabled_hub(&clock);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
 
-        // `hello` describes the connection, not a session; `idle` reports
-        // that the connection found no active session, at that same instant.
+        // `hello` describes the connection, not a session; `capture_state`
+        // reports authoritative idle state at that same instant.
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
-                "{\"t\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"idle\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\"}\n",
             ]
         );
 
@@ -1644,6 +1973,7 @@ mod tests {
         let clock = TestClock::new();
         let hub = enabled_hub(&clock);
 
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Meeting), true);
         hub.begin(true, FollowMode::Meeting);
         clock.advance(2_000);
         hub.partial(StreamSource::Mic, "hello", " there");
@@ -1656,7 +1986,8 @@ mod tests {
         assert_eq!(
             strings(initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"],\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":1,\"emitted_at\":\"2026-08-15T14:03:52.100-07:00\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\",\"emitted_at\":\"2026-08-15T14:03:20.100-07:00\",\"session_elapsed_ms\":0}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello\",\"tentative\":\" there\",\"emitted_at\":\"2026-08-15T14:03:22.100-07:00\",\"session_elapsed_ms\":2000}\n",
             ]
@@ -1674,14 +2005,18 @@ mod tests {
         hub.no_speech(1);
         hub.cancel(1);
         hub.error(1, "ignored");
-        hub.start_failed(FollowMode::AssistedNotes, "ignored");
+        hub.start_failed(
+            FollowMode::AssistedNotes,
+            StartFailureCode::AudioCaptureFailed,
+            "ignored",
+        );
         hub.refused(FollowMode::AssistedNotes, RefusalReason::Busy);
 
         assert!(!hub.is_enabled());
 
         hub.set_enabled(true);
         let (follower, initial) = hub.subscribe("0.9.5").unwrap();
-        // hello + idle: no active session survived the disabled window above.
+        // hello + idle-phase capture_state: no active session survived the disabled window above.
         assert_eq!(initial.len(), 2);
         hub.begin(false, FollowMode::Meeting);
         assert_eq!(
@@ -1696,6 +2031,7 @@ mod tests {
         hub.set_enabled(true);
         let (existing, _) = hub.subscribe("0.9.5").unwrap();
 
+        hub.set_capture_state(CoordinatorCaptureState::Recording(Mode::Meeting), true);
         hub.begin(true, FollowMode::Meeting);
         assert_eq!(
             events(existing.drain()),
@@ -1715,7 +2051,8 @@ mod tests {
         assert_eq!(
             events(late_initial),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"recording\",\"mode\":\"meeting\",\"publishing\":true,\"session\":2}\n",
                 "{\"t\":\"begin\",\"session\":2,\"streaming\":false,\"mode\":\"meeting\"}\n",
             ]
         );
@@ -1852,7 +2189,7 @@ mod tests {
         });
 
         let session = hub.begin(true, FollowMode::Meeting).unwrap();
-        // initial already carries hello + idle, so each checkpoint below is
+        // initial already carries hello + capture_state, so each checkpoint below is
         // offset by those two.
         wait_for_line_count(&written, 3).await;
         hub.partial(StreamSource::Mic, "hello ", "wor");
@@ -1868,8 +2205,8 @@ mod tests {
         assert_eq!(
             events(written.lock().unwrap().clone()),
             [
-                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"idle\",\"refused\",\"refused-publication-disabled\",\"start-failed\"]}\n",
-                "{\"t\":\"idle\"}\n",
+                "{\"t\":\"hello\",\"protocol\":1,\"version\":\"0.9.5\",\"capabilities\":[\"toggle-assisted-notes\",\"start-assisted-notes\",\"stop-assisted-notes\",\"begin-mode\",\"capture-state\",\"refused\",\"refused-publication-disabled\",\"start-failed\",\"start-failed-code\"]}\n",
+                "{\"t\":\"capture_state\",\"phase\":\"idle\"}\n",
                 "{\"t\":\"begin\",\"session\":1,\"streaming\":true,\"mode\":\"meeting\"}\n",
                 "{\"t\":\"partial\",\"session\":1,\"speaker\":\"me\",\"committed\":\"hello \",\"tentative\":\"wor\"}\n",
                 "{\"t\":\"final\",\"session\":1,\"speaker\":\"me\",\"text\":\"Hello world.\"}\n",

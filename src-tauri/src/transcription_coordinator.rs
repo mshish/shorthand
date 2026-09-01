@@ -80,6 +80,11 @@ fn classify_busy_input(is_pressed: bool, push_to_talk: bool, remembered: bool) -
 /// every other module receives them explicitly instead of re-reading a
 /// separate source that a newer capture could already have overwritten.
 ///
+/// `publication_enabled` is resolved once immediately before the start effect
+/// runs, then carried into `Processing` so the subscription snapshot cannot
+/// drift from the setting that governed that capture. It is set to `false` if
+/// publication is suppressed while that capture is in flight.
+///
 /// `publication_session` is `Option<u64>` because a mode whose own
 /// `follow_stream_enabled` is off records without `hub.begin()` ever being
 /// called — `None` means "recording, but nothing was published", not
@@ -93,11 +98,17 @@ enum Stage {
     Recording {
         binding_id: String,
         mode: Mode,
+        /// The per-mode publication setting resolved once before the start
+        /// effect runs. `None` exists only during the pure state machine's
+        /// optimistic transition; `run_effect` fills it before exposing the
+        /// state to the follow-stream hub or opening the recorder.
+        publication_enabled: Option<bool>,
         publication_session: Option<u64>,
     },
     Processing {
         binding_id: String,
         mode: Mode,
+        publication_enabled: Option<bool>,
         publication_session: Option<u64>,
     },
 }
@@ -123,15 +134,8 @@ enum Effect {
         binding_id: String,
         hotkey_string: String,
         /// Whether the mode being started should publish to the follow-stream
-        /// hub, already decided by whoever produced this `Effect` — never
-        /// resolved here. `CoordinatorState` is deliberately pure (no
-        /// `AppHandle`, so it cannot read settings itself), which is exactly
-        /// why this has to be carried rather than looked up: `None` for the
-        /// hotkey/PTT path (`on_input`, `on_grace_expired`,
-        /// `on_processing_finished`), which has never pre-decided this and
-        /// leaves `actions.rs`'s `TranscribeAction::start` to resolve it,
-        /// same as always. `Some(v)` only for `decide_explicit_capture`,
-        /// which already resolved `publication_enabled` via `apply_mode` to
+        /// hub. `Some(v)` is already decided by
+        /// `decide_explicit_capture`, which resolved `publication_enabled` via `apply_mode` to
         /// feed `capture_command::decide` (see the `Command::ExplicitCapture`
         /// arm below) — that is the *same* read `actions.rs` used to redo on
         /// its own, later, after the entire pre-recording prefix (model
@@ -144,7 +148,10 @@ enum Effect {
         /// (nothing failed), just a live capture no follower ever saw a
         /// `begin` for. Carrying the decision here instead of a second
         /// `Option` closes that window by construction: there is only ever
-        /// one read for an explicit start.
+        /// one read for an explicit start. `None` is the still-pure hotkey/PTT
+        /// path; `run_effect`, where settings are reachable, resolves it once
+        /// before starting and passes the resulting `Some(v)` both to
+        /// `actions.rs` and the capture-state mirror.
         publication_enabled: Option<bool>,
     },
     Stop {
@@ -512,6 +519,45 @@ impl CoordinatorState {
         }
     }
 
+    fn set_recording_publication_enabled(&mut self, binding_id: &str, enabled: bool) {
+        if let Stage::Recording {
+            binding_id: recording_id,
+            publication_enabled,
+            ..
+        } = &mut self.stage
+        {
+            if recording_id == binding_id {
+                *publication_enabled = Some(enabled);
+            }
+        }
+    }
+
+    /// Records that a settings change ended publication for the in-flight
+    /// capture. The hub closes the active wire session separately; keeping
+    /// the resolved bit on `Stage` in sync prevents a later Recording →
+    /// Processing transition from restoring `publishing:true` after the user
+    /// already switched it off.
+    fn mark_publication_suppressed(&mut self, suppressed_mode: FollowMode) {
+        let active = match &mut self.stage {
+            Stage::Recording {
+                mode,
+                publication_enabled,
+                ..
+            }
+            | Stage::Processing {
+                mode,
+                publication_enabled,
+                ..
+            } => Some((*mode, publication_enabled)),
+            Stage::Idle => None,
+        };
+        if let Some((mode, publication_enabled)) = active {
+            if FollowMode::from(mode) == suppressed_mode {
+                *publication_enabled = Some(false);
+            }
+        }
+    }
+
     /// Optimistic transition to `Recording`; rolled back via
     /// [`CoordinatorState::on_start_result`] if the effect fails to start
     /// recording for real.
@@ -530,6 +576,7 @@ impl CoordinatorState {
         self.stage = Stage::Recording {
             binding_id: binding_id.clone(),
             mode,
+            publication_enabled,
             // Not known yet -- see `on_start_result`.
             publication_session: None,
         };
@@ -543,20 +590,22 @@ impl CoordinatorState {
     fn begin_processing(&mut self, binding_id: String, hotkey_string: String) -> Effect {
         // Every caller only reaches here while `self.stage` is `Recording`
         // for this exact binding (see each call site's own guard above), so
-        // its `mode`/`publication_session` are simply carried forward rather
-        // than re-derived. The fallback branch is defensive only: it should
-        // be unreachable given those guards.
-        let (mode, publication_session) = match &self.stage {
+        // its `mode`/`publication_enabled`/`publication_session` are simply
+        // carried forward rather than re-derived. The fallback branch is
+        // defensive only: it should be unreachable given those guards.
+        let (mode, publication_enabled, publication_session) = match &self.stage {
             Stage::Recording {
                 mode,
+                publication_enabled,
                 publication_session,
                 ..
-            } => (*mode, *publication_session),
-            _ => (mode::mode_for_binding(&binding_id), None),
+            } => (*mode, *publication_enabled, *publication_session),
+            _ => (mode::mode_for_binding(&binding_id), None, None),
         };
         self.stage = Stage::Processing {
             binding_id: binding_id.clone(),
             mode,
+            publication_enabled,
             publication_session,
         };
         Effect::Stop {
@@ -568,12 +617,12 @@ impl CoordinatorState {
 }
 
 /// Classifies `stage` into the `CaptureState` [`capture_command::decide`]
-/// needs. `processing_mode` (the caller reads it via `mode::active`) is
-/// this function's only external input, kept as a parameter rather than an
-/// `AppHandle` read so classification stays pure and testable like the rest
-/// of this module.
+/// needs. `Stage` supplies both phase and mode. `processing_mode` is retained
+/// only as a debug assertion against the older active-mode cell so a future
+/// lifecycle change cannot let that legacy downstream resolver drift silently;
+/// it is never the value reported to either command policy or followers.
 ///
-/// `Stage::Processing` maps to its own `CaptureState::Processing(processing_mode)`
+/// `Stage::Processing` maps to its own `CaptureState::Processing(mode)`
 /// — never to `Idle`, and never folded into `Recording` the way an earlier
 /// version of this classifier did. Not `Idle`: even though the recording it
 /// followed has already stopped by the time any command reaches this
@@ -602,7 +651,10 @@ fn capture_state_for_decision(stage: &Stage, processing_mode: Mode) -> CaptureSt
         // `mode::mode_for_binding` this used to call again here — reading it
         // back is the same value, not a behaviour change.
         Stage::Recording { mode, .. } => CaptureState::Recording(*mode),
-        Stage::Processing { .. } => CaptureState::Processing(processing_mode),
+        Stage::Processing { mode, .. } => {
+            debug_assert_eq!(*mode, processing_mode);
+            CaptureState::Processing(*mode)
+        }
     }
 }
 
@@ -744,10 +796,15 @@ impl TranscriptionCoordinator {
                         }
                         Command::Cancel {
                             recording_was_active,
-                        } => state.on_cancel(recording_was_active),
+                        } => {
+                            state.on_cancel(recording_was_active);
+                            publish_capture_state(&app, &state);
+                        }
                         Command::ProcessingFinished => {
                             if let Some(effect) = state.on_processing_finished() {
                                 run_effect(&app, &mut state, effect);
+                            } else {
+                                publish_capture_state(&app, &state);
                             }
                         }
                         Command::ExplicitCapture { op, binding_id } => {
@@ -792,17 +849,16 @@ impl TranscriptionCoordinator {
                             run_explicit_outcome(&app, &mut state, op, &binding_id, outcome);
                         }
                         Command::SuppressPublication { mode } => {
-                            // Ordering-only: unlike every other arm above,
-                            // this one touches no `CoordinatorState` at all
-                            // -- it exists solely so `suppress_if_active` is
-                            // dequeued through the same single-threaded
-                            // queue as `hub.begin()` (see
-                            // `Command::SuppressPublication`'s own doc
-                            // comment for why that ordering is the whole
-                            // fix). Do not "helpfully" move this into
-                            // `CoordinatorState` or fold it into `Stage` --
-                            // the guarantee comes from running on this
-                            // thread, not from touching any state here.
+                            // The queue ordering against `hub.begin()` remains
+                            // the privacy guarantee (see this command's doc
+                            // comment). `Stage` also retains the resolved
+                            // publication bit now, solely for `capture_state`,
+                            // so mark it false before the hub atomically ends
+                            // the publication. Without this small state update,
+                            // a later stop would carry the start-time `true`
+                            // into Processing and falsely restore
+                            // `publishing:true` for late subscribers.
+                            state.mark_publication_suppressed(mode);
                             if let Some(hub) = crate::follow_stream::hub(&app) {
                                 hub.suppress_if_active(mode);
                             }
@@ -1005,8 +1061,21 @@ fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
             hotkey_string,
             publication_enabled,
         } => {
+            // The pure state machine cannot read settings, so hotkey/PTT
+            // starts arrive as `None`. Resolve the selected mode once here,
+            // before either the recorder or hub sees the transition, then
+            // carry that same value through both paths. A second settings
+            // read in `actions.rs` would let the capture-state record promise
+            // publication while `hub.begin` silently chose the opposite.
+            let publication_enabled = publication_enabled.unwrap_or_else(|| {
+                let mode = mode::mode_for_binding(&binding_id);
+                crate::shorthand::dictation::apply_mode(crate::settings::get_settings(app), mode)
+                    .follow_stream_enabled
+            });
+            state.set_recording_publication_enabled(&binding_id, publication_enabled);
+            publish_capture_state(app, state);
             let (started, publication_session) =
-                start(app, &binding_id, &hotkey_string, publication_enabled);
+                start(app, &binding_id, &hotkey_string, Some(publication_enabled));
             if let Some(orphaned_session) =
                 state.on_start_result(&binding_id, started, publication_session)
             {
@@ -1023,12 +1092,38 @@ fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
                     hub.cancel(orphaned_session);
                 }
             }
+            publish_capture_state(app, state);
         }
         Effect::Stop {
             binding_id,
             hotkey_string,
             publication_session,
-        } => stop(app, &binding_id, &hotkey_string, publication_session),
+        } => {
+            publish_capture_state(app, state);
+            stop(app, &binding_id, &hotkey_string, publication_session);
+        }
+    }
+}
+
+/// Mirrors the coordinator's authoritative classifier into the settings-free
+/// follow-stream hub. This is deliberately the same
+/// `capture_state_for_decision` used by explicit start/stop policy, not a
+/// second `Stage` match that could drift and tell followers a different phase.
+fn publish_capture_state(app: &AppHandle, state: &CoordinatorState) {
+    let capture = capture_state_for_decision(&state.stage, mode::active(app));
+    let publication_enabled = match &state.stage {
+        Stage::Idle => false,
+        Stage::Recording {
+            publication_enabled,
+            ..
+        }
+        | Stage::Processing {
+            publication_enabled,
+            ..
+        } => publication_enabled.unwrap_or(false),
+    };
+    if let Some(hub) = crate::follow_stream::hub(app) {
+        hub.set_capture_state(capture, publication_enabled);
     }
 }
 
@@ -1119,6 +1214,7 @@ mod tests {
         Stage::Recording {
             binding_id: binding_id.to_string(),
             mode: mode::mode_for_binding(binding_id),
+            publication_enabled: None,
             publication_session: None,
         }
     }
@@ -1130,6 +1226,7 @@ mod tests {
         Stage::Processing {
             binding_id: binding_id.to_string(),
             mode: mode::mode_for_binding(binding_id),
+            publication_enabled: None,
             publication_session: None,
         }
     }
@@ -1716,6 +1813,7 @@ mod tests {
             Stage::Recording {
                 binding_id: BINDING.to_string(),
                 mode: mode::mode_for_binding(BINDING),
+                publication_enabled: None,
                 publication_session: Some(42),
             },
             "the session hub.begin() allocated must land on the active Stage"
@@ -1753,6 +1851,7 @@ mod tests {
             Stage::Processing {
                 binding_id: BINDING.to_string(),
                 mode: mode::mode_for_binding(BINDING),
+                publication_enabled: None,
                 publication_session: Some(7),
             }
         );
@@ -1791,7 +1890,15 @@ mod tests {
             matches!(first, ExplicitOutcome::Effect(Effect::Start { .. })),
             "first start must forward"
         );
-        assert_eq!(state.stage, recording_stage(ASSISTED_NOTES));
+        assert_eq!(
+            state.stage,
+            Stage::Recording {
+                binding_id: ASSISTED_NOTES.to_string(),
+                mode: Mode::AssistedNotes,
+                publication_enabled: Some(true),
+                publication_session: None,
+            }
+        );
 
         // The retry: unlike the removed external-snapshot path, this call
         // observes the `Stage` the first call already set, not a stale
@@ -1812,7 +1919,12 @@ mod tests {
         );
         assert_eq!(
             state.stage,
-            recording_stage(ASSISTED_NOTES),
+            Stage::Recording {
+                binding_id: ASSISTED_NOTES.to_string(),
+                mode: Mode::AssistedNotes,
+                publication_enabled: Some(true),
+                publication_session: None,
+            },
             "the capture started by the first call must still be the one running"
         );
     }
@@ -1910,7 +2022,15 @@ mod tests {
             }
             other => panic!("expected Stop effect, got {other:?}"),
         }
-        assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
+        assert_eq!(
+            state.stage,
+            Stage::Processing {
+                binding_id: ASSISTED_NOTES.to_string(),
+                mode: Mode::AssistedNotes,
+                publication_enabled: Some(true),
+                publication_session: None,
+            }
+        );
 
         // decide() still sees `Capturing(AssistedNotes)` here (Processing
         // hasn't drained; see `capture_state_for_decision`), but there is no
@@ -1925,7 +2045,15 @@ mod tests {
             Mode::AssistedNotes,
         );
         assert_eq!(second_stop, ExplicitOutcome::NoOp);
-        assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
+        assert_eq!(
+            state.stage,
+            Stage::Processing {
+                binding_id: ASSISTED_NOTES.to_string(),
+                mode: Mode::AssistedNotes,
+                publication_enabled: Some(true),
+                publication_session: None,
+            }
+        );
     }
 
     /// A stop must target whichever binding is actually recording, not the
@@ -2059,7 +2187,10 @@ mod tests {
             ASSISTED_NOTES,
             true,
             true,
-            Mode::AssistedNotes,
+            // `processing_mode` mirrors the active capture, not the command's
+            // requested mode. Production reads Meeting here from the active
+            // mode cell for this `transcribe` stage.
+            Mode::Meeting,
         );
         assert_eq!(outcome, ExplicitOutcome::NoOp);
         assert_eq!(
@@ -2335,30 +2466,39 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // `Command::SuppressPublication` is ordering-only: the coordinator
-    // loop's arm for it (in `TranscriptionCoordinator::new`) takes no
-    // `&mut CoordinatorState` at all, only `app` and `mode`, so it is
-    // structurally incapable of touching `Stage`, `pending_press`,
-    // `pending_release`, or `last_press` -- unlike `on_input`/`on_cancel`/
-    // `on_processing_finished`/`decide_explicit_capture` above, there is no
-    // `CoordinatorState`-mutating method behind this variant to drive
-    // through a fake sequence and assert on. That "untouched" guarantee is
-    // therefore enforced by the handler's function signature and verifiable
-    // by code review, not by a runtime assertion this test could add to.
-    // Exercising the real coordinator-loop arm end-to-end would additionally
-    // require a real `AppHandle` to construct `TranscriptionCoordinator` and
-    // to call `crate::follow_stream::hub` -- this crate has no harness for
-    // that anywhere (no test in this file or elsewhere spins up a Tauri
-    // `AppHandle`), so building one just for this would be new
-    // infrastructure, not a meaningful behavioural test.
-    //
-    // What the test below pins instead is the one thing that *is* reachable
-    // without that harness: `notify_publication_suppressed` -- the public
-    // method the three settings commands actually call -- enqueues exactly
-    // the `SuppressPublication` command carrying the `FollowMode` it was
-    // given, through the real channel, rather than restating that fact
-    // against a bare enum literal.
+    // `Command::SuppressPublication` is ordered with `Effect::Start` on the
+    // coordinator queue (see the variant's doc comment). Its state mutation
+    // is deliberately narrow: only the matching in-flight capture's resolved
+    // publication bit changes. The first test pins that carry-forward through
+    // Processing; the second pins that the public notification method sends
+    // the mode needed to select the matching capture.
     // -------------------------------------------------------------------
+
+    #[test]
+    fn suppressing_publication_stays_false_when_recording_advances_to_processing() {
+        let mut state = CoordinatorState::new();
+        let binding_id = "transcribe";
+
+        state.begin_recording(binding_id.into(), "Ctrl+Space".into(), Some(true));
+        state.mark_publication_suppressed(FollowMode::Meeting);
+
+        assert!(matches!(
+            state.stage,
+            Stage::Recording {
+                publication_enabled: Some(false),
+                ..
+            }
+        ));
+
+        state.begin_processing(binding_id.into(), "Ctrl+Space".into());
+        assert!(matches!(
+            state.stage,
+            Stage::Processing {
+                publication_enabled: Some(false),
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn notify_publication_suppressed_enqueues_a_suppress_publication_command() {
