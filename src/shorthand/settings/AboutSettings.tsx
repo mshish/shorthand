@@ -10,6 +10,11 @@ import { SettingContainer } from "@/components/ui/SettingContainer";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
 import { Sheet } from "@/shorthand/ui/Sheet";
 
+/** Shorthand's own donation page. Upstream's row points at handy.computer. */
+const DONATE_URL = "https://donate.stripe.com/fZufZh6T31Jwdig89afEk00";
+const SOURCE_URL = "https://github.com/mshish/shorthand";
+const HANDY_URL = "https://github.com/cjpais/Handy";
+
 /**
  * Fork-only "About" section.
  *
@@ -46,7 +51,7 @@ export const AboutSettings: React.FC = () => {
 
   const handleDonateClick = async () => {
     try {
-      await openUrl("https://handy.computer/donate");
+      await openUrl(DONATE_URL);
     } catch (error) {
       console.error("Failed to open donate link:", error);
     }
@@ -109,7 +114,7 @@ export const AboutSettings: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            onClick={() => openUrl("https://github.com/cjpais/Handy")}
+            onClick={() => openUrl(SOURCE_URL)}
           >
             {t("settings.about.sourceCode.button")}
           </Button>
@@ -124,6 +129,28 @@ export const AboutSettings: React.FC = () => {
       </Sheet>
 
       <Sheet title={t("settings.about.acknowledgments.title")}>
+        {/* Handy first: it is not a dependency, it is the app this one is a
+            fork of. Everything the ggml row credits arrived through it. */}
+        <SettingContainer
+          title={t("settings.about.acknowledgments.handy.title")}
+          description={t("settings.about.acknowledgments.handy.description")}
+          descriptionMode="inline"
+          grouped={true}
+          layout="stacked"
+        >
+          <div className="space-y-3">
+            <div className="text-sm text-mid-gray">
+              {t("settings.about.acknowledgments.handy.details")}
+            </div>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => openUrl(HANDY_URL)}
+            >
+              {t("settings.about.acknowledgments.handy.button")}
+            </Button>
+          </div>
+        </SettingContainer>
         <SettingContainer
           title={t("settings.about.acknowledgments.ggml.title")}
           description={t("settings.about.acknowledgments.ggml.description")}
