@@ -29,21 +29,30 @@
 ### Task 1: Rust status resolver and commands
 
 **Files:**
+
 - Create: `src-tauri/src/shorthand/obsidian.rs`
 - Modify: `src-tauri/src/shorthand/mod.rs` (add `pub mod obsidian;`)
 - Modify: `src-tauri/src/lib.rs` — inside `collect_commands![ … ]`, immediately after the line `commands::change_follow_stream_enabled_setting,`
 - Modify: `src/bindings.ts` (hand-add the two commands and the type; see Step 7)
 
 **Interfaces:**
+
 - Produces (Rust): `pub const OBSIDIAN_PLUGIN_ID: &str`, `pub enum ObsidianPluginStatus`, `pub fn resolve_status(config_dir: &Path) -> ObsidianPluginStatus`, commands `get_obsidian_plugin_status` and `open_obsidian_plugin_page`.
 - Produces (TS, in `src/bindings.ts`): `commands.getObsidianPluginStatus(): Promise<Result<ObsidianPluginStatus, string>>`, `commands.openObsidianPluginPage(): Promise<Result<null, string>>`, and
+
   ```ts
   export type ObsidianPluginStatus =
     | { kind: "obsidian_not_found" }
     | { kind: "no_vault" }
     | { kind: "not_installed"; vault_name: string }
-    | { kind: "installed"; vault_name: string; version: string; enabled: boolean }
+    | {
+        kind: "installed";
+        vault_name: string;
+        version: string;
+        enabled: boolean;
+      };
   ```
+
   Tasks 2 and 3 import these.
 
 - [ ] **Step 1: Create the module with the types and a failing test file**
@@ -357,7 +366,7 @@ Run (from `src-tauri`, with `CARGO_TARGET_DIR` set per Global Constraints):
 cargo test shorthand::obsidian
 ```
 
-Expected: 9 tests, all FAIL (panic at `todo!("Task 1 Step 3")`). If the crate fails to *compile*, fix that first — the stub must compile.
+Expected: 9 tests, all FAIL (panic at `todo!("Task 1 Step 3")`). If the crate fails to _compile_, fix that first — the stub must compile.
 
 - [ ] **Step 3: Implement `resolve_status`**
 
@@ -468,7 +477,7 @@ async getObsidianPluginStatus() : Promise<Result<ObsidianPluginStatus, string>> 
  * Enable buttons are. Obsidian picks the vault (the URI has no vault
  * parameter); with Restricted mode on it lands on the Community plugins
  * settings tab instead, which the frontend copy explains.
- * 
+ *
  * Opened from the Rust side of the opener plugin on purpose: the frontend
  * `openUrl` command's default scope allows only http, https, mailto and tel,
  * and widening it means editing an upstream capability file.
@@ -486,25 +495,30 @@ async openObsidianPluginPage() : Promise<Result<null, string>> {
 Among the `export type …` declarations (they are alphabetical), insert in alphabetical position:
 
 ```ts
-export type ObsidianPluginStatus = 
-/**
- * No Obsidian config folder, or no vault registry inside it.
- */
-{ kind: "obsidian_not_found" } | 
-/**
- * Obsidian has run, but the registry lists no vault or is unreadable.
- */
-{ kind: "no_vault" } | 
-/**
- * The vault a URI would land in has no `plugins/shorthand/manifest.json`.
- */
-{ kind: "not_installed"; vault_name: string } | 
-/**
- * The manifest is there. `enabled` is whether the id appears in the
- * vault's `community-plugins.json`; `version` is the manifest's, or
- * empty if the manifest could not be parsed.
- */
-{ kind: "installed"; vault_name: string; version: string; enabled: boolean }
+export type ObsidianPluginStatus =
+  /**
+   * No Obsidian config folder, or no vault registry inside it.
+   */
+  | { kind: "obsidian_not_found" }
+  /**
+   * Obsidian has run, but the registry lists no vault or is unreadable.
+   */
+  | { kind: "no_vault" }
+  /**
+   * The vault a URI would land in has no `plugins/shorthand/manifest.json`.
+   */
+  | { kind: "not_installed"; vault_name: string }
+  /**
+   * The manifest is there. `enabled` is whether the id appears in the
+   * vault's `community-plugins.json`; `version` is the manifest's, or
+   * empty if the manifest could not be parsed.
+   */
+  | {
+      kind: "installed";
+      vault_name: string;
+      version: string;
+      enabled: boolean;
+    };
 ```
 
 Then confirm the frontend still typechecks:
@@ -527,11 +541,13 @@ git commit -m "feat(notes): resolve Obsidian plugin status and open its install 
 ### Task 2: Strings and the pure state mapping
 
 **Files:**
+
 - Modify: `src/shorthand/locales/en.json` (add 18 keys, alphabetical)
 - Create: `src/shorthand/notes/obsidianPluginState.ts`
 - Create: `src/shorthand/notes/obsidianPluginState.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObsidianPluginStatus` from `@/bindings` (Task 1).
 - Produces: `describeObsidianPlugin(state: ObsidianPluginRowState): ObsidianPluginView`, the `ObsidianPluginRowState` and `ObsidianPluginAction` types, and `ACTION_LABEL_KEYS`. Task 3 imports all of these.
 
@@ -591,23 +607,23 @@ describe("describeObsidianPlugin", () => {
   });
 
   test("error -> check failed with the message, retry button", () => {
-    expect(
-      describeObsidianPlugin({ phase: "error", message: "boom" }),
-    ).toEqual({
-      descriptionKey: "settings.notes.obsidian.status.checkFailed",
-      params: { error: "boom" },
-      action: "retry",
-    });
+    expect(describeObsidianPlugin({ phase: "error", message: "boom" })).toEqual(
+      {
+        descriptionKey: "settings.notes.obsidian.status.checkFailed",
+        params: { error: "boom" },
+        action: "retry",
+      },
+    );
   });
 
   test("obsidian not found -> get Obsidian", () => {
-    expect(describeObsidianPlugin(ready({ kind: "obsidian_not_found" }))).toEqual(
-      {
-        descriptionKey: "settings.notes.obsidian.status.obsidianNotFound",
-        params: {},
-        action: "get_obsidian",
-      },
-    );
+    expect(
+      describeObsidianPlugin(ready({ kind: "obsidian_not_found" })),
+    ).toEqual({
+      descriptionKey: "settings.notes.obsidian.status.obsidianNotFound",
+      params: {},
+      action: "get_obsidian",
+    });
   });
 
   test("no vault -> text only", () => {
@@ -736,7 +752,11 @@ Create `src/shorthand/notes/obsidianPluginState.ts`:
 import type { ObsidianPluginStatus } from "@/bindings";
 
 /** The one button a row can show. `null` is a text-only row. */
-export type ObsidianPluginAction = "get_obsidian" | "install" | "show" | "retry";
+export type ObsidianPluginAction =
+  | "get_obsidian"
+  | "install"
+  | "show"
+  | "retry";
 
 export type ObsidianPluginRowState =
   | { phase: "loading" }
@@ -860,12 +880,14 @@ git commit -m "feat(notes): copy and state mapping for the Obsidian plugin row"
 ### Task 3: The row, the section, and the sidebar entry
 
 **Files:**
+
 - Create: `src/shorthand/notes/ObsidianPluginRow.tsx`
 - Create: `src/shorthand/settings/NotesSettings.tsx`
 - Modify: `src/shorthand/sections.ts` (one import, one icon import, one entry)
 - Modify: `scripts/check-settings-coverage.ts` (add `join(SRC, "shorthand/notes")` to `SETTINGS_COMPONENT_DIRS`)
 
 **Interfaces:**
+
 - Consumes: `commands.getObsidianPluginStatus`, `commands.openObsidianPluginPage` (Task 1); `describeObsidianPlugin`, `ACTION_LABEL_KEYS`, `ObsidianPluginRowState`, `ObsidianPluginAction` (Task 2).
 - Produces: `NotesSettings` React component, registered as section `notes`.
 

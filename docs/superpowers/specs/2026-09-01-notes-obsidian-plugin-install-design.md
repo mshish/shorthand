@@ -49,7 +49,7 @@ into someone's notes with no consent step is the thing not to be.
 neither does the first version. To _report_ status the app has to guess the
 same vault Obsidian will: the registry entry marked `open`, else the most
 recently used (`ts`). When several are open, the most recently used of
-those. A vault picker is future work, not v1.
+those. Entries whose folder no longer has an `.obsidian/` directory are skipped — Obsidian never prunes moved or deleted vaults from the registry — and if none survives the status is `NoVault`. A vault picker is future work, not v1.
 
 **Read status from disk; refresh when the window regains focus.** Status is
 resolved by reading the registry and the vault's `.obsidian/` folder — no
