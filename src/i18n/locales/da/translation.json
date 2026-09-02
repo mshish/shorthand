@@ -193,10 +193,6 @@
         "searchPlaceholder": "Søg efter sprog...",
         "noResults": "Ingen sprog fundet",
         "auto": "Automatisk"
-      },
-      "pushToTalk": {
-        "label": "Tryk-for-at-tale",
-        "description": "Hold nede for at optage, slip for at stoppe"
       }
     },
     "models": {

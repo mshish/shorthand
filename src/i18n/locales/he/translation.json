@@ -193,10 +193,6 @@
         "searchPlaceholder": "חפש שפות...",
         "noResults": "לא נמצאו שפות",
         "auto": "אוטומטי"
-      },
-      "pushToTalk": {
-        "label": "לחץ כדי לדבר",
-        "description": "החזק כדי להקליט, שחרר כדי לעצור"
       }
     },
     "models": {

@@ -32,7 +32,6 @@
   "settings.debug.soundTheme.label": "Sound theme",
   "settings.debug.updateChecks.label": "Check for updates",
   "settings.debug.wordCorrectionThreshold.title": "Word correction threshold",
-  "settings.general.pushToTalk.label": "Push to talk",
   "settings.general.shortcut.bindings.cancel.name": "Cancel shortcut",
   "settings.general.shortcut.bindings.transcribe.description": "The keyboard shortcut to record and transcribe a meeting or note.",
   "settings.general.shortcut.title": "Shorthand shortcuts",

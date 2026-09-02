@@ -193,10 +193,6 @@
         "searchPlaceholder": "Sök språk...",
         "noResults": "Inga språk hittades",
         "auto": "Automatiskt"
-      },
-      "pushToTalk": {
-        "label": "Tryck för att tala",
-        "description": "Håll ned för att spela in, släpp för att stoppa"
       }
     },
     "models": {
