@@ -202,7 +202,6 @@ export const ModesSettings: React.FC = () => {
                   descriptionMode="inline"
                   grouped={true}
                 />
-                <PushToTalk descriptionMode="inline" grouped={true} />
                 {/* Tooltip, not inline: this row's description runs to six lines
                     and was visually the loudest thing in the default view — for a
                     secondary setting. "Descriptions inline by default" is a good
@@ -219,6 +218,13 @@ export const ModesSettings: React.FC = () => {
                 <SaveRecordings descriptionMode="inline" grouped={true} />
                 <SaveTranscripts descriptionMode="inline" grouped={true} />
                 <AdvancedOnly>
+                  {/* Push to talk is Advanced in both notetaking tabs. A meeting
+                      or a thinking session is minutes long, and holding a key
+                      for its whole length is not how anyone uses it; toggle is
+                      the shape of the mode. Dictation keeps its row in the
+                      default view because a dictation is seconds long and
+                      push-to-talk is its natural shape. */}
+                  <PushToTalk descriptionMode="tooltip" grouped={true} />
                   {/* The AI-cleanup rows are Advanced in this tab and stay in the
                       default view on the Dictation tab. The asymmetry is
                       deliberate and was asked for: cleanup is a routine part of
@@ -286,13 +292,6 @@ export const ModesSettings: React.FC = () => {
                       descriptionMode="inline"
                       grouped={true}
                     />
-                    <AssistedNotesToggleField
-                      field="push_to_talk"
-                      label={t("settings.general.pushToTalk.label")}
-                      description={t("settings.general.pushToTalk.description")}
-                      descriptionMode="inline"
-                      grouped={true}
-                    />
                     {/* Tooltip, matching both other tabs: this description
                         outweighs every control around it when inline. */}
                     <AssistedNotesOverlayStyleRow
@@ -327,6 +326,16 @@ export const ModesSettings: React.FC = () => {
                         header comment), and the other fields are unreachable
                         because paste is always `PasteMethod::None`. */}
                     <AdvancedOnly>
+                      {/* Advanced, matching Meetings; see the note there. */}
+                      <AssistedNotesToggleField
+                        field="push_to_talk"
+                        label={t("settings.general.pushToTalk.label")}
+                        description={t(
+                          "settings.general.pushToTalk.description",
+                        )}
+                        descriptionMode="tooltip"
+                        grouped={true}
+                      />
                       {/* AI cleanup is Advanced for both notetaking modes —
                           matching Meetings, and matching the warning shown
                           on the AI cleanup page that enabling it for

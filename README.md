@@ -20,7 +20,7 @@ With Claude Code or Codex, install the command-line app once and sign in. The [S
 
 You can also connect an LLM provider if you prefer an API key, a local model, or your own endpoint. Recording and transcription still work without an AI connection.
 
-[docs/AI_NOTE_TAKING.md](docs/AI_NOTE_TAKING.md) is the step-by-step setup guide the app links to.
+The app links to the step-by-step guide at [shorthand.ing/setup](https://shorthand.ing/setup); [docs/AI_NOTE_TAKING.md](docs/AI_NOTE_TAKING.md) is the same guide in this repository.
 
 ## Quick start
 

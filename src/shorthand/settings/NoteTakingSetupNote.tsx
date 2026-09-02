@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/Button";
 import { SettingContainer } from "@/components/ui/SettingContainer";
 
 /**
- * The setup guide, opened at its first step: installing the assistant and
- * signing in. That step is the one this row exists to point at; the rest of
- * the guide is a scroll away.
+ * The setup guide on shorthand.ing, opened at its first step: installing the
+ * assistant and signing in. That step is the one this row exists to point
+ * at; the rest of the guide is a scroll away. `docs/AI_NOTE_TAKING.md` is the
+ * same guide in this repository, for readers who are already on GitHub.
  */
-const SETUP_GUIDE_URL =
-  "https://github.com/mshish/shorthand/blob/main/docs/AI_NOTE_TAKING.md#1-install-the-assistant-and-sign-in";
+const SETUP_GUIDE_URL = "https://shorthand.ing/setup#step-1";
 
 interface NoteTakingSetupNoteProps {
   grouped?: boolean;
