@@ -39,6 +39,8 @@
   "settings.dictation.privacy.saveRecordings.label": "Save recordings",
   "settings.dictation.privacy.saveTranscripts.description": "Keep the transcript text for each dictation.",
   "settings.dictation.privacy.saveTranscripts.label": "Save transcripts",
+  "settings.general.pushToTalk.description": "Hold to record, release to stop",
+  "settings.general.pushToTalk.label": "Push to talk",
   "settings.general.shortcut.bindings.assisted_notes.description": "The keyboard shortcut to start and stop an assisted-notes session.",
   "settings.general.shortcut.bindings.assisted_notes.name": "Assisted notes shortcut",
   "settings.general.shortcut.bindings.assisted_notes_with_post_process.description": "Optional: a dedicated shortcut that always applies AI cleanup to an assisted-notes session.",
