@@ -1,6 +1,6 @@
 [package]
 name = "shorthand"
-version = "0.2.1"
+version = "0.3.0"
 description = "Shorthand"
 authors = ["cjpais"]
 edition = "2021"
