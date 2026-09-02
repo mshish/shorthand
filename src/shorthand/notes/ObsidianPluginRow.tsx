@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/bindings";
 import { Button } from "@/components/ui/Button";
 import { SettingContainer } from "@/components/ui/SettingContainer";
@@ -23,8 +24,8 @@ interface ObsidianPluginRowProps {
  *
  * The status is read from disk by the backend, so it is only as fresh as the
  * last check. The check that matters is the one after the person comes back
- * from Obsidian having pressed Install there — which is a window-focus event
- * from here — so the row re-checks on every focus as well as on mount. What
+ * from Obsidian having pressed Install there — which is Tauri's window focus
+ * event — so the row re-checks on every focus as well as on mount. What
  * the row says for each status lives in `obsidianPluginState.ts`; this file
  * only fetches and renders.
  */
@@ -77,8 +78,14 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
 
   useEffect(() => {
     refresh();
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    const unlisten = getCurrentWindow().onFocusChanged(
+      ({ payload: focused }) => {
+        if (focused) refresh();
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [refresh]);
 
   const act = async (action: ObsidianPluginAction) => {
@@ -96,9 +103,14 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
         return;
       case "install":
       case "show": {
-        const result = await commands.openObsidianPluginPage();
-        if (result.status === "error") {
-          setOpenError(String(result.error));
+        try {
+          const result = await commands.openObsidianPluginPage();
+          if (result.status === "error") {
+            setOpenError(String(result.error));
+            return;
+          }
+        } catch (error) {
+          setOpenError(String(error));
           return;
         }
         if (action === "install") {
@@ -108,6 +120,7 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
               ? { ...current, awaitingObsidian: true }
               : current,
           );
+          await refresh();
         }
       }
     }

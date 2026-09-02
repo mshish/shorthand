@@ -69,7 +69,7 @@
   "settings.notes.obsidian.action.show": "Show in Obsidian",
   "settings.notes.obsidian.description": "The Shorthand plugin for Obsidian follows each capture and writes the note into your vault. It runs inside Obsidian, so that is where it gets installed.",
   "settings.notes.obsidian.openFailed": "Could not open Obsidian: {{error}}",
-  "settings.notes.obsidian.status.awaitingObsidian": "Obsidian is opening on the plugin's page. Choose Install, then Enable, and come back here. If Obsidian shows its Community plugins settings instead, turn off Restricted mode and try again.",
+  "settings.notes.obsidian.status.awaitingObsidian": "Obsidian is opening on the plugin's page. Choose Install, then Enable, and come back here. If Obsidian shows its Community plugins settings instead, turn off Restricted mode under Settings → Community plugins and try again.",
   "settings.notes.obsidian.status.checkFailed": "Could not check whether the plugin is installed: {{error}}",
   "settings.notes.obsidian.status.checking": "Checking…",
   "settings.notes.obsidian.status.installed": "Installed in {{vault}}, version {{version}}.",

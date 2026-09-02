@@ -23,18 +23,18 @@ before that — and nothing here is built for before that.
 
 Verified 2026-09-01 against Obsidian 1.13.7 on this machine, not assumed.
 
-| Fact                                                                             | Evidence                                                                                                                   |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Obsidian keeps a machine-wide vault registry                                     | `%APPDATA%\obsidian\obsidian.json` — `{"vaults":{"<id>":{"path":…,"ts":…,"open":true}}}`                                   |
-| Same folder on every OS                                                          | Documented: `~/Library/Application Support/obsidian`, `$XDG_CONFIG_HOME/obsidian` or `~/.config/obsidian`, `%APPDATA%\obsidian` |
-| Tauri's `path().config_dir()` is exactly that root on all three                  | Tauri 2 docs for `config_dir`                                                                                              |
-| `obsidian://show-plugin?id=<id>` opens Obsidian on the plugin's directory page   | It is what obsidian.md's own "Install" buttons emit, and what Obsidian's "Copy share link" copies                          |
-| The handler is registered in Obsidian itself, next to `open`, `search`, `new`    | `obsidian-1.13.7.asar`: `this.register("show-plugin", …)`                                                                  |
-| With Restricted mode on, the same URI lands on the Community plugins settings tab | Same handler: `if(!plugins.isEnabled()){settings.openTabById("community-plugins")}`                                       |
-| The URI takes no vault parameter; it acts on the frontmost window                | Same handler                                                                                                               |
-| A plugin dropped into `.obsidian/plugins/` from outside loads silently on next launch | No per-plugin trust gate exists in the bundle — Restricted mode is the only gate, and it is global                    |
-| Installed plugin = `<vault>/.obsidian/plugins/shorthand/manifest.json`           | Local vault                                                                                                                |
-| Enabled plugin = id listed in `<vault>/.obsidian/community-plugins.json`         | Local vault                                                                                                                |
+| Fact                                                                                  | Evidence                                                                                                                        |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Obsidian keeps a machine-wide vault registry                                          | `%APPDATA%\obsidian\obsidian.json` — `{"vaults":{"<id>":{"path":…,"ts":…,"open":true}}}`                                        |
+| Same folder on every OS                                                               | Documented: `~/Library/Application Support/obsidian`, `$XDG_CONFIG_HOME/obsidian` or `~/.config/obsidian`, `%APPDATA%\obsidian` |
+| Tauri's `path().config_dir()` is exactly that root on all three                       | Tauri 2 docs for `config_dir`                                                                                                   |
+| `obsidian://show-plugin?id=<id>` opens Obsidian on the plugin's directory page        | It is what obsidian.md's own "Install" buttons emit, and what Obsidian's "Copy share link" copies                               |
+| The handler is registered in Obsidian itself, next to `open`, `search`, `new`         | `obsidian-1.13.7.asar`: `this.register("show-plugin", …)`                                                                       |
+| With Restricted mode on, the same URI lands on the Community plugins settings tab     | Same handler: `if(!plugins.isEnabled()){settings.openTabById("community-plugins")}`                                             |
+| The URI takes no vault parameter; it acts on the frontmost window                     | Same handler                                                                                                                    |
+| A plugin dropped into `.obsidian/plugins/` from outside loads silently on next launch | No per-plugin trust gate exists in the bundle — Restricted mode is the only gate, and it is global                              |
+| Installed plugin = `<vault>/.obsidian/plugins/shorthand/manifest.json`                | Local vault                                                                                                                     |
+| Enabled plugin = id listed in `<vault>/.obsidian/community-plugins.json`              | Local vault                                                                                                                     |
 
 ## The design
 
@@ -46,7 +46,7 @@ deliberately not taken: a third-party app writing executable JavaScript
 into someone's notes with no consent step is the thing not to be.
 
 **Whichever vault Obsidian would pick.** The URI has no vault parameter, so
-neither does the first version. To *report* status the app has to guess the
+neither does the first version. To _report_ status the app has to guess the
 same vault Obsidian will: the registry entry marked `open`, else the most
 recently used (`ts`). When several are open, the most recently used of
 those. A vault picker is future work, not v1.
@@ -54,8 +54,10 @@ those. A vault picker is future work, not v1.
 **Read status from disk; refresh when the window regains focus.** Status is
 resolved by reading the registry and the vault's `.obsidian/` folder — no
 Obsidian process involved. The row re-checks on mount, when the app window
-regains focus (which is what happens after the person installs in Obsidian
-and comes back), and on demand. That is the feedback loop: click Install →
+regains focus — driven by Tauri's window focus event (`onFocusChanged`),
+not a DOM `focus` listener, so it fires on the actual window rather than the
+browser tab — which is what happens after the person installs in Obsidian
+and comes back, and on demand. That is the feedback loop: click Install →
 Obsidian in front → Install, Enable → back to Shorthand → row now says
 installed.
 
@@ -75,10 +77,18 @@ pub enum ObsidianPluginStatus {
     Installed { vault_name: String, version: String, enabled: bool },
 }
 
-pub fn resolve_status(config_dir: &Path) -> ObsidianPluginStatus;   // pure, tested
+pub fn resolve_status(config_dir: &Path) -> Result<ObsidianPluginStatus, String>;   // pure, tested
 #[tauri::command] fn get_obsidian_plugin_status(app) -> Result<ObsidianPluginStatus, String>;
 #[tauri::command] fn open_obsidian_plugin_page(app) -> Result<(), String>;  // opener().open_url(obsidian://show-plugin?id=shorthand)
 ```
+
+`resolve_status` returns `Result` because a missing registry file
+(`ObsidianNotFound`) is not the only outcome a read can have: any other IO
+error reading `obsidian.json` — permissions, a locked file — is `Err`, and
+that `Err` is the producer of the "check failed" row in the Copy table
+below. A registry that exists but fails to parse still reports `NoVault`,
+not `Err`, since a corrupt or foreign-shaped file reads as "no usable vault"
+rather than "could not check".
 
 The URI is opened from Rust via `tauri_plugin_opener::OpenerExt`, not from
 the frontend's `openUrl`: the frontend command's default scope allows only
@@ -105,18 +115,18 @@ Sidebar label **Notes**, not Sync. Sentence case, second person, no
 exclamation marks, "Could not" not "Failed to", matching
 `src/shorthand/locales/en.json`. All strings are fork-only and live there.
 
-| State                  | Row description                                                                                                                                                                                       | Button                        |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| checking               | Checking…                                                                                                                                                                                             | —                             |
-| check failed           | Could not check whether the plugin is installed: {{error}}                                                                                                                                            | Try again (secondary)         |
-| Obsidian not found     | Obsidian isn't installed on this computer, or hasn't been opened yet. Install Obsidian and open a vault, then come back here.                                                                         | Get Obsidian (secondary)      |
-| no vault               | Obsidian is installed but has no vault yet. Open or create a vault in Obsidian, then come back here.                                                                                                  | —                             |
-| not installed          | Not installed in {{vault}}. Obsidian will open on the plugin's page; choose Install, then Enable.                                                                                                     | Install in Obsidian (primary) |
-| awaiting Obsidian      | Obsidian is opening on the plugin's page. Choose Install, then Enable, and come back here. If Obsidian shows its Community plugins settings instead, turn off Restricted mode and try again.          | Install in Obsidian (primary) |
-| installed, enabled     | Installed in {{vault}}, version {{version}}.                                                                                                                                                          | Show in Obsidian (secondary)  |
-| installed, no version  | Installed in {{vault}}.                                                                                                                                                                               | Show in Obsidian (secondary)  |
-| installed, switched off | Installed in {{vault}} but switched off. Turn it on in Obsidian under Settings → Community plugins.                                                                                                  | Show in Obsidian (secondary)  |
-| open failed            | Could not open Obsidian: {{error}}                                                                                                                                                                    | (unchanged)                   |
+| State                   | Row description                                                                                                                                                                                                                 | Button                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| checking                | Checking…                                                                                                                                                                                                                       | —                             |
+| check failed            | Could not check whether the plugin is installed: {{error}}                                                                                                                                                                      | Try again (secondary)         |
+| Obsidian not found      | Obsidian isn't installed on this computer, or hasn't been opened yet. Install Obsidian and open a vault, then come back here.                                                                                                   | Get Obsidian (secondary)      |
+| no vault                | Obsidian is installed but has no vault yet. Open or create a vault in Obsidian, then come back here.                                                                                                                            | —                             |
+| not installed           | Not installed in {{vault}}. Obsidian will open on the plugin's page; choose Install, then Enable.                                                                                                                               | Install in Obsidian (primary) |
+| awaiting Obsidian       | Obsidian is opening on the plugin's page. Choose Install, then Enable, and come back here. If Obsidian shows its Community plugins settings instead, turn off Restricted mode under Settings → Community plugins and try again. | Install in Obsidian (primary) |
+| installed, enabled      | Installed in {{vault}}, version {{version}}.                                                                                                                                                                                    | Show in Obsidian (secondary)  |
+| installed, no version   | Installed in {{vault}}.                                                                                                                                                                                                         | Show in Obsidian (secondary)  |
+| installed, switched off | Installed in {{vault}} but switched off. Turn it on in Obsidian under Settings → Community plugins.                                                                                                                             | Show in Obsidian (secondary)  |
+| open failed             | Could not open Obsidian: {{error}}                                                                                                                                                                                              | (unchanged)                   |
 
 Sheet: title **Obsidian**; description "The Shorthand plugin for Obsidian
 follows each capture and writes the note into your vault. It runs inside
