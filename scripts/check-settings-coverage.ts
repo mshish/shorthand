@@ -58,6 +58,7 @@ const SETTINGS_COMPONENT_DIRS = [
   join(SRC, "components/settings"),
   join(SRC, "shorthand/settings"),
   join(SRC, "shorthand/dictation"),
+  join(SRC, "shorthand/notes"),
   join(SRC, "shorthand/assisted-notes"),
 ];
 

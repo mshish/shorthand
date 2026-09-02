@@ -6,11 +6,13 @@ import {
   AppWindow,
   History,
   Info,
+  BookOpen,
 } from "lucide-react";
 import { ModesSettings } from "./settings/ModesSettings";
 import { AudioSettings } from "./settings/AudioSettings";
 import { ModelSettings } from "./settings/ModelSettings";
 import { AICleanupSettings } from "./settings/AICleanupSettings";
+import { NotesSettings } from "./settings/NotesSettings";
 import { AppSettings } from "./settings/AppSettings";
 import { HistorySettings } from "./settings/HistorySettings";
 import { AboutSettings } from "./settings/AboutSettings";
@@ -33,7 +35,8 @@ import { AboutSettings } from "./settings/AboutSettings";
  *
  * The order is the order a person meets the product: what the shortcuts do,
  * then what it listens to, then what it transcribes with, then the optional
- * cleanup, then the app itself, then what it kept, then what it is.
+ * cleanup, then where the notes go, then the app itself, then what it kept,
+ * then what it is.
  */
 export const SHORTHAND_SECTIONS = {
   modes: {
@@ -73,6 +76,16 @@ export const SHORTHAND_SECTIONS = {
     labelKey: "sidebar.aiCleanup",
     icon: Sparkles,
     component: AICleanupSettings,
+    enabled: () => true,
+  },
+  // Where the notes go. Sits after the modes and the cleanup that produce a
+  // transcript, and before the app's own preferences: by the time someone
+  // reaches this row they know what the app captures, and the next question
+  // is where it lands.
+  notes: {
+    labelKey: "sidebar.notes",
+    icon: BookOpen,
+    component: NotesSettings,
     enabled: () => true,
   },
   app: {
