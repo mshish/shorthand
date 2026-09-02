@@ -20,6 +20,8 @@ With Claude Code or Codex, install the command-line app once and sign in. The [S
 
 You can also connect an LLM provider if you prefer an API key, a local model, or your own endpoint. Recording and transcription still work without an AI connection.
 
+[docs/AI_NOTE_TAKING.md](docs/AI_NOTE_TAKING.md) is the step-by-step setup guide the app links to.
+
 ## Quick start
 
 This walkthrough covers Windows and desktop Obsidian, the combination tested today.
@@ -30,16 +32,11 @@ This walkthrough covers Windows and desktop Obsidian, the combination tested tod
    - Follow the first-run setup to choose and download a transcription model.
    - Windows SmartScreen may warn that the installer is unsigned. Select **More info**, then **Run anyway**.
 
-2. **Install the Obsidian plugin with BRAT.**
-   1. In Obsidian, open **Settings → Community plugins → Browse**.
-   2. Find **Obsidian42 - BRAT**, then install and enable it.
-   3. Open the command palette and run **Add a beta plugin for testing**.
-   4. Paste `https://github.com/mshish/shorthand-obsidian-plugin` and add the plugin.
-   5. Return to **Settings → Community plugins** and enable **Shorthand**.
+2. **Connect Obsidian.** In Shorthand, open **Notes** and choose **Install in Obsidian**. Obsidian opens on the Shorthand plugin's page; choose **Install**, then **Enable**.
 
 3. **Choose how Shorthand writes your notes.** Open the Shorthand plugin settings in Obsidian, find **Enhancement backend**, and choose one:
-   - **Claude Code (default):** Install [Claude Code](https://docs.claude.com/en/docs/claude-code/setup). Open PowerShell or Terminal, run `claude login`, and sign in with your Claude account.
-   - **Codex:** Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Open PowerShell or Terminal, run `codex login`, and sign in with your ChatGPT account.
+   - **Claude Code (default):** Install [Claude Code](https://code.claude.com/docs/en/setup#install-claude-code). Open PowerShell or Terminal, run `claude auth login`, and sign in with your Claude account.
+   - **Codex:** Install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli#getting-started). Open PowerShell or Terminal, run `codex login`, and sign in with your ChatGPT account.
    - **LLM provider:** Enter the provider, model, endpoint, and API key if one is required.
 
 4. **Create your first note.**

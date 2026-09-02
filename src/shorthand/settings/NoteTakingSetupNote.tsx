@@ -4,8 +4,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/Button";
 import { SettingContainer } from "@/components/ui/SettingContainer";
 
-/** Where the README explains which subscription covers note taking. */
-const SETUP_GUIDE_URL = "https://github.com/mshish/shorthand#ai-note-taking";
+/**
+ * The setup guide, opened at its first step: installing the assistant and
+ * signing in. That step is the one this row exists to point at; the rest of
+ * the guide is a scroll away.
+ */
+const SETUP_GUIDE_URL =
+  "https://github.com/mshish/shorthand/blob/main/docs/AI_NOTE_TAKING.md#1-install-the-assistant-and-sign-in";
 
 interface NoteTakingSetupNoteProps {
   grouped?: boolean;
@@ -23,9 +28,11 @@ interface NoteTakingSetupNoteProps {
  * controls in both notetaking tabs rather than as an error after a capture has
  * already been wasted.
  *
- * It also carries the fact most people do not know they already have: a paid
+ * The row says only what the prerequisite is; the guide it links to carries
+ * the how, and the fact most people do not know they already have: a paid
  * Claude or ChatGPT subscription includes the assistant, so note taking needs
- * no API key and costs nothing per use.
+ * no API key. The description was once four sentences long and outweighed
+ * every control beneath it.
  */
 export const NoteTakingSetupNote: React.FC<NoteTakingSetupNoteProps> = ({
   grouped = false,

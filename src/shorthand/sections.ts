@@ -34,8 +34,8 @@ import { AboutSettings } from "./settings/AboutSettings";
  * being reachable.
  *
  * The order is the order a person meets the product: what the shortcuts do,
- * then what it listens to, then what it transcribes with, then the optional
- * cleanup, then where the notes go, then the app itself, then what it kept,
+ * then where the notes go, then what it listens to, then what it transcribes
+ * with, then the optional cleanup, then the app itself, then what it kept,
  * then what it is.
  */
 export const SHORTHAND_SECTIONS = {
@@ -43,6 +43,16 @@ export const SHORTHAND_SECTIONS = {
     labelKey: "sidebar.modes",
     icon: SlidersHorizontal,
     component: ModesSettings,
+    enabled: () => true,
+  },
+  // Where the notes go, directly under the modes that produce them. The two
+  // are the product; everything below is how it listens, transcribes and
+  // tidies. This row is also the one that installs the Obsidian plugin, which
+  // a new install needs before the audio or model rows matter.
+  notes: {
+    labelKey: "sidebar.notes",
+    icon: BookOpen,
+    component: NotesSettings,
     enabled: () => true,
   },
   audio: {
@@ -76,16 +86,6 @@ export const SHORTHAND_SECTIONS = {
     labelKey: "sidebar.aiCleanup",
     icon: Sparkles,
     component: AICleanupSettings,
-    enabled: () => true,
-  },
-  // Where the notes go. Sits after the modes and the cleanup that produce a
-  // transcript, and before the app's own preferences: by the time someone
-  // reaches this row they know what the app captures, and the next question
-  // is where it lands.
-  notes: {
-    labelKey: "sidebar.notes",
-    icon: BookOpen,
-    component: NotesSettings,
     enabled: () => true,
   },
   app: {
