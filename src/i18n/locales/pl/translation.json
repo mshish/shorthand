@@ -213,10 +213,6 @@
         "searchPlaceholder": "Szukaj języka...",
         "noResults": "Nie znaleziono języków",
         "auto": "Automatycznie"
-      },
-      "pushToTalk": {
-        "label": "Naciśnij i mów",
-        "description": "Przytrzymaj, aby nagrywać, puść, aby zatrzymać"
       }
     },
     "sound": {
