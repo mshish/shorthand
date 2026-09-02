@@ -110,7 +110,8 @@ contour: four paths, two using `fill-rule="evenodd"` to punch counters through
 the bird’s body and pen barrel. It fills with `currentColor` or an explicit
 colour, so it can inherit ink in the UI or be rasterised into each tray
 treatment without owning a fixed palette — this is what `gen-brand-icons.mjs`
-draws the app icon and every tray state from.
+draws every tray state from. It no longer draws the app icon; see
+[The app icon](#the-app-icon).
 
 The previous mark was a lowercase “s” written with a pointed pen. SVG cannot
 vary `stroke-width` along a path, so its visible stroke had to be an outline: a
@@ -299,6 +300,7 @@ The approved source pack is in `brand-assets/`:
 | `FONT.md`                                 | Fraunces, Source Code Pro and the surviving live-type settings                                                                                      |
 | `mark-silhouette.svg`                     | source of truth for the one-colour mark                                                                                                             |
 | `mark-full-colour-transparent.png`        | source of truth for the coloured bird-and-pen mark on its own, for uses without the product name                                                    |
+| `mark-full-colour-centred.png`            | **source of truth for the app icon**: the same mark recomposed for a square frame, bird centred over the pen rather than beside it                  |
 | `wordmark-full-colour.png`                | the word and its coral swash alone — superseded as the lockup source by `logo-full-colour-transparent.png`, kept as the delivered word-only artwork |
 | `wordmark-full-colour-no-stroke.png`      | the same word without the swash — delivered alongside it, currently unused; the shipped lockup wants the swash                                      |
 | `logo-full-colour-transparent.png`/`.svg` | **source of truth for the shipped lockup**; `gen-brand-wordmark.mjs` derives both theme variants from it. The nib-into-S interlock exists only here |
@@ -395,10 +397,19 @@ node scripts/gen-brand-wordmark.mjs  # node, not bun — both lockup variants
 cd src-tauri && bun x tauri icon     # slices app-icon.png to every platform
 ```
 
-The icon generator reads every path and its fill rule from `mark.svg`. Both
-scripts rasterise through Playwright’s Chromium, which is already a
-devDependency — deliberately avoiding a native image toolchain in a fork whose
-`package.json` has to stay mergeable.
+The icon generator has two inputs: every path and its fill rule from
+`mark.svg`, for the tray states, and `brand-assets/mark-full-colour-centred.png`
+embedded as a data URI, for the app icon. Both scripts rasterise through
+Playwright’s Chromium, which is already a devDependency — deliberately avoiding
+a native image toolchain in a fork whose `package.json` has to stay mergeable.
+
+**`tauri icon` is not optional after the generator runs.** `gen-brand-icons.mjs`
+writes only the 1024px master at `src-tauri/app-icon.png`; the files
+`tauri.conf.json` actually bundles (`icon.ico`, `icon.icns`, `32x32.png`,
+`128x128.png`, …) come from the slicer. Running one without the other leaves the
+icon set half-updated — the Windows Store tiles carrying new artwork while the
+bundled icons still carry the old — which has happened once and is invisible
+until an installed build shows the wrong icon.
 
 Re-run `gen-brand-wordmark.mjs` whenever
 `brand-assets/logo-full-colour-transparent.png` is re-rendered. It re-measures
@@ -436,8 +447,62 @@ bleed.
 
 This is tuned for 16–24px, where a tray icon actually lives (32px at 200% DPI
 is the ceiling). Inspected large, the flat cut edge is visible; nothing renders
-it that way. The installed app icon is unaffected — `appIcon()` still centres
-the whole mark inside its tile.
+it that way. The installed app icon is unaffected — it is a different artwork
+on a different tile; see [The app icon](#the-app-icon).
+
+## The app icon
+
+The installed app icon is the **full-colour clay render on a paper tile**, not
+the silhouette. The tray and the app icon look like the same problem and are
+not: a tray glyph has to survive 16px as one flat colour against an
+uncontrolled menu bar, and an app icon does not. Below roughly 24px the clay
+detail turns to mush — inherent to a photographic render, and the reason the
+tray keeps the silhouette.
+
+It is drawn from `brand-assets/mark-full-colour-centred.png`, a second delivery
+of the mark composed for a square frame: the bird sits centred over the pen
+rather than beside it, so the drawing is 1.55:1 instead of the lockup mark's
+1.76:1. **Do not substitute `mark-full-colour-transparent.png`** — that one is
+composed for the lockup and a much smaller share of a square tile is bird.
+
+Two decisions are worth not re-litigating.
+
+**The tile is paper, not ink.** The obvious choice was the ocean-blue tile the
+silhouette used. The bird's body is that same blue, so its head and back
+dissolve into the background and the icon reads as a coral wing floating on
+blue. Charcoal and warm-slate tiles were also tried: both are excellent on a
+light background and fail on a dark one, where the tile edge disappears and the
+icon stops reading as a tile at all. Paper fails the other way and more gently —
+its edge softens on light backgrounds, but the drawing stays high-contrast
+enough to hold the shape. Paper is also the ground the artwork was rendered
+against, so its baked-in ambient shadow reads as shadow rather than as a halo.
+
+**The mark is contained, not bled.** The tray bleeds its mark off one edge
+because that mark is landscape enough to leave empty bands inside a square.
+This artwork was composed for a square, so it fills the tile at
+`APP_ICON_MARK_SCALE = 0.94` without that slack. Bleeding it as well was tried
+and only cropped the tail and nib for nothing.
+
+### There is no dark-mode app icon, and there cannot be one yet
+
+Neither platform can take a second icon through the toolchain we ship:
+
+- **Windows** has no dark-mode app icon concept. One `.ico` serves the taskbar,
+  Explorer, Alt-Tab and Start regardless of theme. The `altform-*` variants in
+  the MSIX assets are about tile plating, not light/dark.
+- **macOS** gained real appearance variants (Default/Dark/Clear/Tinted) in
+  macOS 26 via Icon Composer's layered `.icon` format. Tauri's bundler emits
+  `.icns`, which has no such variants, so that path is closed until Tauri
+  supports `.icon`.
+
+So the tile has to be one opaque colour that works on both, which is the
+argument for having a tile at all rather than a bare transparent bird. It is
+also why a bare bird was rejected on macOS grounds separately: since Big Sur,
+and enforced in macOS 26, a macOS app icon is a rounded rectangle the system
+masks and shadows, and free-floating shapes on transparency are the pre-2020
+style.
+
+## Tray states
 
 The mark is line art: the bird and the pen are each an `evenodd` shape whose
 inner subpath leaves a hollow interior. **State is carried by filling those

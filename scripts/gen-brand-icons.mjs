@@ -30,6 +30,31 @@ import fs from "node:fs";
  * part of the silhouette, not optional rendering detail.
  */
 const MARK_SVG = fs.readFileSync("src/shorthand/brand/mark.svg", "utf8");
+
+/**
+ * The installed app icon is the full-colour clay render, not the silhouette —
+ * the tray is where the mark has to survive 16px as one flat colour, and the
+ * app icon is not. It is a raster, so it is embedded as a data URI rather than
+ * drawn from paths like everything else in this file.
+ *
+ * `mark-full-colour-centred.png` is a second delivery of the mark, composed for
+ * a square frame: the bird sits centred over the pen rather than beside it, so
+ * the drawing is 1.55:1 instead of the lockup mark's 1.76:1 and a much larger
+ * share of a square tile is bird. Do not substitute
+ * `mark-full-colour-transparent.png` here — that one is composed for the
+ * stacked lockup and reads noticeably smaller in a tile.
+ */
+const COLOUR_MARK_FILE = "brand-assets/mark-full-colour-centred.png";
+const COLOUR_MARK_DATA_URI = `data:image/png;base64,${fs.readFileSync(COLOUR_MARK_FILE).toString("base64")}`;
+
+/**
+ * The artwork's own canvas, and the drawing's alpha bounds within it. Measured
+ * from the delivered file; the slack around the drawing is not padding we want,
+ * so placement fits these bounds rather than the canvas, exactly as MARK_BOUNDS
+ * does for the silhouette. Re-measure if the artwork is re-delivered.
+ */
+const COLOUR_MARK_CANVAS = { width: 1377, height: 942 };
+const COLOUR_MARK_BOUNDS = { minX: 32, minY: 23, width: 1326, height: 858 };
 const MARK_PATH_ELEMENT_COUNT = [...MARK_SVG.matchAll(/<path\b/g)].length;
 const MARK_PATH_ELEMENTS = [...MARK_SVG.matchAll(/<path\b[^>]*\/?>/g)].map(
   ([element]) => element,
@@ -91,6 +116,9 @@ const PEN_BARREL_PATH = counterOf(2, "pen");
 
 /** Paper and ink, matching src/shorthand/brand/theme.css. */
 const PAPER = "#FAF5EA";
+/** The foot of the app icon tile's paper gradient. Not a theme token — it
+ *  exists only to keep the tile from reading as a flat rectangle. */
+const PAPER_SHADE = "#EEE5D4";
 const INK = "#14202B";
 /**
  * The tray's "Colored" theme sits on an uncontrolled menu bar. This fallback
@@ -243,17 +271,55 @@ function stateMark(color, fills = {}) {
   return svg(TRAY_BOX, mark(TRAY_BOX, TRAY_MARK_SCALE, color, dx, 0, fills));
 }
 
-/** The installed app icon: the mark reversed out of an ink tile. */
+/**
+ * The installed app icon: the full-colour mark on a paper tile.
+ *
+ * **The tile is paper, not ink.** The bird's body is the same ocean blue as
+ * `ACCENT`, so on the ink tile the head and back dissolve into the background
+ * and the icon reads as a coral wing floating on blue. Paper separates every
+ * part of the drawing, and it is the ground the artwork was rendered against —
+ * its baked-in ambient shadow sits naturally on cream and reads as a halo on a
+ * dark tile.
+ *
+ * **The mark is contained, not bled.** The tray bleeds its mark off one edge
+ * because that mark is 1.76:1 and would otherwise sit in a square with empty
+ * bands above and below. This artwork is a different delivery composed for a
+ * square frame — the bird is centred over the pen rather than beside it, at
+ * 1.55:1 — so it fills the tile at `APP_ICON_MARK_SCALE` without any of the
+ * slack that made bleeding worth its cost. Bleeding it as well was tried and
+ * simply cropped the tail and nib for nothing.
+ *
+ * Below roughly 24px the clay detail turns to mush — that is inherent to a
+ * photographic render, and is why the tray still uses the flat silhouette,
+ * which is the artwork that actually has to survive 16px.
+ */
+const APP_ICON_MARK_SCALE = 0.94;
+
 function appIcon(box) {
   const inset = box * 0.09;
   const tile = box - inset * 2;
+  // Fit by the drawing's alpha bounds, then scale past 1 so the width bleeds.
+  const width = tile * APP_ICON_MARK_SCALE;
+  const height = (width * COLOUR_MARK_BOUNDS.height) / COLOUR_MARK_BOUNDS.width;
+  const s = width / COLOUR_MARK_BOUNDS.width;
+  const x = inset + (tile - width) / 2 - COLOUR_MARK_BOUNDS.minX * s;
+  const y = inset + (tile - height) / 2 - COLOUR_MARK_BOUNDS.minY * s;
   return svg(
     box,
     `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
-      `<stop offset="0" stop-color="${ACCENT}"/><stop offset="1" stop-color="${ACCENT_STROKE}"/>` +
-      `</linearGradient></defs>` +
+      `<stop offset="0" stop-color="${PAPER}"/><stop offset="1" stop-color="${PAPER_SHADE}"/>` +
+      `</linearGradient>` +
+      // The mark is contained at the current scale, but it is clipped to the
+      // tile anyway: the margin outside the tile has to stay transparent for
+      // the platform slicers, and a future scale bump should crop rather than
+      // silently paint into it.
+      `<clipPath id="tile"><rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${tile * 0.22}"/></clipPath>` +
+      `</defs>` +
+      `<g clip-path="url(#tile)">` +
       `<rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${tile * 0.22}" fill="url(#g)"/>` +
-      `<g transform="translate(${inset} ${inset})">${mark(tile, 0.56, PAPER)}</g>`,
+      `<image href="${COLOUR_MARK_DATA_URI}" x="${x}" y="${y}" ` +
+      `width="${COLOUR_MARK_CANVAS.width * s}" height="${COLOUR_MARK_CANVAS.height * s}"/>` +
+      `</g>`,
   );
 }
 
