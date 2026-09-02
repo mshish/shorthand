@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands } from "@/bindings";
@@ -35,19 +35,45 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
   const [state, setState] = useState<ObsidianPluginRowState>({
     phase: "loading",
   });
-  const [awaitingObsidian, setAwaitingObsidian] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  // Single source of truth for the hand-off flag, kept in a ref rather than
+  // state: `refresh` reads it fresh on every call, so it does not need to be
+  // a dependency of the `useCallback` below. Making it a dependency would
+  // mean every flip of the flag gives `refresh` a new identity, which tears
+  // down and re-subscribes the focus listener (and re-fetches) in the effect
+  // that follows. True after Install has been pressed, cleared by `refresh`
+  // once a status read reports the plugin installed — see
+  // `ObsidianPluginRowState["awaitingObsidian"]` in `obsidianPluginState.ts`.
+  const awaitingObsidianRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    // tauri-specta resolves a backend `Err` as `{status: "error"}`, not a
-    // rejection — see docs/FRONTEND_TESTING.md for the bug that taught us.
-    const result = await commands.getObsidianPluginStatus();
-    if (result.status === "error") {
-      setState({ phase: "error", message: String(result.error) });
-      return;
+    // An action error is only relevant until the next status read explains
+    // where things actually stand, so it doesn't survive a refresh.
+    setOpenError(null);
+    try {
+      // tauri-specta resolves a backend `Err` as `{status: "error"}`, not a
+      // rejection — see docs/FRONTEND_TESTING.md for the bug that taught us.
+      // A rejection (IPC failure, backend panic) is still possible, so this
+      // is wrapped too: without it, a rejection here would leave the row on
+      // "Checking…" forever instead of the `error` phase and its retry
+      // button.
+      const result = await commands.getObsidianPluginStatus();
+      if (result.status === "error") {
+        setState({ phase: "error", message: String(result.error) });
+        return;
+      }
+      if (result.data.kind === "installed") {
+        awaitingObsidianRef.current = false;
+      }
+      setState({
+        phase: "ready",
+        status: result.data,
+        awaitingObsidian: awaitingObsidianRef.current,
+      });
+    } catch (error) {
+      setState({ phase: "error", message: String(error) });
     }
-    setState({ phase: "ready", status: result.data, awaitingObsidian });
-  }, [awaitingObsidian]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -62,7 +88,11 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
         await refresh();
         return;
       case "get_obsidian":
-        await openUrl(OBSIDIAN_DOWNLOAD_URL);
+        try {
+          await openUrl(OBSIDIAN_DOWNLOAD_URL);
+        } catch (error) {
+          setOpenError(String(error));
+        }
         return;
       case "install":
       case "show": {
@@ -72,7 +102,7 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
           return;
         }
         if (action === "install") {
-          setAwaitingObsidian(true);
+          awaitingObsidianRef.current = true;
           setState((current) =>
             current.phase === "ready"
               ? { ...current, awaitingObsidian: true }
@@ -87,6 +117,7 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
   const description = openError
     ? t("settings.notes.obsidian.openFailed", { error: openError })
     : t(view.descriptionKey, view.params);
+  const action = view.action;
 
   return (
     <SettingContainer
@@ -95,13 +126,13 @@ export const ObsidianPluginRow: React.FC<ObsidianPluginRowProps> = ({
       descriptionMode="inline"
       grouped={grouped}
     >
-      {view.action && (
+      {action && (
         <Button
-          variant={view.action === "install" ? "primary" : "secondary"}
+          variant={action === "install" ? "primary" : "secondary"}
           size="md"
-          onClick={() => act(view.action as ObsidianPluginAction)}
+          onClick={() => act(action)}
         >
-          {t(ACTION_LABEL_KEYS[view.action])}
+          {t(ACTION_LABEL_KEYS[action])}
         </Button>
       )}
     </SettingContainer>
