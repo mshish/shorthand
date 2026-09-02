@@ -807,6 +807,8 @@ pub fn run(cli_args: CliArgs) {
             commands::get_app_settings,
             commands::get_default_settings,
             commands::change_follow_stream_enabled_setting,
+            shorthand::obsidian::get_obsidian_plugin_status,
+            shorthand::obsidian::open_obsidian_plugin_page,
             commands::get_log_dir_path,
             commands::set_log_level,
             commands::open_recordings_folder,

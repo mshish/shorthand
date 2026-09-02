@@ -605,6 +605,32 @@ async changeFollowStreamEnabledSetting(enabled: boolean) : Promise<Result<null, 
     else return { status: "error", error: e  as any };
 }
 },
+async getObsidianPluginStatus() : Promise<Result<ObsidianPluginStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_obsidian_plugin_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Opens Obsidian on the plugin's directory page, where its own Install and
+ * Enable buttons are. Obsidian picks the vault (the URI has no vault
+ * parameter); with Restricted mode on it lands on the Community plugins
+ * settings tab instead, which the frontend copy explains.
+ * 
+ * Opened from the Rust side of the opener plugin on purpose: the frontend
+ * `openUrl` command's default scope allows only http, https, mailto and tel,
+ * and widening it means editing an upstream capability file.
+ */
+async openObsidianPluginPage() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_obsidian_plugin_page") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getLogDirPath() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_log_dir_path") };
@@ -1231,6 +1257,25 @@ sha256: string | null } } |
  */
 "Local"
 export type ModelUnloadTimeout = "never" | "immediately" | "min_2" | "min_5" | "min_10" | "min_15" | "hour_1" | "sec_15"
+export type ObsidianPluginStatus = 
+/**
+ * No Obsidian config folder, or no vault registry inside it.
+ */
+{ kind: "obsidian_not_found" } | 
+/**
+ * Obsidian has run, but the registry lists no vault or is unreadable.
+ */
+{ kind: "no_vault" } | 
+/**
+ * The vault a URI would land in has no `plugins/shorthand/manifest.json`.
+ */
+{ kind: "not_installed"; vault_name: string } | 
+/**
+ * The manifest is there. `enabled` is whether the id appears in the
+ * vault's `community-plugins.json`; `version` is the manifest's, or
+ * empty if the manifest could not be parsed.
+ */
+{ kind: "installed"; vault_name: string; version: string; enabled: boolean }
 export type OrtAcceleratorSetting = "auto" | "cpu" | "cuda" | "directml" | "rocm"
 export type OverlayPosition = "top" | "bottom"
 /**
