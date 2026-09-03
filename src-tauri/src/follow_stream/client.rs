@@ -11,7 +11,7 @@ use crate::FollowStreamMode;
 use super::socket_name_owned;
 
 const NOT_RUNNING_MESSAGE: &str =
-    "Handy is not running, or live transcript streaming is disabled in Settings";
+    "Shorthand is not running, or live transcript streaming is disabled in Settings";
 const DELTA_REQUIRES_STREAMING_MESSAGE: &str =
     "Delta and text modes require a model that supports streaming";
 

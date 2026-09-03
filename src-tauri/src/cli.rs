@@ -171,7 +171,7 @@ pub struct CliArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Attach to the running Handy instance and stream live transcript events to
+    /// Attach to the running Shorthand instance and stream live transcript events to
     /// stdout as NDJSON. Pass `delta` for append-only committed text as JSONL,
     /// or `text` for the plain human-readable rendering of the same.
     #[arg(

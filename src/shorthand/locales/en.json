@@ -5,7 +5,7 @@
   "settings.about.acknowledgments.handy.title": "Handy",
   "settings.about.showAllSettings.description": "Reveal every setting and transcription model from upstream Handy, including the ones Shorthand hides.",
   "settings.about.showAllSettings.label": "Show all Handy settings",
-  "settings.advanced.followStream.description": "Allow local tools to follow live transcript events by running `handy --follow-stream`.",
+  "settings.advanced.followStream.description": "Allow local tools to follow live transcript events by running `shorthand --follow-stream`.",
   "settings.advanced.followStream.label": "Follow live transcript output",
   "settings.advanced.switch.description": "Show every setting, not just the ones most people need. Nothing moves — the extra rows appear in the sections they belong to.",
   "settings.advanced.switch.label": "Advanced settings",
