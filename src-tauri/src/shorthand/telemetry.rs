@@ -269,6 +269,7 @@ pub fn report_error(kind: &'static str, detail: Option<&str>) {
 /// the engine's text can vary and is not reviewed for what it might carry,
 /// unlike the other two capture points' fixed `kind` tags.
 pub fn transcription_reason(err: &str) -> &'static str {
+    let err = err.to_lowercase();
     if err.contains("panicked") {
         "engine_panic"
     } else if err.contains("timed out") {
@@ -402,8 +403,9 @@ mod tests {
             "engine_panic"
         );
         assert_eq!(
-            transcription_reason("finalize timed out after 30s"),
-            "finalize_timeout"
+            transcription_reason("Timed out waiting 30s for live transcription to finalize"),
+            "finalize_timeout",
+            "must match the real message shape from managers/transcription.rs case-insensitively"
         );
         assert_eq!(
             transcription_reason("transcription failed: no audio"),
