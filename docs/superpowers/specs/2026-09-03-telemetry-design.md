@@ -178,9 +178,9 @@ cell. `model` is the catalogue id, or the literal `custom` when
 `ModelInfo::is_custom` is true, so user-named models never appear. `outcome` is
 `ok` or `error`. Duration is recording start to transcription result.
 
-**Sessions**, via `auto_session_tracking` in application mode, which gives
-active installs, crash-free rate, and both per release and per OS, at no
-further instrumentation.
+**Sessions**, started and ended explicitly by `set_consent` (application
+session mode), which gives active installs, crash-free rate, and both per
+release and per OS, at no further instrumentation.
 
 **Never**: `send_default_pii` stays false. `server_name` is left `None` so the
 hostname is not sent. No breadcrumbs from logs. No request or environment

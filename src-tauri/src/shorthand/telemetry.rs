@@ -86,18 +86,24 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
         return None;
     }
     // `ClientOptions` is `#[non_exhaustive]`, so it is built through its
-    // setter methods rather than struct-literal syntax. `server_name` is
-    // left unset (defaults to `None`): never the hostname.
-    let options = sentry::ClientOptions::new()
-        .dsn(DSN)
+    // setter methods rather than struct-literal syntax; `dsn` has no setter
+    // that returns `Option` on failure (`.dsn(&str)` panics), so it is
+    // assigned directly to the public field instead — see `dsn_constant_parses`
+    // for the test that would catch a typo in `DSN` before a release does.
+    // `server_name` is left unset (defaults to `None`): never the hostname.
+    // `auto_session_tracking` is off: `set_consent` is the sole owner of
+    // `start_session`/`end_session`, so the SDK must not start one of its
+    // own at `init` time, before consent has been read.
+    let mut options = sentry::ClientOptions::new()
         .release(concat!("shorthand@", env!("CARGO_PKG_VERSION")))
         .environment("production")
         .send_default_pii(false)
-        .auto_session_tracking(true)
+        .auto_session_tracking(false)
         .session_mode(sentry::SessionMode::Application)
         .transport(GatedTransportFactory {
             gate: consent_flag(),
         });
+    options.dsn = DSN.parse().ok();
     Some(sentry::init(options))
 }
 
@@ -164,6 +170,16 @@ fn model_attribute(model_id: &str, is_custom: bool) -> String {
     }
 }
 
+/// Resolves `model_attribute` from a catalogue lookup that may have found
+/// nothing. Fails closed: `None` (the model manager wasn't in `AppHandle`
+/// state, or the selected id has no catalogue entry) is treated the same
+/// as `is_custom = true`, so an id the catalogue doesn't recognise — which
+/// is exactly the shape of a user-named custom model — never reaches
+/// Sentry verbatim just because the lookup came back empty.
+fn model_attribute_for(is_custom: Option<bool>, model_id: &str) -> String {
+    model_attribute(model_id, is_custom.unwrap_or(true))
+}
+
 /// Marks the start of a capture. Called once per capture, next to
 /// `mode::set_active`.
 pub fn capture_started() {
@@ -184,9 +200,8 @@ pub fn capture_completed(app: &AppHandle, ok: bool) {
     let is_custom = app
         .try_state::<Arc<crate::managers::model::ModelManager>>()
         .and_then(|mm| mm.get_model_info(&settings.selected_model))
-        .map(|info| info.is_custom)
-        .unwrap_or(false);
-    let model = model_attribute(&settings.selected_model, is_custom);
+        .map(|info| info.is_custom);
+    let model = model_attribute_for(is_custom, &settings.selected_model);
 
     sentry::metrics::counter("capture.completed", 1)
         .attribute("mode", mode)
@@ -265,6 +280,29 @@ mod tests {
             "parakeet-tdt-0.6b-v3"
         );
         assert_eq!(model_attribute("my-private-finetune", true), "custom");
+    }
+
+    #[test]
+    fn model_attribute_for_fails_closed_on_unresolved_lookup() {
+        assert_eq!(
+            model_attribute_for(None, "unrecognized-model-id"),
+            "custom",
+            "an absent model manager or unmatched catalogue entry must not leak the raw id"
+        );
+        assert_eq!(
+            model_attribute_for(Some(false), "parakeet-tdt-0.6b-v3"),
+            "parakeet-tdt-0.6b-v3"
+        );
+        assert_eq!(
+            model_attribute_for(Some(true), "my-private-finetune"),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn dsn_constant_parses() {
+        DSN.parse::<sentry::types::Dsn>()
+            .expect("DSN constant must be a valid Sentry DSN");
     }
 
     #[test]

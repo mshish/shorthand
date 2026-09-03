@@ -215,7 +215,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // never reassigned -- which `unused_mut` rejects under `-D warnings`.
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut initial_settings = settings::get_settings(app_handle);
-    shorthand::telemetry::set_consent(app_handle, initial_settings.telemetry_enabled);
     // Linux has no ALSA-loopback fallback. If neither supported sound-server
     // backend can be opened at startup, persist the same disabled state that
     // the managers below will observe; do not write a clone after constructing
@@ -230,6 +229,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         initial_settings.dictation.system_audio_enabled = false;
         settings::write_settings(app_handle, initial_settings.clone());
     }
+    // Read fresh rather than trusting `initial_settings`: the Linux block
+    // above may have just persisted a settings write, and consuming that
+    // stale snapshot here would silently revert it by writing back the
+    // pre-fallback value alongside the install id.
+    shorthand::telemetry::set_consent(
+        app_handle,
+        settings::get_settings(app_handle).telemetry_enabled,
+    );
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can
     // select it at hotkey time; model loading remains lazy inside
