@@ -32,8 +32,9 @@ excluded for the same reason.
 - **Nothing before consent.** With the toggle off, zero bytes leave the
   machine. Not a session, not a metric, not a buffered event.
 - **Existing installs stay off.** A store that predates this feature has no
-  `telemetry_enabled` key and must load as `false`. Only the first-run consent
-  step, or the Settings toggle, ever writes `true`.
+  `telemetry_enabled` key and must load as `None`, which is treated as off.
+  Only the first-run consent step, or the Settings toggle, ever writes
+  `true`.
 - **No user content, ever.** No audio, transcript, note, file name or path, API
   key, hostname, name, email or IP address reaches Sentry. The capture points
   are enumerated below and each one is reviewed for what its error text can
@@ -146,9 +147,10 @@ Copy, English only, in `src/shorthand/locales/en.json` under
 ### Settings toggle
 
 `TelemetryToggle` in `src/shorthand/telemetry/`, rendered in the fork's App
-section's first group after `ShowTrayIcon`. Label "Send crash reports and usage
-counts"; description "Anonymous crash reports and a few usage counts. Never
-audio, transcripts, notes or personal details." Keys under
+section directly after `AutostartToggle`, outside the Advanced-only rows, so
+it is reachable without opening Advanced settings. Label "Send crash reports
+and usage counts"; description "Anonymous crash reports and a few usage
+counts. Never audio, transcripts, notes or personal details." Keys under
 `settings.app.telemetry.*`. The settings-coverage check picks it up because
 `src/shorthand/settings` is an entry point and the component lives under
 `src/shorthand`, which is in `SETTINGS_COMPONENT_DIRS`.
