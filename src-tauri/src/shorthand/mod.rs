@@ -7,3 +7,4 @@ pub mod capture_command;
 pub mod dictation;
 pub mod mode;
 pub mod obsidian;
+pub mod telemetry;

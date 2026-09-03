@@ -215,6 +215,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // never reassigned -- which `unused_mut` rejects under `-D warnings`.
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut initial_settings = settings::get_settings(app_handle);
+    shorthand::telemetry::set_consent(app_handle, initial_settings.telemetry_enabled);
     // Linux has no ALSA-loopback fallback. If neither supported sound-server
     // backend can be opened at startup, persist the same disabled state that
     // the managers below will observe; do not write a clone after constructing
@@ -727,6 +728,10 @@ pub fn run(cli_args: CliArgs) {
     // Detect portable mode before anything else
     portable::init();
 
+    // Fork-only: crash reports and usage counts. Held for the process
+    // lifetime so the transport flushes on exit. Gate closed until setup.
+    let _telemetry = shorthand::telemetry::init();
+
     // Parse console logging directives from RUST_LOG, falling back to info-level logging
     // when the variable is unset
     let console_filter = build_console_filter();
@@ -809,6 +814,7 @@ pub fn run(cli_args: CliArgs) {
             commands::change_follow_stream_enabled_setting,
             shorthand::obsidian::get_obsidian_plugin_status,
             shorthand::obsidian::open_obsidian_plugin_page,
+            shorthand::telemetry::change_telemetry_enabled_setting,
             commands::get_log_dir_path,
             commands::set_log_level,
             commands::open_recordings_folder,
