@@ -46,10 +46,10 @@ export const AppSettings: React.FC = () => {
         <ThemeSelector descriptionMode="inline" grouped={true} />
         <AppLanguageSelector descriptionMode="inline" grouped={true} />
         <AutostartToggle descriptionMode="inline" grouped={true} />
+        <TelemetryToggle descriptionMode="inline" grouped={true} />
         <AdvancedOnly>
           <StartHidden descriptionMode="tooltip" grouped={true} />
           <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
-          <TelemetryToggle descriptionMode="tooltip" grouped={true} />
           {/* `UpdateChecksToggle` is Debug-only upstream. Promoting it is
               deliberate: whether the app phones home for a new version is a
               user-facing preference, not a diagnostic, and burying it in Debug
