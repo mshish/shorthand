@@ -1062,10 +1062,14 @@ impl ShortcutAction for TranscribeAction {
                         transcription_result.is_ok(),
                     );
                     if let Err(err) = &transcription_result {
-                        // Engine error text: model/engine messages, no paths.
+                        // A fixed reason code, never the message: the
+                        // engine's text is not reviewed for what it might
+                        // carry, unlike the other capture points' kinds.
                         crate::shorthand::telemetry::report_error(
                             "transcription",
-                            Some(&err.to_string()),
+                            Some(crate::shorthand::telemetry::transcription_reason(
+                                &err.to_string(),
+                            )),
                         );
                     }
 

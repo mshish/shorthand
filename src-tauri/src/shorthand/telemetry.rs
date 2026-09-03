@@ -78,19 +78,22 @@ impl sentry::TransportFactory for GatedTransportFactory {
     }
 }
 
-/// Creates the client. Returns `None` in debug builds, where nothing should
-/// ever report. The guard must be held for the life of the process so the
-/// transport flushes on exit; `run()` keeps it in a local.
-pub fn init() -> Option<sentry::ClientInitGuard> {
-    if cfg!(debug_assertions) {
-        return None;
-    }
+/// The options passed to `sentry::init()`. Extracted so a test can build a
+/// client from them directly without touching the network — `sentry::init`
+/// binds a global hub as a side effect, which a unit test must not do.
+fn client_options() -> sentry::ClientOptions {
     // `ClientOptions` is `#[non_exhaustive]`, so it is built through its
     // setter methods rather than struct-literal syntax; `dsn` has no setter
     // that returns `Option` on failure (`.dsn(&str)` panics), so it is
     // assigned directly to the public field instead — see `dsn_constant_parses`
     // for the test that would catch a typo in `DSN` before a release does.
-    // `server_name` is left unset (defaults to `None`): never the hostname.
+    // `server_name` is set to a constant, non-identifying placeholder rather
+    // than left unset: `sentry_contexts::ContextIntegration::setup` fills
+    // `server_name` from the machine hostname whenever it is `None`, and
+    // that value lands on every event and as the `server.address` attribute
+    // on every metric. Setting it here keeps `ContextIntegration` (which the
+    // `contexts` feature still wants for OS/device/Rust context) from ever
+    // seeing a `None` to fill in.
     // `auto_session_tracking` is off: `set_consent` is the sole owner of
     // `start_session`/`end_session`, so the SDK must not start one of its
     // own at `init` time, before consent has been read.
@@ -98,13 +101,24 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
         .release(concat!("shorthand@", env!("CARGO_PKG_VERSION")))
         .environment("production")
         .send_default_pii(false)
+        .server_name("shorthand")
         .auto_session_tracking(false)
         .session_mode(sentry::SessionMode::Application)
         .transport(GatedTransportFactory {
             gate: consent_flag(),
         });
     options.dsn = DSN.parse().ok();
-    Some(sentry::init(options))
+    options
+}
+
+/// Creates the client. Returns `None` in debug builds, where nothing should
+/// ever report. The guard must be held for the life of the process so the
+/// transport flushes on exit; `run()` keeps it in a local.
+pub fn init() -> Option<sentry::ClientInitGuard> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    Some(sentry::init(client_options()))
 }
 
 /// The next value of `telemetry_install_id` given the current one and the
@@ -123,9 +137,9 @@ fn next_install_id(current: Option<String>, enabled: bool) -> Option<String> {
 pub fn set_consent(app: &AppHandle, enabled: bool) {
     let mut stored = settings::get_settings(app);
     let install_id = next_install_id(stored.telemetry_install_id.clone(), enabled);
-    if stored.telemetry_install_id != install_id || stored.telemetry_enabled != enabled {
+    if stored.telemetry_install_id != install_id || stored.telemetry_enabled != Some(enabled) {
         stored.telemetry_install_id = install_id.clone();
-        stored.telemetry_enabled = enabled;
+        stored.telemetry_enabled = Some(enabled);
         settings::write_settings(app, stored);
     }
 
@@ -140,8 +154,14 @@ pub fn set_consent(app: &AppHandle, enabled: bool) {
         gate.store(true, Ordering::Release);
         sentry::start_session();
     } else {
-        // End first so the final session envelope is dropped, not sent.
+        // The session-end envelope only gets enqueued by `end_session`; the
+        // periodic flusher can run as late as 60 seconds later, which may be
+        // after the gate below has shut. So flush explicitly here, while
+        // consent still holds and the gate is still open, then close it.
         sentry::end_session();
+        if let Some(client) = sentry::Hub::current().client() {
+            client.flush(Some(std::time::Duration::from_secs(2)));
+        }
         gate.store(false, Ordering::Release);
         sentry::configure_scope(|scope| scope.set_user(None));
     }
@@ -187,9 +207,14 @@ pub fn capture_started() {
 }
 
 /// Emits the two usage metrics for the capture that just produced (or failed
-/// to produce) a transcription result. Cheap and safe to call with consent
-/// off: the SDK buffers metrics and the transport drops them.
+/// to produce) a transcription result. Safe to call with consent off: it
+/// returns immediately, so nothing is ever handed to the SDK's own metrics
+/// batcher before consent, and there is nothing sitting in it to flush the
+/// moment the switch turns on.
 pub fn capture_completed(app: &AppHandle, ok: bool) {
+    if !consented() {
+        return;
+    }
     let mode = crate::shorthand::mode::active(app);
     let mode = match mode {
         crate::shorthand::mode::Mode::Meeting => "meeting",
@@ -224,6 +249,11 @@ pub fn capture_completed(app: &AppHandle, ok: bool) {
 /// caller passes it only after checking the text cannot carry a path or user
 /// content; otherwise pass `None`.
 pub fn report_error(kind: &'static str, detail: Option<&str>) {
+    // Nothing is handed to the SDK before consent, so nothing can sit in its
+    // batcher when the switch turns on.
+    if !consented() {
+        return;
+    }
     let message = match detail {
         Some(detail) => format!("{kind}: {detail}"),
         None => kind.to_string(),
@@ -232,6 +262,22 @@ pub fn report_error(kind: &'static str, detail: Option<&str>) {
         |scope| scope.set_tag("error.kind", kind),
         || sentry::capture_message(&message, sentry::Level::Error),
     );
+}
+
+/// Maps a transcription-engine error's `Display` text to a fixed reason
+/// code. `actions.rs` passes this, never the raw message, to `report_error`:
+/// the engine's text can vary and is not reviewed for what it might carry,
+/// unlike the other two capture points' fixed `kind` tags.
+pub fn transcription_reason(err: &str) -> &'static str {
+    if err.contains("panicked") {
+        "engine_panic"
+    } else if err.contains("timed out") {
+        "finalize_timeout"
+    } else if err.contains("transcription failed") {
+        "engine_error"
+    } else {
+        "other"
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +349,67 @@ mod tests {
     fn dsn_constant_parses() {
         DSN.parse::<sentry::types::Dsn>()
             .expect("DSN constant must be a valid Sentry DSN");
+    }
+
+    /// C1: `sentry_contexts::ContextIntegration::setup` fills `server_name`
+    /// from the machine hostname whenever it is still `None` when the
+    /// client is built, and that value lands on every event and metric.
+    /// C2: `debug-images` was dropped from the Cargo features list because
+    /// it attaches every loaded module's absolute path — on a per-user
+    /// Windows install, a path containing the account name — to every
+    /// event.
+    ///
+    /// `sentry::apply_defaults` (what `sentry::init` calls before
+    /// `Client::with_options`, and what a bare `Client::with_options` skips)
+    /// is applied explicitly here so the default integrations Cargo
+    /// features actually add — including `ContextIntegration::setup`, whose
+    /// hostname-filling behaviour C1 fixes against — run exactly as they do
+    /// in `init()`. Constructing a client this way does not send anything:
+    /// the gate is closed and nothing is flushed.
+    #[test]
+    fn server_name_is_the_placeholder_not_the_hostname() {
+        let client = sentry::Client::with_options(sentry::apply_defaults(client_options()));
+
+        assert_eq!(
+            client.options().server_name.as_deref(),
+            Some("shorthand"),
+            "server_name must be the constant placeholder, not the hostname \
+             ContextIntegration would otherwise fill in"
+        );
+
+        // Remaining default integrations, given this crate's Cargo features
+        // (backtrace, contexts, panic — debug-images removed): `contexts`
+        // (`ContextIntegration`), `panic` (`PanicIntegration`),
+        // `attach-stacktrace` and `process-stacktrace` (both from
+        // `backtrace`). `debug-images` must not be among them.
+        let integration_names: Vec<&str> = client
+            .options()
+            .integrations
+            .iter()
+            .map(|integration| integration.name())
+            .collect();
+        assert!(
+            !integration_names.contains(&"debug-images"),
+            "debug-images must stay off: it attaches loaded-module paths, \
+             which on Windows contain the account name; got {integration_names:?}"
+        );
+    }
+
+    #[test]
+    fn transcription_reason_maps_known_text_and_falls_back_to_other() {
+        assert_eq!(
+            transcription_reason("thread panicked at engine.rs:42"),
+            "engine_panic"
+        );
+        assert_eq!(
+            transcription_reason("finalize timed out after 30s"),
+            "finalize_timeout"
+        );
+        assert_eq!(
+            transcription_reason("transcription failed: no audio"),
+            "engine_error"
+        );
+        assert_eq!(transcription_reason("something else entirely"), "other");
     }
 
     #[test]

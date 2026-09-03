@@ -1096,11 +1096,12 @@ settings_schema_version?: number;
 bindings?: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk?: boolean; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
 /**
  * Fork-only. Consent to send crash reports and usage counts; see
- * TELEMETRY.md. Defaults to `false` so a store that predates the toggle
- * loads as opted out. Only the first-run consent step or the Settings
- * toggle writes `true`.
+ * TELEMETRY.md. `None` means never asked: both a store that predates
+ * this key and a fresh install load as `None`, which is treated as
+ * off. Only the first-run consent step or the Settings toggle writes
+ * `Some`.
  */
-telemetry_enabled?: boolean; 
+telemetry_enabled?: boolean | null; 
 /**
  * Fork-only. Random id attached to telemetry as `user.id` so release
  * health can count installs. Set when consent turns on, cleared when it

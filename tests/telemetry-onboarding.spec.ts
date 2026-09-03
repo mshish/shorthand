@@ -15,9 +15,9 @@ async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
       post_process_providers: [],
       post_process_prompts: [],
       custom_words: [],
-      ...(telemetryEnabled === undefined
-        ? {}
-        : { telemetry_enabled: telemetryEnabled }),
+      // Mirrors the real payload: the backend always serialises this key,
+      // as `null` until the consent step or the toggle writes a value.
+      telemetry_enabled: telemetryEnabled === undefined ? null : telemetryEnabled,
     };
     // @tauri-apps/plugin-os's `platform()` reads this global synchronously
     // rather than invoking a command.

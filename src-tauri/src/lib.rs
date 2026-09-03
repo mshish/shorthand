@@ -235,7 +235,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // pre-fallback value alongside the install id.
     shorthand::telemetry::set_consent(
         app_handle,
-        settings::get_settings(app_handle).telemetry_enabled,
+        settings::get_settings(app_handle)
+            .telemetry_enabled
+            .unwrap_or(false),
     );
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can

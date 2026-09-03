@@ -369,11 +369,12 @@ pub struct AppSettings {
     #[serde(default = "default_show_whats_new_on_update")]
     pub show_whats_new_on_update: bool,
     /// Fork-only. Consent to send crash reports and usage counts; see
-    /// TELEMETRY.md. Defaults to `false` so a store that predates the toggle
-    /// loads as opted out. Only the first-run consent step or the Settings
-    /// toggle writes `true`.
-    #[serde(default = "default_telemetry_enabled")]
-    pub telemetry_enabled: bool,
+    /// TELEMETRY.md. `None` means never asked: both a store that predates
+    /// this key and a fresh install load as `None`, which is treated as
+    /// off. Only the first-run consent step or the Settings toggle writes
+    /// `Some`.
+    #[serde(default)]
+    pub telemetry_enabled: Option<bool>,
     /// Fork-only. Random id attached to telemetry as `user.id` so release
     /// health can count installs. Set when consent turns on, cleared when it
     /// turns off, so opting back in produces an unlinked identity.
@@ -566,10 +567,6 @@ fn default_autostart_enabled() -> bool {
 
 fn default_update_checks_enabled() -> bool {
     true
-}
-
-fn default_telemetry_enabled() -> bool {
-    false
 }
 
 fn default_show_whats_new_on_update() -> bool {
@@ -1037,7 +1034,7 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         show_whats_new_on_update: default_show_whats_new_on_update(),
-        telemetry_enabled: default_telemetry_enabled(),
+        telemetry_enabled: None,
         telemetry_install_id: None,
         whats_new_last_seen_version: default_whats_new_last_seen_version(),
         selected_model: "".to_string(),
@@ -1511,7 +1508,8 @@ mod tests {
     }
 
     /// Existing installs predate the consent toggle. A store without the key
-    /// must load as "off": nothing may opt an existing user in.
+    /// must load as "never asked" (`None`), which is treated as off:
+    /// nothing may opt an existing user in.
     #[test]
     fn store_without_telemetry_keys_loads_as_opted_out() {
         let mut stored = default_settings_json();
@@ -1519,15 +1517,16 @@ mod tests {
         map.remove("telemetry_enabled");
         map.remove("telemetry_install_id");
         let settings: AppSettings = serde_json::from_value(stored).unwrap();
-        assert!(!settings.telemetry_enabled);
+        assert_eq!(settings.telemetry_enabled, None);
         assert_eq!(settings.telemetry_install_id, None);
     }
 
-    /// A fresh install is also off until the consent step writes a value.
+    /// A fresh install is also "never asked" until the consent step writes
+    /// a value.
     #[test]
     fn default_settings_are_opted_out_of_telemetry() {
         let settings = get_default_settings();
-        assert!(!settings.telemetry_enabled);
+        assert_eq!(settings.telemetry_enabled, None);
         assert_eq!(settings.telemetry_install_id, None);
     }
 

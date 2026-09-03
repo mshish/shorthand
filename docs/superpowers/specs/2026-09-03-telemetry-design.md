@@ -56,10 +56,12 @@ Webview error capture and native minidumps are a possible v2, decided on
 evidence from v1.
 
 Cargo features, chosen explicitly rather than taking the defaults:
-`backtrace`, `contexts`, `debug-images`, `panic`, `release-health`, `metrics`,
-`transport`. Not `logs`, and not the `log` crate integration: log lines are the
-one place transcript text does appear in this codebase, and they must not
-become breadcrumbs.
+`backtrace`, `contexts`, `panic`, `release-health`, `metrics`, `transport`.
+Not `logs`, and not the `log` crate integration: log lines are the one place
+transcript text does appear in this codebase, and they must not become
+breadcrumbs. Not `debug-images` either: it attaches every loaded module's
+absolute path to every event, which on a per-user Windows install contains
+the account name.
 
 ### One toggle, not two
 
@@ -78,10 +80,13 @@ with the flag closed; `setup()` opens it from the stored setting once the
 settings store is available; the Settings toggle flips it live. No early
 settings-file read, no restart.
 
-Session hygiene around the flag: opening it calls `sentry::start_session()`
-so the session Sentry sees begins at consent; closing it calls
-`sentry::end_session()` before the gate shuts, so the final session envelope
-is dropped rather than sent after opt-out.
+Session hygiene around the flag: opening it calls `sentry::start_session()` so
+the session Sentry sees begins at consent. Closing it calls
+`sentry::end_session()`, which only enqueues the session-exit envelope, then
+flushes the client explicitly (a bounded wait, not a fire-and-forget) while
+consent still holds, and only then closes the gate — so the session exit is
+sent before the gate shuts, rather than left for the periodic flusher to send
+(or drop) up to 60 seconds later, possibly after opt-out.
 
 ### Setting and first-run behaviour
 
@@ -89,17 +94,17 @@ Two new `AppSettings` fields, both with serde defaults:
 
 | Field                   | Type             | Default | Meaning                                        |
 | ----------------------- | ---------------- | ------- | ---------------------------------------------- |
-| `telemetry_enabled`     | `bool`           | `false` | The consent flag as persisted.                 |
+| `telemetry_enabled`     | `Option<bool>`   | `None`  | `None` = never asked; the consent step and the toggle write `Some`. |
 | `telemetry_install_id`  | `Option<String>` | `None`  | Random UUID; set on opt-in, cleared on opt-out. |
 
-`get_default_settings()` also returns `false`/`None`, so a fresh install sends
+`get_default_settings()` also returns `None`/`None`, so a fresh install sends
 nothing until the consent step is confirmed. The consent step's toggle is
 pre-set to on; pressing Continue writes the explicit value. That is what
 "default on for new installs" means here: the default is the toggle's
 position, not the stored value.
 
-No migration touches existing stores. A missing key is `false`, which is the
-required behaviour, and the frozen-store test in `settings.rs` pins it.
+No migration touches existing stores. A missing key is `None`, which is
+treated as off, and the frozen-store test in `settings.rs` pins it.
 
 The install id is what lets release health count distinct installs rather
 than sessions. It is attached as the Sentry `user.id` and nothing else. It is
@@ -161,7 +166,7 @@ audio, transcripts, notes or personal details." Keys under
   1. Model load failure (`managers/transcription.rs`): kind only, since load
      errors name the model file on disk.
   2. Transcription failure at capture stop (`actions.rs`, the `Err` arm of
-     `transcription_result`): engine message.
+     `transcription_result`): a fixed reason code, never the message.
   3. Follow-stream listener failure (`follow_stream/server.rs`): the I/O error
      kind only, since the message can name the per-user socket path.
 
@@ -182,10 +187,14 @@ cell. `model` is the catalogue id, or the literal `custom` when
 session mode), which gives active installs, crash-free rate, and both per
 release and per OS, at no further instrumentation.
 
-**Never**: `send_default_pii` stays false. `server_name` is left `None` so the
-hostname is not sent. No breadcrumbs from logs. No request or environment
-context beyond what the `contexts` integration adds (OS name and version,
-device architecture, Rust version).
+**Never**: `send_default_pii` stays false. `server_name` is set to the
+constant placeholder `"shorthand"` rather than left `None`, because
+`ContextIntegration::setup` fills a `None` `server_name` from the machine
+hostname; the placeholder keeps that from ever happening. No breadcrumbs from
+logs. No request or environment context beyond what the `contexts`
+integration adds (OS name and version, device architecture, Rust version). No
+loaded-module paths: the `debug-images` feature that would attach them is
+off.
 
 Server-side, the organisation's "Prevent Storing of IP Addresses" setting is
 turned on, so the "no IP address" claim holds for the ingest path too, not just
@@ -203,8 +212,11 @@ created at all, so `bun run tauri dev` never reports; the transport gate is
 therefore a second line of defence in debug builds, not the first.
 
 Release builds strip symbols, so panics arrive with frames but without line
-numbers. Debug-file upload is a follow-up if that turns out to hurt; the
-`debug-images` feature is on so the upload works without a second SDK change.
+numbers. Debug images are off because they carry every loaded module's
+absolute path, which on a per-user Windows install contains the account name.
+Debug-file upload is a follow-up if that turns out to hurt; any future
+version must strip paths from what it uploads, since re-enabling the feature
+as-is would reopen this finding.
 
 ### Module layout and touch points
 
@@ -248,8 +260,8 @@ Edits to upstream files, each one line or one block:
   transport; `set_consent(true)` generates an install id once and
   `set_consent(false)` clears it; the model attribute maps a custom model to
   `custom`.
-- `settings.rs`: defaults are `false`/`None`; the frozen v0.9 store loads with
-  `telemetry_enabled == false`.
+- `settings.rs`: defaults are `None`/`None`; the frozen v0.9 store loads with
+  `telemetry_enabled == None`.
 - Playwright: a fresh profile (`onboarding_completed: false`) reaches the
   consent step after permissions, the toggle is on, and Continue invokes the
   settings command with `true`; toggling off first invokes it with `false`.

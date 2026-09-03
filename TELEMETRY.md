@@ -17,9 +17,9 @@ against each other.
 
 - A Rust panic: the panic message and stack frames.
 - One of three named failures, with a short kind and, where the text cannot
-  contain a path, the engine's error message:
-  `model_load` (kind only), `transcription`, `follow_stream_listen` (the I/O
-  error kind only).
+  contain a path, a fixed detail: `model_load` (kind only), `transcription`
+  (a fixed reason code: engine error, engine panic, finalize timeout, or
+  other), `follow_stream_listen` (the I/O error kind only).
 - With every report: Shorthand version, operating system name and version,
   CPU architecture, Rust version, and the time.
 
@@ -43,7 +43,8 @@ against each other.
 Audio, transcripts, notes, file names or paths, API keys, your computer's
 name, your name, email address or IP address. IP addresses are additionally
 not stored on the receiving side (Sentry's "prevent storing of IP addresses"
-is on for the organisation).
+is on for the organisation). Loaded-module paths are not attached to reports
+either.
 
 There are no log breadcrumbs: Shorthand's logs can contain transcript text,
 so they are deliberately kept out.
