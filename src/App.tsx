@@ -13,6 +13,7 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import SecureInputWarning from "./components/SecureInputWarning";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
+import TelemetryOnboarding from "@/shorthand/telemetry/TelemetryOnboarding";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
 import { WhatsNewGate } from "./components/whats-new";
@@ -22,7 +23,7 @@ import { commands } from "@/bindings";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 import { useVisibleSection } from "@/shorthand/useVisibleSection";
 
-type OnboardingStep = "accessibility" | "model" | "done";
+type OnboardingStep = "accessibility" | "telemetry" | "model" | "done";
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -253,7 +254,11 @@ function App() {
   const handleAccessibilityComplete = () => {
     // Returning users already have models, skip to main app
     // New users need to select a model
-    setOnboardingStep(isReturningUser ? "done" : "model");
+    setOnboardingStep(isReturningUser ? "done" : "telemetry");
+  };
+
+  const handleTelemetryComplete = () => {
+    setOnboardingStep("model");
   };
 
   const handleModelSelected = () => {
@@ -296,6 +301,8 @@ function App() {
     content = (
       <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />
     );
+  } else if (onboardingStep === "telemetry") {
+    content = <TelemetryOnboarding onComplete={handleTelemetryComplete} />;
   } else if (onboardingStep === "model") {
     content = <Onboarding onModelSelected={handleModelSelected} />;
   } else {
