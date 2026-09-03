@@ -878,6 +878,19 @@ impl TranscriptionManager {
         model_id: &str,
         device_index: Option<usize>,
     ) -> Result<()> {
+        let result = self.load_model_with_device_inner(model_id, device_index);
+        if result.is_err() {
+            // Kind only: load errors name the model file on disk.
+            crate::shorthand::telemetry::report_error("model_load", None);
+        }
+        result
+    }
+
+    fn load_model_with_device_inner(
+        &self,
+        model_id: &str,
+        device_index: Option<usize>,
+    ) -> Result<()> {
         apply_accelerator_settings(&self.app_handle);
 
         let load_start = std::time::Instant::now();
