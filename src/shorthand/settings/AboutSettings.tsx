@@ -10,8 +10,10 @@ import { SettingContainer } from "@/components/ui/SettingContainer";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
 import { Sheet } from "@/shorthand/ui/Sheet";
 
-/** Shorthand's own donation page. Upstream's row points at handy.computer. */
-const DONATE_URL = "https://donate.stripe.com/fZufZh6T31Jwdig89afEk00";
+/** Shorthand's own pay-what-you-want support checkout. Upstream's row points
+ * at handy.computer. Not a donate-type Stripe link: support is payment for
+ * the software, and Stripe restricts donation solicitation. */
+const SUPPORT_URL = "https://buy.stripe.com/bJe28r91b87UemkahifEk02";
 const SOURCE_URL = "https://github.com/mshish/shorthand";
 const HANDY_URL = "https://github.com/cjpais/Handy";
 
@@ -49,11 +51,11 @@ export const AboutSettings: React.FC = () => {
     fetchVersion();
   }, []);
 
-  const handleDonateClick = async () => {
+  const handleSupportClick = async () => {
     try {
-      await openUrl(DONATE_URL);
+      await openUrl(SUPPORT_URL);
     } catch (error) {
-      console.error("Failed to open donate link:", error);
+      console.error("Failed to open support link:", error);
     }
   };
 
@@ -95,13 +97,13 @@ export const AboutSettings: React.FC = () => {
         </SettingContainer>
 
         <SettingContainer
-          title={t("settings.about.supportDevelopment.title")}
-          description={t("settings.about.supportDevelopment.description")}
+          title={t("settings.about.support.title")}
+          description={t("settings.about.support.description")}
           descriptionMode="inline"
           grouped={true}
         >
-          <Button variant="primary" size="md" onClick={handleDonateClick}>
-            {t("settings.about.supportDevelopment.button")}
+          <Button variant="primary" size="md" onClick={handleSupportClick}>
+            {t("settings.about.support.button")}
           </Button>
         </SettingContainer>
 
