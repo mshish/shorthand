@@ -46,7 +46,10 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      sign-binaries: true
+      # Off, as in main-build.yml: this fork has no Apple or Authenticode
+      # certificates, so the signing steps fail before anything compiles.
+      # PR builds are unsigned testing artifacts.
+      sign-binaries: false
       asset-prefix: "handy-pr-${{ inputs.pr_number }}"
       upload-artifacts: true
       is-debug-build: ${{ contains(matrix.args, '--debug') }}

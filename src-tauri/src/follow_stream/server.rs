@@ -94,6 +94,12 @@ impl FollowStreamServer {
             Err(error) => {
                 hub.set_enabled(false);
                 log::error!("Failed to create follow-stream listener: {error}");
+                crate::shorthand::telemetry::report_error(
+                    "follow_stream_listen",
+                    // The io error kind only: the message can name the
+                    // per-user socket path.
+                    Some(&format!("{:?}", error.kind())),
+                );
                 return Err(error);
             }
         };

@@ -1,6 +1,6 @@
 # Follow-stream output
 
-The fork-only `handy --follow-stream` feature lets another process follow live transcription output from an already-running Handy instance.
+The fork-only `shorthand --follow-stream` feature lets another process follow live transcription output from an already-running Shorthand instance.
 
 Two separate things decide whether a follower sees anything, and they must not be confused:
 
@@ -50,7 +50,7 @@ A dual-speaker session can therefore look like this:
 For example, to print only completed transcript text:
 
 ```sh
-handy --follow-stream | jq -r 'select(.t=="final") | .text'
+shorthand --follow-stream | jq -r 'select(.t=="final") | .text'
 ```
 
 ## Timestamps
@@ -163,7 +163,7 @@ The fix is not a faster timer; it is this ordering. Attach before issuing any co
 
 ## Delta mode
 
-Run `handy --follow-stream delta` to transform the same NDJSON stream locally into one JSONL record per newly-committed suffix. Delta mode tracks committed text separately for each `(session, speaker)` and immediately emits only the new suffix. Tentative text produces no output.
+Run `shorthand --follow-stream delta` to transform the same NDJSON stream locally into one JSONL record per newly-committed suffix. Delta mode tracks committed text separately for each `(session, speaker)` and immediately emits only the new suffix. Tentative text produces no output.
 
 ```jsonl
 {"t":"delta","schema":1,"session":42,"speaker":"me","text":"Can you hear me?","emitted_at":"2026-08-15T14:03:21.412-07:00","session_elapsed_ms":1212}
@@ -178,12 +178,12 @@ Each session closes with one `end` record whose `reason` is `final`, `no_speech`
 Both timestamp fields are copied straight through from the `partial` the suffix arrived on, and are omitted if the connected Handy did not send them.
 
 ```sh
-handy --follow-stream delta | jq -r 'select(.t=="delta") | "\(.emitted_at) \(.speaker): \(.text)"'
+shorthand --follow-stream delta | jq -r 'select(.t=="delta") | "\(.emitted_at) \(.speaker): \(.text)"'
 ```
 
 ## Text mode
 
-Run `handy --follow-stream text` for the plain human-readable rendering of the same committed text. It prefixes the first output for a speaker with `me: ` or `them: `, inserts a newline and a new prefix when the active speaker changes, and writes a trailing newline when a session ends.
+Run `shorthand --follow-stream text` for the plain human-readable rendering of the same committed text. It prefixes the first output for a speaker with `me: ` or `them: `, inserts a newline and a new prefix when the active speaker changes, and writes a trailing newline when a session ends.
 
 ```text
 me: Can you hear me?

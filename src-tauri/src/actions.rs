@@ -586,6 +586,7 @@ impl ShortcutAction for TranscribeAction {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
         crate::shorthand::mode::set_active(app, binding_id);
+        crate::shorthand::telemetry::capture_started();
 
         // An always-on microphone can still be open from the previous mode.
         // Align its shared loopback lane before either stream managers are
@@ -1056,6 +1057,21 @@ impl ShortcutAction for TranscribeAction {
                         );
                         (rendered, merged_dual_speaker)
                     });
+                    crate::shorthand::telemetry::capture_completed(
+                        &ah,
+                        transcription_result.is_ok(),
+                    );
+                    if let Err(err) = &transcription_result {
+                        // A fixed reason code, never the message: the
+                        // engine's text is not reviewed for what it might
+                        // carry, unlike the other capture points' kinds.
+                        crate::shorthand::telemetry::report_error(
+                            "transcription",
+                            Some(crate::shorthand::telemetry::transcription_reason(
+                                &err.to_string(),
+                            )),
+                        );
+                    }
 
                     // Await WAV save and verify (only when save_recordings is on)
                     let wav_saved = match wav_handle {
