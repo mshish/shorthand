@@ -71,7 +71,7 @@ These settings cover files on your computer. Your selected AI provider may keep 
 ## Privacy
 
 Transcription is local. With your permission, Shorthand sends crash reports
-and a few usage counts (which mode ran, which model, how long) to Sentry so
+and a little usage info (which mode ran, which model, how long) to Sentry so
 problems get fixed; it never sends audio, transcripts, notes, file paths, keys
 or anything that identifies you. First-run setup asks; the switch is under
 Settings → App. [TELEMETRY.md](TELEMETRY.md) lists exactly what is sent.

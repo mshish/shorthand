@@ -1,10 +1,10 @@
-# Crash reports and usage counts
+# Crash reports and usage info
 
-Shorthand can send crash reports and a small number of usage counts to
+Shorthand can send crash reports and a small amount of usage info to
 [Sentry](https://sentry.io), so that problems get found and fixed. It is off
 until you say otherwise: the first-run setup asks, with the switch pre-set to
 on, and the answer can be changed at any time under **Settings → App → Send
-crash reports and usage counts**. Installs that predate this switch stay off
+crash reports and usage info**. Installs that predate this switch stay off
 unless you turn it on.
 
 This file is the source of truth for what is sent. The code that sends it is
@@ -23,7 +23,7 @@ against each other.
 - With every report: Shorthand version, operating system name and version,
   CPU architecture, Rust version, and the time.
 
-**Usage counts**
+**Usage info**
 
 - `capture.completed`: one count per finished capture, with the mode
   (meeting, dictation, assisted notes), the transcription model's catalogue
@@ -52,5 +52,5 @@ so they are deliberately kept out.
 ## How the switch works
 
 Nothing is sent while the switch is off. The gate is at the network layer,
-so events, sessions and usage counts alike are dropped rather than queued.
+so events, sessions and usage info alike are dropped rather than queued.
 Development builds never report at all.

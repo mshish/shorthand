@@ -132,18 +132,18 @@ Copy, English only, in `src/shorthand/locales/en.json` under
 `onboarding.telemetry.*`:
 
 - title: "Help improve Shorthand"
-- intro: "Shorthand can send crash reports and a few usage counts so problems
+- intro: "Shorthand can send crash reports and a little usage info so problems
   get found and fixed. It is anonymous, and you can change this any time under
   Settings → App."
 - sends.heading: "What is sent"
 - sends.errors: "Crash and error reports: what failed and where in the app,
   with your operating system and Shorthand version."
-- sends.usage: "Usage counts: how many captures finish, in which mode, with
+- sends.usage: "Usage info: how many captures finish, in which mode, with
   which model, and how long they ran."
 - never.heading: "What is never sent"
 - never.body: "Audio, transcripts, notes, file names or paths, API keys, your
   name, email address or IP address."
-- toggle: "Send crash reports and usage counts"
+- toggle: "Send crash reports and usage info"
 - link: "See exactly what is sent"
 - continue: "Continue"
 
@@ -152,8 +152,8 @@ Copy, English only, in `src/shorthand/locales/en.json` under
 `TelemetryToggle` in `src/shorthand/telemetry/`, rendered in the fork's App
 section directly after `AutostartToggle`, outside the Advanced-only rows, so
 it is reachable without opening Advanced settings. Label "Send crash reports
-and usage counts"; description "Anonymous crash reports and a few usage
-counts. Never audio, transcripts, notes or personal details." Keys under
+and usage info"; description "Anonymous crash reports and a little usage
+info. Never audio, transcripts, notes or personal details." Keys under
 `settings.app.telemetry.*`. The settings-coverage check picks it up because
 `src/shorthand/settings` is an entry point and the component lives under
 `src/shorthand`, which is in `SETTINGS_COMPONENT_DIRS`.
