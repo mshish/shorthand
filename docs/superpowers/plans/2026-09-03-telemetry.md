@@ -28,9 +28,11 @@
 ### Task 1: Settings fields
 
 **Files:**
+
 - Modify: `src-tauri/src/settings.rs` — struct `AppSettings` (~line 345, after `show_whats_new_on_update`), default fns (~line 556, after `default_update_checks_enabled`), `get_default_settings()` (~line 1023), tests module (after `frozen_v0_9_store_parses_strictly_then_migrates_schema_two_fields`, ~line 1495).
 
 **Interfaces:**
+
 - Produces: `AppSettings::telemetry_enabled: bool`, `AppSettings::telemetry_install_id: Option<String>`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -117,6 +119,7 @@ git commit -m "feat: add telemetry consent fields, off by default for existing s
 ### Task 2: Telemetry module — gated transport, init, consent
 
 **Files:**
+
 - Modify: `src-tauri/Cargo.toml` — `[dependencies]`, after `tauri-plugin-updater`.
 - Create: `src-tauri/src/shorthand/telemetry.rs`
 - Modify: `src-tauri/src/shorthand/mod.rs` — add `pub mod telemetry;`
@@ -125,6 +128,7 @@ git commit -m "feat: add telemetry consent fields, off by default for existing s
 - Regenerate: `src/bindings.ts` (tauri-specta writes it on a debug run).
 
 **Interfaces:**
+
 - Produces:
   - `telemetry::init() -> Option<sentry::ClientInitGuard>`
   - `telemetry::set_consent(app: &tauri::AppHandle, enabled: bool)` — opens/closes the gate, manages the session and the install id, persists the id.
@@ -506,11 +510,13 @@ git commit -m "feat: consent-gated Sentry client with transport gate and install
 ### Task 3: Instrument captures and the three error kinds
 
 **Files:**
+
 - Modify: `src-tauri/src/actions.rs` — line 588 (`mode::set_active`), and the line after `transcription_result` is computed (~line 1060, before `// Await WAV save and verify`).
 - Modify: `src-tauri/src/managers/transcription.rs` — `load_model_with_device` (~line 876).
 - Modify: `src-tauri/src/follow_stream/server.rs` — the `Err(error)` arm at ~line 94.
 
 **Interfaces:**
+
 - Consumes: `telemetry::capture_started()`, `telemetry::capture_completed(&AppHandle, bool)`, `telemetry::report_error(&'static str, Option<&str>)` (Task 2).
 
 - [ ] **Step 1: Capture start and completion**
@@ -586,6 +592,7 @@ git commit -m "feat: report capture metrics and the three enumerated error kinds
 ### Task 4: TELEMETRY.md, README, strings
 
 **Files:**
+
 - Create: `TELEMETRY.md`
 - Modify: `README.md` — insert a `## Privacy` section after `## What Shorthand keeps` (line 62 block ends before `## Platform status`, line 71).
 - Modify: `CLAUDE.md` — add one bullet to the "open it only when the work calls for it" list.
@@ -713,10 +720,12 @@ The workspace `CLAUDE.md` is outside this repository and unversioned; no commit.
 ### Task 5: Settings toggle
 
 **Files:**
+
 - Create: `src/shorthand/telemetry/TelemetryToggle.tsx`
 - Modify: `src/shorthand/settings/AppSettings.tsx` — import and one line after `<ShowTrayIcon ... />`.
 
 **Interfaces:**
+
 - Consumes: `Settings.telemetry_enabled` via `useSettings().getSetting/updateSetting` (bound to the command in Task 2).
 - Produces: `TelemetryToggle` component with `descriptionMode` and `grouped` props like the other toggles.
 
@@ -766,7 +775,7 @@ export const TelemetryToggle: React.FC<TelemetryToggleProps> = ({
 In `AppSettings.tsx`, add the import `import { TelemetryToggle } from "@/shorthand/telemetry/TelemetryToggle";` and, after `<ShowTrayIcon descriptionMode="tooltip" grouped={true} />`:
 
 ```tsx
-        <TelemetryToggle descriptionMode="tooltip" grouped={true} />
+<TelemetryToggle descriptionMode="tooltip" grouped={true} />
 ```
 
 - [ ] **Step 3: Verify**
@@ -786,10 +795,12 @@ git commit -m "feat: telemetry consent toggle in the App settings section"
 ### Task 6: First-run consent step
 
 **Files:**
+
 - Create: `src/shorthand/telemetry/TelemetryOnboarding.tsx`
 - Modify: `src/App.tsx` — `OnboardingStep` union (line 25), `handleAccessibilityComplete` (~line 255), the step render chain (~line 300).
 
 **Interfaces:**
+
 - Produces: `TelemetryOnboarding` with `onComplete: () => void`.
 - Consumes: `useSettings().getSetting/updateSetting`, `ShorthandWordmark` from `@/shorthand/brand`, `ToggleSwitch`, `openUrl` from `@tauri-apps/plugin-opener`.
 
@@ -846,14 +857,18 @@ const TelemetryOnboarding: React.FC<TelemetryOnboardingProps> = ({
         </h1>
         <p className="text-mid-gray">{t("onboarding.telemetry.intro")}</p>
         <div className="space-y-2">
-          <h2 className="font-medium">{t("onboarding.telemetry.sends.heading")}</h2>
+          <h2 className="font-medium">
+            {t("onboarding.telemetry.sends.heading")}
+          </h2>
           <ul className="list-disc pl-5 space-y-1 text-sm">
             <li>{t("onboarding.telemetry.sends.errors")}</li>
             <li>{t("onboarding.telemetry.sends.usage")}</li>
           </ul>
         </div>
         <div className="space-y-2">
-          <h2 className="font-medium">{t("onboarding.telemetry.never.heading")}</h2>
+          <h2 className="font-medium">
+            {t("onboarding.telemetry.never.heading")}
+          </h2>
           <p className="text-sm">{t("onboarding.telemetry.never.body")}</p>
         </div>
         <ToggleSwitch
@@ -908,15 +923,15 @@ import TelemetryOnboarding from "@/shorthand/telemetry/TelemetryOnboarding";
 In `handleAccessibilityComplete`, replace `setOnboardingStep(isReturningUser ? "done" : "model");` with:
 
 ```ts
-    setOnboardingStep(isReturningUser ? "done" : "telemetry");
+setOnboardingStep(isReturningUser ? "done" : "telemetry");
 ```
 
 Add after `handleAccessibilityComplete`:
 
 ```ts
-  const handleTelemetryComplete = () => {
-    setOnboardingStep("model");
-  };
+const handleTelemetryComplete = () => {
+  setOnboardingStep("model");
+};
 ```
 
 In the render chain, between the `accessibility` and `model` branches:
@@ -943,9 +958,11 @@ git commit -m "feat: first-run consent step for crash reports and usage counts"
 ### Task 7: Playwright coverage for the consent step
 
 **Files:**
+
 - Create: `tests/telemetry-onboarding.spec.ts`
 
 **Interfaces:**
+
 - Consumes: `data-testid="telemetry-continue"` (Task 6); command names `get_app_settings`, `change_telemetry_enabled_setting` as invoked through `window.__TAURI_INTERNALS__.invoke`.
 
 - [ ] **Step 1: Write the spec**
@@ -974,7 +991,9 @@ async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
         ? {}
         : { telemetry_enabled: telemetryEnabled }),
     };
-    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+    (
+      window as unknown as { __TAURI_INTERNALS__: unknown }
+    ).__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: "main" }, windows: [] },
       plugins: { os: { platform: "linux" } },
       transformCallback: () => 0,
@@ -1002,12 +1021,16 @@ async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
 
 async function recordedCalls(page: Page) {
   return page.evaluate(
-    () => (window as unknown as { __calls: Array<{ cmd: string; args: unknown }> }).__calls,
+    () =>
+      (window as unknown as { __calls: Array<{ cmd: string; args: unknown }> })
+        .__calls,
   );
 }
 
 test.describe("telemetry consent step", () => {
-  test("a fresh profile reaches the step with the switch on and Continue writes true", async ({ page }) => {
+  test("a fresh profile reaches the step with the switch on and Continue writes true", async ({
+    page,
+  }) => {
     await bootFreshProfile(page);
     const cont = page.getByTestId("telemetry-continue");
     await expect(cont).toBeVisible();
@@ -1031,7 +1054,9 @@ test.describe("telemetry consent step", () => {
     });
   });
 
-  test("a relaunch mid-onboarding shows the stored choice", async ({ page }) => {
+  test("a relaunch mid-onboarding shows the stored choice", async ({
+    page,
+  }) => {
     await bootFreshProfile(page, false);
     await expect(page.getByRole("checkbox")).not.toBeChecked();
   });

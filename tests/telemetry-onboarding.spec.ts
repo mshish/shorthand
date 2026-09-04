@@ -94,9 +94,7 @@ async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
             case "get_available_models":
               return [stubModel];
             case "set_active_model":
-              settings.selected_model = (
-                args as { modelId: string }
-              ).modelId;
+              settings.selected_model = (args as { modelId: string }).modelId;
               return null;
             case "plugin:os|locale":
               return null;

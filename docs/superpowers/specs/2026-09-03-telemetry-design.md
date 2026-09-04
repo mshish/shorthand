@@ -17,7 +17,7 @@ turned on without asking.
 
 The Obsidian plugin is excluded. Obsidian's
 [Developer policies](https://docs.obsidian.md/Developer+policies) list
-"Include client-side telemetry" under *Not allowed*, and staff have said on the
+"Include client-side telemetry" under _Not allowed_, and staff have said on the
 [forum](https://forum.obsidian.md/t/telemetry-only-for-beta-version/89069) that
 error-reporting services count and that BRAT and manual installs are expected to
 follow the same policy. The plugin README's "does not collect telemetry" stays
@@ -93,10 +93,10 @@ sent before the gate shuts, rather than left for the periodic flusher to send
 
 Two new `AppSettings` fields, both with serde defaults:
 
-| Field                   | Type             | Default | Meaning                                        |
-| ----------------------- | ---------------- | ------- | ---------------------------------------------- |
-| `telemetry_enabled`     | `Option<bool>`   | `None`  | `None` = never asked; the consent step and the toggle write `Some`. |
-| `telemetry_install_id`  | `Option<String>` | `None`  | Random UUID; set on opt-in, cleared on opt-out. |
+| Field                  | Type             | Default | Meaning                                                             |
+| ---------------------- | ---------------- | ------- | ------------------------------------------------------------------- |
+| `telemetry_enabled`    | `Option<bool>`   | `None`  | `None` = never asked; the consent step and the toggle write `Some`. |
+| `telemetry_install_id` | `Option<String>` | `None`  | Random UUID; set on opt-in, cleared on opt-out.                     |
 
 `get_default_settings()` also returns `None`/`None`, so a fresh install sends
 nothing until the consent step is confirmed. The consent step's toggle is
@@ -181,10 +181,10 @@ info. Never audio, transcripts, notes or personal details." Keys under
 **Metrics**, emitted from Rust at the point a capture's transcription result is
 known:
 
-| Metric                     | Type         | Attributes                       |
-| -------------------------- | ------------ | -------------------------------- |
-| `capture.completed`        | counter      | `mode`, `model`, `outcome`       |
-| `capture.duration_seconds` | distribution | `mode`                           |
+| Metric                     | Type         | Attributes                 |
+| -------------------------- | ------------ | -------------------------- |
+| `capture.completed`        | counter      | `mode`, `model`, `outcome` |
+| `capture.duration_seconds` | distribution | `mode`                     |
 
 `mode` is `meeting`, `dictation` or `assisted_notes` from the active-mode
 cell. `model` is the catalogue id, or the literal `custom` when
