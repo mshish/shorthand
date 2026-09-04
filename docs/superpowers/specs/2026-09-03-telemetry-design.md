@@ -114,16 +114,19 @@ turns off, so opting out and back in produces an unlinked identity.
 
 ### Consent step
 
-A new onboarding step `telemetry`, shown between `accessibility` and `model`,
-new users only (`isReturningUser === false`). Returning users who lack
-permissions re-enter at `accessibility` and go straight to `done` as today.
+A new onboarding step `telemetry`, shown after model selection, before the
+main app, new users only (`isReturningUser === false`). Returning users who
+lack permissions re-enter at `accessibility` and go straight to `done` as
+today. `select_model` already stamps `onboarding_completed` before this step
+runs, so quitting during the consent screen leaves telemetry unanswered
+(`None`, treated as off) — the safe direction.
 
 One screen: the wordmark, a title, a two-sentence intro, a "What is sent" list
 of two items, a "What is never sent" line, one toggle, a "See exactly what is
 sent" link to `TELEMETRY.md` on GitHub, and Continue. Continue awaits
-`updateSetting("telemetry_enabled", value)` and then advances. The toggle's
-initial position is the stored value if the key exists, else on, so quitting
-mid-onboarding and relaunching shows the same choice.
+`updateSetting("telemetry_enabled", value)` and then advances. The toggle is
+always pre-set to on — a first-run question, not a reflection of whatever the
+store holds — and Continue writes the chosen value.
 
 Copy, English only, in `src/shorthand/locales/en.json` under
 `onboarding.telemetry.*`:

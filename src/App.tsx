@@ -254,15 +254,15 @@ function App() {
   const handleAccessibilityComplete = () => {
     // Returning users already have models, skip to main app
     // New users need to select a model
-    setOnboardingStep(isReturningUser ? "done" : "telemetry");
-  };
-
-  const handleTelemetryComplete = () => {
-    setOnboardingStep("model");
+    setOnboardingStep(isReturningUser ? "done" : "model");
   };
 
   const handleModelSelected = () => {
-    // Transition to main app - user has started a download
+    // User has started a download - ask about telemetry last
+    setOnboardingStep("telemetry");
+  };
+
+  const handleTelemetryComplete = () => {
     setOnboardingStep("done");
   };
 
