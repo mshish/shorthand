@@ -99,7 +99,7 @@
   "settings.notes.obsidian.title": "Obsidian",
   "settings.notes.plugin.title": "Shorthand plugin",
   "settings.notetaking.setup.button": "Setup guide",
-  "settings.notetaking.setup.description": "Needs Claude Code or Codex installed and signed in on this computer. Usage counts against that subscription.",
+  "settings.notetaking.setup.description": "Needs Claude Code, Codex, or Cursor CLI installed and signed in on this computer. Usage counts against that subscription.",
   "settings.notetaking.setup.title": "Set up AI note taking",
   "settings.privacy.saveRecordings.description": "Keep the audio of each transcription in your recordings folder so you can play it back or re-transcribe it. Off by default; no recording is kept.",
   "settings.privacy.saveRecordings.label": "Save recordings",

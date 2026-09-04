@@ -1,7 +1,7 @@
 # Set up AI note taking
 
 Shorthand records and transcribes on your computer. The note itself is written
-by **Claude Code** or **Codex**, installed on this computer and signed in to
+by **Claude Code**, **Codex**, or **Cursor CLI**, installed on this computer and signed in to
 your own subscription. Usage counts against that subscription; no API key is
 needed. The assistant receives the transcript and the current note, never the
 audio.
@@ -32,6 +32,15 @@ that carries your subscription; the assistant remembers it.
    codex login
    ```
 
+**Cursor CLI** (Cursor subscription)
+
+1. Follow [Install Cursor CLI](https://cursor.com/cli).
+2. Sign in:
+
+   ```sh
+   agent login
+   ```
+
 ## 2. Connect Obsidian
 
 1. In Shorthand, open **Notes** and choose **Install in Obsidian**. Obsidian
@@ -39,9 +48,10 @@ that carries your subscription; the assistant remembers it.
 2. In Obsidian, choose **Install**, then **Enable**. Back in Shorthand, the
    Notes section now shows the plugin as installed.
 3. In Obsidian, open the Shorthand plugin's settings and set **Enhancement
-   backend** to the assistant from step 1: **Claude Code** (the default) or
-   **Codex**. Choose **LLM provider** instead if you would rather use an API
-   key, a local model or your own OpenAI-compatible endpoint.
+   backend** to the assistant from step 1: **Claude Code** (the default),
+   **Codex**, or **Cursor CLI**. You can also connect to an **Agent Client Protocol (ACP)**
+   agent, or choose **LLM provider** if you would rather use an API
+   key, a local model (such as Ollama), or your own OpenAI-compatible endpoint.
 
 If Obsidian is not installed yet, the Notes section says so and offers a link
 to get it.
