@@ -19,6 +19,7 @@ import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
 import { Dependents } from "@/shorthand/ui/Dependents";
 import { OverlayPositionRow } from "@/shorthand/ui/OverlayRows";
 import { Sheet } from "@/shorthand/ui/Sheet";
+import { TelemetryToggle } from "@/shorthand/telemetry/TelemetryToggle";
 
 /**
  * Fork-only "App" section: how the application starts, how it looks, and how
@@ -45,6 +46,7 @@ export const AppSettings: React.FC = () => {
         <ThemeSelector descriptionMode="inline" grouped={true} />
         <AppLanguageSelector descriptionMode="inline" grouped={true} />
         <AutostartToggle descriptionMode="inline" grouped={true} />
+        <TelemetryToggle descriptionMode="inline" grouped={true} />
         <AdvancedOnly>
           <StartHidden descriptionMode="tooltip" grouped={true} />
           <ShowTrayIcon descriptionMode="tooltip" grouped={true} />

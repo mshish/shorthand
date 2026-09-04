@@ -12,4 +12,8 @@ The rest is deliberately not imported — open it only when the work calls for i
   updater.
 - `BRANDING.md` — before renaming, or when a change touches user-visible naming
   inherited from upstream Handy.
+- `TELEMETRY.md` — before touching `src-tauri/src/shorthand/telemetry.rs`,
+  the consent step, or any log or error message that could reach Sentry. It
+  is the user-facing promise of what is and is not sent; a change that makes
+  it untrue is a privacy bug, not a docs bug.
 - `docs/FRONTEND_TESTING.md` — before adding or changing frontend tests.

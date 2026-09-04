@@ -229,6 +229,11 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         initial_settings.dictation.system_audio_enabled = false;
         settings::write_settings(app_handle, initial_settings.clone());
     }
+    // Read fresh rather than trusting `initial_settings`: the Linux block
+    // above may have just persisted a settings write, and consuming that
+    // stale snapshot here would silently revert it by writing back the
+    // pre-fallback value alongside the install id.
+    shorthand::telemetry::apply_stored(app_handle);
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can
     // select it at hotkey time; model loading remains lazy inside
@@ -727,6 +732,10 @@ pub fn run(cli_args: CliArgs) {
     // Detect portable mode before anything else
     portable::init();
 
+    // Fork-only: crash reports and usage counts. Held for the process
+    // lifetime so the transport flushes on exit. Gate closed until setup.
+    let _telemetry = shorthand::telemetry::init();
+
     // Parse console logging directives from RUST_LOG, falling back to info-level logging
     // when the variable is unset
     let console_filter = build_console_filter();
@@ -809,6 +818,7 @@ pub fn run(cli_args: CliArgs) {
             commands::change_follow_stream_enabled_setting,
             shorthand::obsidian::get_obsidian_plugin_status,
             shorthand::obsidian::open_obsidian_plugin_page,
+            shorthand::telemetry::change_telemetry_enabled_setting,
             commands::get_log_dir_path,
             commands::set_log_level,
             commands::open_recordings_folder,

@@ -68,6 +68,14 @@ Audio stays on your computer for transcription. The note-writing AI receives the
 
 These settings cover files on your computer. Your selected AI provider may keep its own usage and billing records.
 
+## Privacy
+
+Transcription is local. With your permission, Shorthand sends crash reports
+and a little usage info (which mode ran, which model, how long) to Sentry so
+problems get fixed; it never sends audio, transcripts, notes, file paths, keys
+or anything that identifies you. First-run setup asks; the switch is under
+Settings → App. [TELEMETRY.md](TELEMETRY.md) lists exactly what is sent.
+
 ## Platform status
 
 Published Windows, Linux, and macOS builds are available on the [Releases page](../../releases).
