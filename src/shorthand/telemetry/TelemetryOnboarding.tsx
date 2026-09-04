@@ -18,16 +18,22 @@ interface TelemetryOnboardingProps {
  * new installs only, as the last onboarding step, after model selection.
  * Model selection (`select_model`) already stamps `onboarding_completed`
  * before this screen runs, so quitting here leaves telemetry unanswered
- * (`None`, treated as off) — the safe direction. The switch is pre-set to
- * on; nothing is sent until Continue writes the choice, because the stored
- * default is off. TELEMETRY.md is the copy's source of truth.
+ * (`None`, treated as off) — the safe direction. Never asked (`null`/
+ * `undefined`) pre-sets the switch on; an answer the user already gave,
+ * through Settings, is shown rather than overridden. Nothing is sent until
+ * Continue writes the choice, because the stored default is off.
+ * TELEMETRY.md is the copy's source of truth.
  */
 const TelemetryOnboarding: React.FC<TelemetryOnboardingProps> = ({
   onComplete,
 }) => {
   const { t } = useTranslation();
-  const { updateSetting } = useSettings();
-  const [enabled, setEnabled] = useState(true);
+  const { getSetting, updateSetting } = useSettings();
+  // Never asked (`null`/`undefined`) shows on; an answer already given
+  // through Settings is shown as given.
+  const [enabled, setEnabled] = useState<boolean>(
+    getSetting("telemetry_enabled") ?? true,
+  );
   const [saving, setSaving] = useState(false);
 
   const handleContinue = async () => {

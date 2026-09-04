@@ -185,11 +185,9 @@ test.describe("telemetry consent step", () => {
     });
   });
 
-  test("a stored false does not change the switch's default-on position", async ({
-    page,
-  }) => {
+  test("a stored false shows the switch off", async ({ page }) => {
     await bootFreshProfile(page, false);
     await completeModelStep(page);
-    await expect(page.getByRole("checkbox")).toBeChecked();
+    await expect(page.getByRole("checkbox")).not.toBeChecked();
   });
 });

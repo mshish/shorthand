@@ -131,9 +131,39 @@ fn next_install_id(current: Option<String>, enabled: bool) -> Option<String> {
     }
 }
 
+/// Opens the gate: sets the Sentry scope user from `install_id` and starts a
+/// session. Shared by `set_consent`'s enable branch and `apply_stored`.
+fn open_gate(install_id: Option<String>) {
+    sentry::configure_scope(|scope| {
+        scope.set_user(install_id.map(|id| sentry::User {
+            id: Some(id),
+            ..Default::default()
+        }));
+    });
+    consent_flag().store(true, Ordering::Release);
+    sentry::start_session();
+}
+
+/// Closes the gate: ends and flushes the session before shutting the gate,
+/// then clears the Sentry scope user. Shared by `set_consent`'s disable
+/// branch and (eventually) any other path that must revoke consent.
+fn close_gate() {
+    // The session-end envelope only gets enqueued by `end_session`; the
+    // periodic flusher can run as late as 60 seconds later, which may be
+    // after the gate below has shut. So flush explicitly here, while
+    // consent still holds and the gate is still open, then close it.
+    sentry::end_session();
+    if let Some(client) = sentry::Hub::current().client() {
+        client.flush(Some(std::time::Duration::from_secs(2)));
+    }
+    consent_flag().store(false, Ordering::Release);
+    sentry::configure_scope(|scope| scope.set_user(None));
+}
+
 /// Applies consent: opens or closes the gate, starts or ends the session,
 /// and sets or clears the install id in both the Sentry scope and settings.
-/// Called from `setup` with the stored value and from the toggle command.
+/// For an explicit choice only — the Settings toggle and the consent step.
+/// Startup does not call this; it calls `apply_stored`, which never writes.
 pub fn set_consent(app: &AppHandle, enabled: bool) {
     let mut stored = settings::get_settings(app);
     let install_id = next_install_id(stored.telemetry_install_id.clone(), enabled);
@@ -143,28 +173,45 @@ pub fn set_consent(app: &AppHandle, enabled: bool) {
         settings::write_settings(app, stored);
     }
 
-    let gate = consent_flag();
     if enabled {
-        sentry::configure_scope(|scope| {
-            scope.set_user(install_id.map(|id| sentry::User {
-                id: Some(id),
-                ..Default::default()
-            }));
-        });
-        gate.store(true, Ordering::Release);
-        sentry::start_session();
+        open_gate(install_id);
     } else {
-        // The session-end envelope only gets enqueued by `end_session`; the
-        // periodic flusher can run as late as 60 seconds later, which may be
-        // after the gate below has shut. So flush explicitly here, while
-        // consent still holds and the gate is still open, then close it.
-        sentry::end_session();
-        if let Some(client) = sentry::Hub::current().client() {
-            client.flush(Some(std::time::Duration::from_secs(2)));
-        }
-        gate.store(false, Ordering::Release);
-        sentry::configure_scope(|scope| scope.set_user(None));
+        close_gate();
     }
+}
+
+/// Whether the stored setting amounts to consent. Pure: only `Some(true)` is
+/// consent — `None` (never asked) and `Some(false)` are both "do not open
+/// the gate", so startup treats them alike without writing anything.
+fn stored_consent(stored: Option<bool>) -> bool {
+    stored == Some(true)
+}
+
+/// Applies the stored answer at startup. Never records one: for `None` (never
+/// asked) or `Some(false)`, this does nothing and writes nothing, leaving a
+/// fresh install's `None` exactly as it was so the consent step still sees
+/// "never asked". Only for `Some(true)` does it open the gate — generating
+/// and persisting an install id first if one is missing, since that id is
+/// what the scope user and `start_session` need, and it is the one write
+/// this function makes.
+pub fn apply_stored(app: &AppHandle) {
+    let stored = settings::get_settings(app);
+    if !stored_consent(stored.telemetry_enabled) {
+        return;
+    }
+
+    let install_id = match stored.telemetry_install_id.clone() {
+        Some(id) => Some(id),
+        None => {
+            let id = next_install_id(None, true);
+            let mut updated = stored;
+            updated.telemetry_install_id = id.clone();
+            settings::write_settings(app, updated);
+            id
+        }
+    };
+
+    open_gate(install_id);
 }
 
 /// Fork-only Settings toggle. Lives here rather than in `shortcut/mod.rs`
@@ -412,6 +459,22 @@ mod tests {
             "engine_error"
         );
         assert_eq!(transcription_reason("something else entirely"), "other");
+    }
+
+    #[test]
+    fn stored_consent_is_true_only_for_explicit_opt_in() {
+        assert!(
+            !stored_consent(None),
+            "never asked must not be treated as consent"
+        );
+        assert!(
+            !stored_consent(Some(false)),
+            "an explicit opt-out must not be treated as consent"
+        );
+        assert!(
+            stored_consent(Some(true)),
+            "an explicit opt-in must be treated as consent"
+        );
     }
 
     #[test]

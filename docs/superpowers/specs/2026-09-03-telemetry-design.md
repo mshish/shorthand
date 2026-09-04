@@ -105,7 +105,9 @@ pre-set to on; pressing Continue writes the explicit value. That is what
 position, not the stored value.
 
 No migration touches existing stores. A missing key is `None`, which is
-treated as off, and the frozen-store test in `settings.rs` pins it.
+treated as off, and the frozen-store test in `settings.rs` pins it. Startup
+applies the stored answer without writing it back, so a `None` stays `None`
+until the user answers.
 
 The install id is what lets release health count distinct installs rather
 than sessions. It is attached as the Sentry `user.id` and nothing else. It is
@@ -125,8 +127,9 @@ One screen: the wordmark, a title, a two-sentence intro, a "What is sent" list
 of two items, a "What is never sent" line, one toggle, a "See exactly what is
 sent" link to `TELEMETRY.md` on GitHub, and Continue. Continue awaits
 `updateSetting("telemetry_enabled", value)` and then advances. The toggle is
-always pre-set to on — a first-run question, not a reflection of whatever the
-store holds — and Continue writes the chosen value.
+pre-set to on when the store holds no answer (`None`); if the user has
+already answered through Settings, that answer is shown rather than
+overridden. Continue writes the chosen value.
 
 Copy, English only, in `src/shorthand/locales/en.json` under
 `onboarding.telemetry.*`:

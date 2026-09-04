@@ -233,12 +233,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // above may have just persisted a settings write, and consuming that
     // stale snapshot here would silently revert it by writing back the
     // pre-fallback value alongside the install id.
-    shorthand::telemetry::set_consent(
-        app_handle,
-        settings::get_settings(app_handle)
-            .telemetry_enabled
-            .unwrap_or(false),
-    );
+    shorthand::telemetry::apply_stored(app_handle);
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can
     // select it at hotkey time; model loading remains lazy inside
