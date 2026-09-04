@@ -23,7 +23,6 @@
 use crate::managers::history::{HistoryEntry, HistoryManager};
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings;
 use crate::tray_i18n::get_tray_translations;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
@@ -311,7 +310,15 @@ fn sync_tray_with(app: &AppHandle, update: impl FnOnce(&mut TrayInner)) {
 }
 
 fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
-    let settings = settings::get_settings(app);
+    // Mode-resolved, not `settings::get_settings` directly: `save_transcripts`
+    // is a per-mode setting (see `shorthand::dictation::DictationSettings`),
+    // and this is the same resolver `actions.rs` uses to decide whether a
+    // completed transcription actually gets saved. Reading the unresolved
+    // top-level field here made the item reflect meeting mode's setting even
+    // right after a dictation — dictation defaults `save_transcripts` on but
+    // the top-level field defaults off, so "Copy Last Transcript" stayed
+    // disabled despite history having a fresh entry to copy.
+    let settings = crate::shorthand::dictation::resolve_settings(app);
     let theme = get_current_theme(app);
     let warning = crate::secure_input::tray_warning_active(app);
     let model_loaded = app.state::<Arc<TranscriptionManager>>().is_model_loaded();
@@ -620,7 +627,7 @@ pub fn recreate_tray_icon(app: &AppHandle) {
         .try_state::<crate::cli::CliArgs>()
         .map(|args| args.no_tray)
         .unwrap_or(false);
-    if no_tray || !settings::get_settings(app).show_tray_icon {
+    if no_tray || !crate::settings::get_settings(app).show_tray_icon {
         return;
     }
     let Some(tray) = app.try_state::<TrayIcon>() else {
