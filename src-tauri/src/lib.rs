@@ -1213,6 +1213,7 @@ pub fn run(cli_args: CliArgs) {
             }
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
+                shorthand::telemetry::on_exit();
                 // `Stage` in transcription_coordinator.rs owns the session id
                 // now, and exit teardown can't reach it synchronously here —
                 // relying on the coordinator's own thread still being
