@@ -134,11 +134,15 @@ fn next_install_id(current: Option<String>, enabled: bool) -> Option<String> {
 /// Opens the gate: sets the Sentry scope user from `install_id` and starts a
 /// session. Shared by `set_consent`'s enable branch and `apply_stored`.
 fn open_gate(install_id: Option<String>) {
+    let user = install_id.map(|id| sentry::User {
+        id: Some(id),
+        ..Default::default()
+    });
+    sentry::Hub::main().configure_scope(|scope| {
+        scope.set_user(user.clone());
+    });
     sentry::configure_scope(|scope| {
-        scope.set_user(install_id.map(|id| sentry::User {
-            id: Some(id),
-            ..Default::default()
-        }));
+        scope.set_user(user);
     });
     consent_flag().store(true, Ordering::Release);
     sentry::start_session();
@@ -157,6 +161,7 @@ fn close_gate() {
         client.flush(Some(std::time::Duration::from_secs(2)));
     }
     consent_flag().store(false, Ordering::Release);
+    sentry::Hub::main().configure_scope(|scope| scope.set_user(None));
     sentry::configure_scope(|scope| scope.set_user(None));
 }
 
@@ -253,6 +258,30 @@ pub fn capture_started() {
     *CAPTURE_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
 }
 
+/// Attaches `install_id` to a counter metric if present, returning the metric.
+fn attach_install_id_counter(
+    counter: sentry::metrics::CounterMetric,
+    install_id: Option<&str>,
+) -> sentry::metrics::CounterMetric {
+    if let Some(id) = install_id {
+        counter.attribute("install_id", id.to_string())
+    } else {
+        counter
+    }
+}
+
+/// Attaches `install_id` to a distribution metric if present, returning the metric.
+fn attach_install_id_distribution(
+    distribution: sentry::metrics::DistributionMetric,
+    install_id: Option<&str>,
+) -> sentry::metrics::DistributionMetric {
+    if let Some(id) = install_id {
+        distribution.attribute("install_id", id.to_string())
+    } else {
+        distribution
+    }
+}
+
 /// Emits the two usage metrics for the capture that just produced (or failed
 /// to produce) a transcription result. Safe to call with consent off: it
 /// returns immediately, so nothing is ever handed to the SDK's own metrics
@@ -275,20 +304,34 @@ pub fn capture_completed(app: &AppHandle, ok: bool) {
         .map(|info| info.is_custom);
     let model = model_attribute_for(is_custom, &settings.selected_model);
 
-    sentry::metrics::counter("capture.completed", 1)
+    let counter = sentry::metrics::counter("capture.completed", 1)
         .attribute("mode", mode)
         .attribute("model", model)
-        .attribute("outcome", if ok { "ok" } else { "error" })
-        .capture();
+        .attribute("outcome", if ok { "ok" } else { "error" });
+    attach_install_id_counter(counter, settings.telemetry_install_id.as_deref()).capture();
 
     let started = CAPTURE_STARTED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take();
     if let Some(started) = started {
-        sentry::metrics::distribution("capture.duration_seconds", started.elapsed().as_secs_f64())
-            .attribute("mode", mode)
-            .capture();
+        let dist = sentry::metrics::distribution(
+            "capture.duration_seconds",
+            started.elapsed().as_secs_f64(),
+        )
+        .attribute("mode", mode);
+        attach_install_id_distribution(dist, settings.telemetry_install_id.as_deref()).capture();
+    }
+}
+
+/// Flushes the active release-health session and transport on app exit.
+pub fn on_exit() {
+    if consented() {
+        sentry::Hub::main().end_session();
+        sentry::end_session();
+        if let Some(client) = sentry::Hub::main().client() {
+            client.flush(Some(std::time::Duration::from_secs(2)));
+        }
     }
 }
 
@@ -485,5 +528,139 @@ mod tests {
         assert_eq!(next_install_id(first, false), None, "cleared when off");
         let again = next_install_id(None, true);
         assert!(again.is_some());
+    }
+
+    #[derive(Clone)]
+    struct MetricTestTransport(Arc<Mutex<Vec<sentry::Envelope>>>);
+    impl sentry::Transport for MetricTestTransport {
+        fn send_envelope(&self, envelope: sentry::Envelope) {
+            self.0.lock().unwrap().push(envelope);
+        }
+    }
+    impl sentry::TransportFactory for MetricTestTransport {
+        fn create_transport_with_options(
+            &self,
+            _options: sentry::TransportOptions,
+        ) -> Arc<dyn sentry::Transport> {
+            Arc::new(self.clone())
+        }
+    }
+
+    #[test]
+    fn metric_counter_includes_install_id_attribute() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let mut opts = sentry::ClientOptions::new();
+        opts.dsn = DSN.parse().ok();
+        opts.transport = Some(Arc::new(MetricTestTransport(recorded.clone())));
+        let client = Arc::new(sentry::Client::from(opts));
+        let hub = Arc::new(sentry::Hub::new(
+            Some(client.clone()),
+            Arc::new(Default::default()),
+        ));
+
+        sentry::Hub::run(hub, || {
+            let metric = attach_install_id_counter(
+                sentry::metrics::counter("test.counter", 1),
+                Some("test-install-uuid-1234"),
+            );
+            metric.capture();
+        });
+
+        client.flush(Some(std::time::Duration::from_secs(1)));
+
+        let envelopes = recorded.lock().unwrap();
+        assert_eq!(envelopes.len(), 1, "flush should produce one envelope");
+        let mut buf = Vec::new();
+        envelopes[0].to_writer(&mut buf).unwrap();
+        let payload = String::from_utf8_lossy(&buf);
+        assert!(payload.contains("test.counter"));
+        assert!(payload.contains("install_id"));
+        assert!(payload.contains("test-install-uuid-1234"));
+    }
+
+    #[test]
+    fn metric_counter_omits_install_id_when_none() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let mut opts = sentry::ClientOptions::new();
+        opts.dsn = DSN.parse().ok();
+        opts.transport = Some(Arc::new(MetricTestTransport(recorded.clone())));
+        let client = Arc::new(sentry::Client::from(opts));
+        let hub = Arc::new(sentry::Hub::new(
+            Some(client.clone()),
+            Arc::new(Default::default()),
+        ));
+
+        sentry::Hub::run(hub, || {
+            let metric =
+                attach_install_id_counter(sentry::metrics::counter("test.counter_none", 1), None);
+            metric.capture();
+        });
+
+        client.flush(Some(std::time::Duration::from_secs(1)));
+
+        let envelopes = recorded.lock().unwrap();
+        assert_eq!(envelopes.len(), 1);
+        let mut buf = Vec::new();
+        envelopes[0].to_writer(&mut buf).unwrap();
+        let payload = String::from_utf8_lossy(&buf);
+        assert!(payload.contains("test.counter_none"));
+        assert!(!payload.contains("install_id"));
+    }
+
+    #[test]
+    fn metric_distribution_includes_install_id_attribute() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let mut opts = sentry::ClientOptions::new();
+        opts.dsn = DSN.parse().ok();
+        opts.transport = Some(Arc::new(MetricTestTransport(recorded.clone())));
+        let client = Arc::new(sentry::Client::from(opts));
+        let hub = Arc::new(sentry::Hub::new(
+            Some(client.clone()),
+            Arc::new(Default::default()),
+        ));
+
+        sentry::Hub::run(hub, || {
+            let metric = attach_install_id_distribution(
+                sentry::metrics::distribution("test.duration", 4.2),
+                Some("dist-install-uuid-5678"),
+            );
+            metric.capture();
+        });
+
+        client.flush(Some(std::time::Duration::from_secs(1)));
+
+        let envelopes = recorded.lock().unwrap();
+        assert_eq!(envelopes.len(), 1);
+        let mut buf = Vec::new();
+        envelopes[0].to_writer(&mut buf).unwrap();
+        let payload = String::from_utf8_lossy(&buf);
+        assert!(payload.contains("test.duration"));
+        assert!(payload.contains("install_id"));
+        assert!(payload.contains("dist-install-uuid-5678"));
+    }
+
+    #[test]
+    fn open_and_close_gate_updates_main_hub_scope_user() {
+        let client = Arc::new(sentry::Client::with_options(sentry::apply_defaults(
+            client_options(),
+        )));
+        sentry::Hub::main().bind_client(Some(client));
+
+        open_gate(Some("user-1234-uuid".to_string()));
+
+        let user =
+            sentry::Hub::main().configure_scope(|scope| scope.user().and_then(|u| u.id.clone()));
+        assert_eq!(user, Some("user-1234-uuid".to_string()));
+
+        close_gate();
+
+        let user_after =
+            sentry::Hub::main().configure_scope(|scope| scope.user().and_then(|u| u.id.clone()));
+        assert_eq!(user_after, None);
+    }
+
+    #[test]
+    fn on_exit_flushes_session_when_consented() {
+        on_exit();
     }
 }
