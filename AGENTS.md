@@ -30,7 +30,7 @@ Both get harder in proportion to how many of upstream's own lines we rewrite. So
   imports, rename neighbouring symbols, or "tidy" surrounding code while you are in there — each
   of those turns a clean merge into a manual one, and none of it is the change you came to make.
 - **Give fork-only features a boundary.** `--follow-stream` is the model: its own module, its own
-  doc ([FOLLOW_STREAM.md](FOLLOW_STREAM.md)), off by default, touching shared files at as few
+  doc ([FOLLOW_STREAM.md](FOLLOW_STREAM.md)), touching shared files at as few
   points as possible. That shape is what makes a feature liftable into a self-contained PR.
 - **The Handy → Shorthand rename is a deliberate exception** and already touches upstream lines
   throughout. Do not extend it opportunistically — renaming something upstream did not rename
@@ -294,7 +294,7 @@ Handy supports command-line parameters on all platforms for integration with scr
 
 - CLI flags are runtime-only overrides — they do NOT modify persisted settings
 - Remote control flags work via `tauri_plugin_single_instance`: second instance sends args, then exits
-- `--follow-stream` is a fork-only feature, off by default, whose follower attaches over a per-user local socket rather than `tauri_plugin_single_instance`; see [FOLLOW_STREAM.md](FOLLOW_STREAM.md)
+- `--follow-stream` is a fork-only feature whose follower attaches over a per-user local socket rather than `tauri_plugin_single_instance`. Transcript publication is on by default for Meetings and Assisted notes, off for Dictation; see [FOLLOW_STREAM.md](FOLLOW_STREAM.md).
 - `send_transcription_input()` in `signal_handle.rs` is shared between signal handlers and CLI
 
 ## Debug Mode
