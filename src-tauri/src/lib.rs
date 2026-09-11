@@ -297,6 +297,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
 
+    // Fork-only: provider secrets live in the OS credential store. A failed
+    // platform-store install is reported once here and every later status
+    // call then answers `unavailable`; it must never fall back to plaintext.
+    if let Err(error) = shorthand::credentials::install_platform_store() {
+        log::error!("could not select an OS credential store: {error}");
+    }
+    app_handle.manage(Arc::new(shorthand::credentials::CredentialStore::keyring()));
+
     // The follow-stream listener is unconditional — it exists whenever the
     // app runs, regardless of any mode's settings. This is listener
     // LIFETIME, not publication: which captures actually reach a follower is
