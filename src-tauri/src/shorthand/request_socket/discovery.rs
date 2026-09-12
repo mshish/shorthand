@@ -14,7 +14,7 @@ use super::protocol::REQUEST_PROTOCOL_VERSION;
 const FILE_NAME: &str = "request-socket.json";
 
 /// Mirrors core's `shorthandConfigDirectory()` exactly (see
-/// shared-constraints-and-wire-contract.md): the two must agree on this path
+/// REQUEST_SOCKET.md at the repo root): the two must agree on this path
 /// without either reading the other's source.
 #[cfg(target_os = "windows")]
 pub fn config_directory() -> io::Result<PathBuf> {
