@@ -4,6 +4,7 @@
 //! separate processes (core, the Obsidian plugin) with no way to derive
 //! that name, so each run of the app writes down where it is listening.
 
+use std::io::Write as _;
 use std::{fs, io, path::PathBuf};
 
 use serde::Serialize;
@@ -51,6 +52,14 @@ struct Discovery<'a> {
 /// Writes the discovery file atomically (temp file + rename) so a client
 /// polling for it never observes a half-written document, mode 0600 on
 /// Unix so only this user's own processes can read the path out of it.
+///
+/// The temp file is per-process (`{FILE_NAME}.<pid>.tmp`) and opened with
+/// `create_new`, rather than a fixed name opened with plain `write`: two
+/// instances racing to (re)write the discovery file on the same fixed temp
+/// name could otherwise have one process's rename pick up bytes the other
+/// one wrote. `create_new` also means the 0600 mode applies at the moment
+/// the file is created, not as a second step after a plain-permissions
+/// window during which another local user could have opened it.
 pub fn write_discovery(path_for_clients: &str) -> io::Result<()> {
     let dir = config_directory()?;
     fs::create_dir_all(&dir)?;
@@ -61,12 +70,17 @@ pub fn write_discovery(path_for_clients: &str) -> io::Result<()> {
     })
     .expect("discovery document always serializes");
 
-    let temp_path = dir.join(format!("{FILE_NAME}.tmp"));
-    fs::write(&temp_path, contents.as_bytes())?;
-    #[cfg(unix)]
+    let temp_path = dir.join(format!("{FILE_NAME}.{}.tmp", std::process::id()));
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path)?;
+        file.write_all(contents.as_bytes())?;
     }
     fs::rename(&temp_path, dir.join(FILE_NAME))
 }

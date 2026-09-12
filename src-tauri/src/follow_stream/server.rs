@@ -284,7 +284,7 @@ pub(crate) fn peer_is_current_user(stream: &Stream) -> bool {
 }
 
 #[cfg(windows)]
-pub(crate) fn protected_sddl(sid: &str) -> String {
+fn protected_sddl(sid: &str) -> String {
     format!("D:P(A;;GA;;;{sid})")
 }
 

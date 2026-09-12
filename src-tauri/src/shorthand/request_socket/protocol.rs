@@ -4,7 +4,7 @@
 //! workspace, PLANS/SHORTHAND_APP_CREDENTIALS_IMPLEMENTATION_PLAN.md) for
 //! the full wire contract this mirrors.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +59,7 @@ pub enum Request {
         slot: CredentialSlot,
     },
     CredentialStatus {
-        slots: Vec<CredentialSlot>,
+        slots: Vec<StatusSlot>,
     },
     HttpFetch(HttpFetchParams),
     HttpAbort {
@@ -88,6 +88,19 @@ pub struct HttpFetchParams {
     pub body: Option<String>,
 }
 
+/// One element of a `credential.status` request. `raw` is the slot exactly
+/// as the client sent it — echoed back verbatim in the response, per the
+/// wire contract, so a client comparing the echo against what it sent (to
+/// correlate entries, since responses are otherwise positional) sees its own
+/// bytes back, not a server-side rewrite. `canonical` is the same slot
+/// parsed and canonicalised, used only to look the secret up and to detect
+/// duplicate slots within one request.
+#[derive(Debug)]
+pub struct StatusSlot {
+    pub raw: serde_json::Value,
+    pub canonical: CredentialSlot,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsOpenParams {
     pub slot: CredentialSlot,
@@ -109,8 +122,18 @@ struct CredentialClearParams {
 
 #[derive(Deserialize)]
 struct CredentialStatusParams {
-    slots: Vec<CredentialSlot>,
+    /// Kept as raw JSON, not `Vec<CredentialSlot>`: `credential.status` must
+    /// echo each slot back exactly as received (see `StatusSlot`), and the
+    /// canonical form serde produces on the way into `CredentialSlot` is not
+    /// reversible back to the client's original bytes.
+    slots: Vec<serde_json::Value>,
 }
+
+/// Cap on `credential.status`'s `slots` array. Generous for any real caller
+/// (core and the plugin ask about a handful of provider/vault slots at a
+/// time) while bounding the O(n) canonicalisation and O(n) dedup work one
+/// request can force the server to do.
+const MAX_STATUS_SLOTS: usize = 64;
 
 #[derive(Deserialize)]
 struct HttpAbortParams {
@@ -144,18 +167,27 @@ fn reject_post_process(slot: &CredentialSlot) -> Result<(), ErrorCode> {
 
 const MAX_ID_LEN: usize = 128;
 
-/// Parses one NDJSON line into its id and request. The id is deliberately
-/// not returned on any error path: an envelope that failed validation
-/// (unparseable JSON, an empty or oversized id, an unknown method, a
-/// rejected slot) has nothing in it the caller should trust enough to echo
-/// back to the client as if it correlated to their request.
-pub fn parse_line(line: &str) -> Result<(String, Request), ErrorCode> {
-    let envelope: Envelope = serde_json::from_str(line).map_err(|_| ErrorCode::BadRequest)?;
+/// Parses one NDJSON line into its id and request. The error carries an id
+/// too, whenever one is available to trust: once the envelope has
+/// deserialised and `id` has passed validation, that id is real — the
+/// client's own id, later used to correlate replies — regardless of whether
+/// `method`/`params` then turn out to be invalid. A client that never gets
+/// an id back for a request it sent has no way to tell its request apart
+/// from one that was silently dropped, and (per the wire contract) waits out
+/// the full per-request timeout instead of failing fast. Only a line that
+/// never produced a usable id in the first place — unparseable JSON, or an
+/// empty/oversized `id` field — answers with `""`, because there is nothing
+/// in it worth echoing back as if it correlated to anything.
+pub fn parse_line(line: &str) -> Result<(String, Request), (String, ErrorCode)> {
+    let envelope: Envelope =
+        serde_json::from_str(line).map_err(|_| (String::new(), ErrorCode::BadRequest))?;
     if envelope.id.is_empty() || envelope.id.chars().count() > MAX_ID_LEN {
-        return Err(ErrorCode::BadRequest);
+        return Err((String::new(), ErrorCode::BadRequest));
     }
-    let request = parse_request(&envelope.method, envelope.params)?;
-    Ok((envelope.id, request))
+    match parse_request(&envelope.method, envelope.params) {
+        Ok(request) => Ok((envelope.id, request)),
+        Err(code) => Err((envelope.id, code)),
+    }
 }
 
 fn parse_request(method: &str, params: serde_json::Value) -> Result<Request, ErrorCode> {
@@ -178,12 +210,25 @@ fn parse_request(method: &str, params: serde_json::Value) -> Result<Request, Err
         "credential.status" => {
             let params: CredentialStatusParams =
                 serde_json::from_value(params).map_err(|_| ErrorCode::BadRequest)?;
-            for slot in &params.slots {
-                reject_post_process(slot)?;
+            if params.slots.len() > MAX_STATUS_SLOTS {
+                return Err(ErrorCode::BadRequest);
             }
-            Ok(Request::CredentialStatus {
-                slots: params.slots,
-            })
+            let mut seen_services = HashSet::with_capacity(params.slots.len());
+            let mut slots = Vec::with_capacity(params.slots.len());
+            for raw in params.slots {
+                let canonical: CredentialSlot =
+                    serde_json::from_value(raw.clone()).map_err(|_| ErrorCode::BadRequest)?;
+                reject_post_process(&canonical)?;
+                // Two slots that canonicalise to the same keyring entry (a
+                // differently-cased origin, say) would otherwise get two
+                // status entries for what is really one secret — and the
+                // client has no way to know which one to trust.
+                if !seen_services.insert(canonical.service()) {
+                    return Err(ErrorCode::BadRequest);
+                }
+                slots.push(StatusSlot { raw, canonical });
+            }
+            Ok(Request::CredentialStatus { slots })
         }
         "http.fetch" => {
             let params: HttpFetchParams =
@@ -315,13 +360,29 @@ mod tests {
     fn rejects_unknown_method_and_post_process_slots() {
         assert!(matches!(
             parse_line(r#"{"id":"r1","method":"nope","params":{}}"#),
-            Err(ErrorCode::UnknownMethod)
+            Err((ref id, ErrorCode::UnknownMethod)) if id == "r1"
         ));
         assert!(matches!(
             parse_line(
                 r#"{"id":"r1","method":"credential.set","params":{"slot":{"kind":"post-process","provider_id":"openai"},"secret":"x"}}"#
             ),
-            Err(ErrorCode::BadRequest)
+            Err((ref id, ErrorCode::BadRequest)) if id == "r1"
+        ));
+    }
+
+    /// A malformed/method-valid-but-params-invalid request still carries a
+    /// trustworthy id once the envelope itself parsed — see `parse_line`'s
+    /// doc comment. Only unparseable JSON, or a missing/oversized `id`
+    /// field, has nothing worth echoing.
+    #[test]
+    fn an_id_that_deserialised_is_echoed_even_when_the_request_is_rejected() {
+        assert!(matches!(
+            parse_line(r#"{"id":"","method":"nope","params":{}}"#),
+            Err((ref id, ErrorCode::BadRequest)) if id.is_empty()
+        ));
+        assert!(matches!(
+            parse_line("{"),
+            Err((ref id, ErrorCode::BadRequest)) if id.is_empty()
         ));
     }
 
@@ -334,18 +395,66 @@ mod tests {
         );
     }
 
-    /// Carry-over rule (task-A4-carryovers.md): the core client sends an
-    /// already-lower-cased origin, so canonicalisation is normally a no-op.
-    /// This pins the fallback case — the server never echoes raw client
-    /// bytes, only the parsed-and-recanonicalised slot — so a malformed or
-    /// non-conforming client cannot smuggle a differently-cased origin
-    /// through the echo and defeat a same-origin comparison downstream.
+    /// The core client matches `credential.status` entries back to the slots
+    /// it asked about by comparing the echoed `slot` against exactly the
+    /// bytes it sent (client.ts). Echoing the canonicalised form instead —
+    /// lower-cased origin, normalised port — makes that comparison fail for
+    /// any client that did not already canonicalise on its own, so the raw
+    /// JSON has to survive untouched even though `canonical` (used only for
+    /// the store lookup) differs.
     #[test]
-    fn credential_status_slot_echoes_the_canonicalised_origin_not_the_raw_host_case() {
+    fn credential_status_slot_echoes_the_raw_request_not_the_canonicalised_form() {
         let (_, req) = parse_line(r#"{"id":"r1","method":"credential.status","params":{"slots":[{"kind":"notes-llm","provider":"openai","origin":"https://API.OpenAI.com"}]}}"#).unwrap();
         let Request::CredentialStatus { slots } = req else {
             panic!("expected a CredentialStatus request");
         };
-        assert_eq!(slots[0].origin(), Some("https://api.openai.com"));
+        assert_eq!(
+            slots[0].raw,
+            serde_json::json!({"kind":"notes-llm","provider":"openai","origin":"https://API.OpenAI.com"})
+        );
+        assert_eq!(slots[0].canonical.origin(), Some("https://api.openai.com"));
+    }
+
+    /// Two slots the client wrote differently but that canonicalise to the
+    /// same keyring entry would otherwise get two status entries for one
+    /// secret, with no principled way to pick which the client should trust.
+    #[test]
+    fn credential_status_rejects_duplicate_canonical_slots() {
+        assert!(matches!(
+            parse_line(r#"{"id":"r1","method":"credential.status","params":{"slots":[{"kind":"notes-llm","provider":"openai","origin":"https://api.openai.com"},{"kind":"notes-llm","provider":"openai","origin":"https://API.OpenAI.com"}]}}"#),
+            Err((ref id, ErrorCode::BadRequest)) if id == "r1"
+        ));
+    }
+
+    #[test]
+    fn credential_status_preserves_request_order() {
+        let (_, req) = parse_line(r#"{"id":"r1","method":"credential.status","params":{"slots":[{"kind":"notes-llm","provider":"anthropic","origin":"https://api.anthropic.com"},{"kind":"notes-llm","provider":"openai","origin":"https://api.openai.com"}]}}"#).unwrap();
+        let Request::CredentialStatus { slots } = req else {
+            panic!("expected a CredentialStatus request");
+        };
+        assert_eq!(
+            slots[0].canonical.origin(),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(slots[1].canonical.origin(), Some("https://api.openai.com"));
+    }
+
+    #[test]
+    fn credential_status_caps_the_slot_count() {
+        let slots: Vec<String> = (0..65)
+            .map(|i| {
+                format!(
+                    r#"{{"kind":"notes-llm","provider":"openai-compatible","origin":"http://host{i}.example"}}"#
+                )
+            })
+            .collect();
+        let line = format!(
+            r#"{{"id":"r1","method":"credential.status","params":{{"slots":[{}]}}}}"#,
+            slots.join(",")
+        );
+        assert!(matches!(
+            parse_line(&line),
+            Err((ref id, ErrorCode::BadRequest)) if id == "r1"
+        ));
     }
 }

@@ -16,6 +16,6 @@ mod server;
 pub use discovery::{config_directory, remove_discovery, write_discovery};
 pub use protocol::{
     error_line, hello_line, ok_line, parse_line, Envelope, ErrorCode, HttpFetchParams, Request,
-    WsOpenParams, CAPABILITIES, REQUEST_PROTOCOL_VERSION,
+    StatusSlot, WsOpenParams, CAPABILITIES, REQUEST_PROTOCOL_VERSION,
 };
 pub use server::RequestSocketServer;

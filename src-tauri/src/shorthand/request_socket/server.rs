@@ -29,7 +29,10 @@ use crate::shorthand::credentials::{
 
 use super::{
     discovery, http_proxy,
-    protocol::{error_line, hello_line, ok_line, parse_line, ErrorCode, HttpFetchParams, Request},
+    protocol::{
+        error_line, hello_line, ok_line, parse_line, ErrorCode, HttpFetchParams, Request,
+        StatusSlot,
+    },
 };
 
 type TaskHandle = tauri::async_runtime::JoinHandle<()>;
@@ -69,8 +72,15 @@ impl RequestSocketServer {
         // Not best-effort: a client has no way to find this run's socket
         // other than this file, so a failed write is as bad as the listener
         // never having started, even though the listener itself is already
-        // up by this point.
-        discovery::write_discovery(&client_path)
+        // up by this point. Tear that listener back down rather than
+        // returning an error while leaving it running with no discovery file
+        // pointing at it — a caller that sees `start` fail should be able to
+        // assume nothing is left listening.
+        if let Err(error) = discovery::write_discovery(&client_path) {
+            self.stop();
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(crate) async fn start_with_name(
@@ -150,6 +160,10 @@ impl RequestSocketServer {
         for connection in connections.drain(..) {
             connection.abort();
         }
+        drop(connections);
+        // Otherwise a stale file keeps pointing a future client at a socket
+        // nobody is listening on anymore.
+        discovery::remove_discovery();
         log::info!("Request-socket listener stopped");
     }
 
@@ -191,15 +205,51 @@ fn listener_name() -> io::Result<(Name<'static>, String)> {
 fn listener_name() -> io::Result<(Name<'static>, String)> {
     use interprocess::{local_socket::ToFsName, os::unix::local_socket::FilesystemUdSocket};
 
-    let path = discovery::config_directory()?.join("request.sock");
+    let dir = discovery::config_directory()?;
+    // On a fresh install nothing has created the config directory yet —
+    // discovery.rs normally does, but only after this bind succeeds — so
+    // binding here first would fail `NotFound` every time. Create it eagerly
+    // instead of waiting for `write_discovery`.
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("request.sock");
+
     // A prior unclean shutdown can leave the socket file behind; binding to
-    // an existing path fails, so clear it first. Best-effort: a removal
-    // failure here just surfaces as the bind error from `create_listener`.
-    if let Err(error) = std::fs::remove_file(&path) {
-        if error.kind() != io::ErrorKind::NotFound {
-            log::warn!("Could not remove stale request-socket file {path:?}: {error}");
+    // an existing path fails, so it normally needs clearing first. But a
+    // *live* instance can also be listening at this exact path (a second app
+    // launch racing the first), and unlinking it out from under that listener
+    // would strand its clients. Only remove the file once a connect attempt
+    // proves nothing is listening: `ConnectionRefused` (the socket file is
+    // stale) or `NotFound` (nothing to remove). Any other outcome — including
+    // a successful connect — leaves the file alone.
+    match std::os::unix::net::UnixStream::connect(&path) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("a request-socket listener is already running at {path:?}"),
+            ));
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            if let Err(remove_error) = std::fs::remove_file(&path) {
+                if remove_error.kind() != io::ErrorKind::NotFound {
+                    log::warn!(
+                        "Could not remove stale request-socket file {path:?}: {remove_error}"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            // Some other probe failure (e.g. permission denied): leave the
+            // file alone and let the bind attempt below surface the real
+            // problem instead of guessing.
+            log::warn!("Could not probe existing request-socket file {path:?}: {error}");
         }
     }
+
     let client_path = path.to_string_lossy().into_owned();
     Ok((path.to_fs_name::<FilesystemUdSocket>()?, client_path))
 }
@@ -231,7 +281,7 @@ async fn accept_loop(
         handles.retain(|handle| !handle.inner().is_finished());
         if handles.len() >= MAX_CONNECTIONS {
             drop(handles);
-            tauri::async_runtime::spawn(reject_over_connection_limit(stream));
+            tauri::async_runtime::spawn(reject_over_connection_limit(stream, ctx.version.clone()));
             continue;
         }
 
@@ -243,14 +293,21 @@ async fn accept_loop(
     }
 }
 
-async fn reject_over_connection_limit(stream: Stream) {
+/// Every connection's mandatory first line is `hello` (the wire contract's
+/// only promise a client can rely on before it has read anything else); a
+/// client that gets an error line first, with nothing preceding it, cannot
+/// tell this apart from talking to something that never came up at all. So
+/// this still writes `hello`, then the limit error, then closes.
+async fn reject_over_connection_limit(stream: Stream, version: String) {
     let (_, mut writer) = stream.split();
+    let hello = hello_line(&version);
     let line = error_line(
         "",
         ErrorCode::Limit,
         "maximum number of request-socket connections reached",
     );
     if let Err(error) = async {
+        writer.write_all(hello.as_bytes()).await?;
         writer.write_all(line.as_bytes()).await?;
         writer.flush().await
     }
@@ -358,18 +415,25 @@ where
         if bytes_read == 0 {
             break; // Real EOF: the peer closed the connection.
         }
+        // Checked before the newline test, not only when one is missing: a
+        // line whose *content* is exactly `MAX_LINE_BYTES` still produces
+        // `MAX_LINE_BYTES + 1` total bytes once its trailing `\n` is
+        // included, which is over the documented 32 MiB line limit even
+        // though `read_until` did find its delimiter. Checking length first
+        // catches that boundary case instead of silently accepting it.
+        if buf.len() as u64 > MAX_LINE_BYTES {
+            let _ = tx
+                .send(error_line(
+                    "",
+                    ErrorCode::TooLarge,
+                    "line exceeds the 32 MiB limit",
+                ))
+                .await;
+            break;
+        }
         if buf.last() != Some(&b'\n') {
-            if buf.len() as u64 > MAX_LINE_BYTES {
-                let _ = tx
-                    .send(error_line(
-                        "",
-                        ErrorCode::TooLarge,
-                        "line exceeds the 32 MiB limit",
-                    ))
-                    .await;
-            }
-            // Either oversized (reported above) or a genuine EOF mid-line
-            // (nothing worth reporting); both end the connection.
+            // Genuine EOF mid-line (not oversized, or it would have been
+            // caught above): nothing worth reporting.
             break;
         }
 
@@ -414,11 +478,11 @@ where
                     }
                 }
             }
-            Err(code) => {
-                // See parse_line's doc comment: a line that failed to parse
-                // never yields a trustworthy id to echo.
+            Err((id, code)) => {
+                // See parse_line's doc comment: `id` is only ever "" when
+                // the line itself gave us nothing trustworthy to echo.
                 let _ = tx
-                    .send(error_line("", code, "the request could not be parsed"))
+                    .send(error_line(&id, code, "the request could not be parsed"))
                     .await;
             }
         }
@@ -504,11 +568,7 @@ async fn credential_set(
     match tokio::task::spawn_blocking(move || store.set(&slot, &secret)).await {
         Ok(Ok(())) => ok_line(id, serde_json::json!({})),
         Ok(Err(error)) => credential_error_line(id, &error),
-        Err(join_error) => error_line(
-            id,
-            ErrorCode::CredentialUnavailable,
-            &join_error.to_string(),
-        ),
+        Err(join_error) => blocking_pool_error_line(id, "credential.set", &join_error),
     }
 }
 
@@ -517,26 +577,18 @@ async fn credential_clear(id: &str, ctx: &ConnectionContext, slot: CredentialSlo
     match tokio::task::spawn_blocking(move || store.clear(&slot)).await {
         Ok(Ok(())) => ok_line(id, serde_json::json!({})),
         Ok(Err(error)) => credential_error_line(id, &error),
-        Err(join_error) => error_line(
-            id,
-            ErrorCode::CredentialUnavailable,
-            &join_error.to_string(),
-        ),
+        Err(join_error) => blocking_pool_error_line(id, "credential.clear", &join_error),
     }
 }
 
-async fn credential_status(
-    id: &str,
-    ctx: &ConnectionContext,
-    slots: Vec<CredentialSlot>,
-) -> String {
+async fn credential_status(id: &str, ctx: &ConnectionContext, slots: Vec<StatusSlot>) -> String {
     let store = Arc::clone(&ctx.store);
     let result = tokio::task::spawn_blocking(move || {
         slots
             .into_iter()
-            .map(|slot| {
-                let status = store.status(&slot);
-                StatusEntry { slot, status }
+            .map(|StatusSlot { raw, canonical }| {
+                let status = store.status(&canonical);
+                StatusEntry { slot: raw, status }
             })
             .collect::<Vec<_>>()
     })
@@ -547,17 +599,29 @@ async fn credential_status(
             serde_json::to_value(StatusResult { statuses })
                 .expect("status result always serializes"),
         ),
-        Err(join_error) => error_line(
-            id,
-            ErrorCode::CredentialUnavailable,
-            &join_error.to_string(),
-        ),
+        Err(join_error) => blocking_pool_error_line(id, "credential.status", &join_error),
     }
 }
 
+/// A `JoinError` from the blocking pool means the credential task panicked or
+/// was cancelled, not anything about the request itself — its `Display` can
+/// include a panic payload, which may not be safe to hand to a client. `code`
+/// stays logged, not sent; `id` still needs its one reply.
+fn blocking_pool_error_line(id: &str, method: &str, error: &tokio::task::JoinError) -> String {
+    log::error!("{method} did not complete on the blocking pool: {error}");
+    error_line(
+        id,
+        ErrorCode::CredentialUnavailable,
+        "the credential store did not answer",
+    )
+}
+
+/// `slot` carries the raw JSON the client sent (see `StatusSlot`'s doc
+/// comment), not `CredentialSlot`, so the echo cannot differ from what the
+/// client asked about even after canonicalisation.
 #[derive(Serialize)]
 struct StatusEntry {
-    slot: CredentialSlot,
+    slot: serde_json::Value,
     status: CredentialStatus,
 }
 
@@ -634,6 +698,63 @@ mod tests {
             .unwrap()
             .unwrap()
             .contains("\"status\":\"configured\""));
+    }
+
+    /// Every request on a connection is dispatched to its own task (see
+    /// `handle_connection`'s doc comment), so their replies race each other
+    /// into the single writer task's channel. This pins that the writer
+    /// task's one-line-at-a-time sends keep each reply intact and separate —
+    /// never merged, truncated, or dropped — even under real concurrency,
+    /// by firing a batch of distinctly-id'd requests at once and checking
+    /// every id comes back exactly once as a well-formed JSON line.
+    #[tokio::test]
+    async fn concurrent_credential_status_requests_do_not_interleave_or_drop() {
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let (server_read, server_write) = tokio::io::split(server);
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        tokio::spawn(handle_connection(server_read, server_write, ctx));
+        let (mut read, mut write) = tokio::io::split(client);
+        let mut lines = BufReader::new(&mut read).lines();
+        assert!(lines
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .starts_with("{\"t\":\"hello\""));
+
+        const REQUESTS: usize = 20;
+        let mut batch = String::new();
+        for i in 0..REQUESTS {
+            batch.push_str(&format!(
+                "{{\"id\":\"r{i}\",\"method\":\"credential.status\",\"params\":{{\"slots\":[{{\"kind\":\"notes-llm\",\"provider\":\"openai\",\"origin\":\"https://api.openai.com\"}}]}}}}\n"
+            ));
+        }
+        // One write, so every request is queued before the server has
+        // answered any of them — the concurrency this test exists to check.
+        write.write_all(batch.as_bytes()).await.unwrap();
+
+        let mut seen_ids = std::collections::HashSet::new();
+        for _ in 0..REQUESTS {
+            let line = lines
+                .next_line()
+                .await
+                .unwrap()
+                .expect("connection ended before every reply arrived");
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap_or_else(|error| {
+                panic!("reply was not valid JSON ({error}), interleaving suspected: {line}")
+            });
+            assert_eq!(value["ok"], true, "unexpected reply: {line}");
+            assert!(
+                line.contains("\"status\":\"missing\""),
+                "unexpected reply: {line}"
+            );
+            let id = value["id"].as_str().unwrap().to_string();
+            assert!(
+                seen_ids.insert(id),
+                "duplicate id in reply, interleaving suspected: {line}"
+            );
+        }
+        assert_eq!(seen_ids.len(), REQUESTS);
     }
 
     #[tokio::test]
@@ -750,6 +871,65 @@ mod tests {
 
         server.stop();
         assert!(!server.is_running());
+    }
+
+    /// The 17th concurrent connection must be turned away, but still gets
+    /// `hello` first — see `reject_over_connection_limit`'s doc comment — so
+    /// this checks both the limit itself and that ordering, then that the
+    /// connection is closed afterward rather than left open.
+    #[tokio::test]
+    async fn seventeenth_connection_is_rejected_over_the_limit() {
+        let name = unique_name("conn_limit");
+        let server = RequestSocketServer::default();
+        server
+            .start_with_name(name.clone(), "0.5.0", store())
+            .await
+            .unwrap();
+
+        // Held open for the test's duration: a connection that closed right
+        // away would be pruned from the live-handle count before the 17th
+        // connection is even attempted (see `accept_loop`'s `retain`), which
+        // would defeat the point of this test.
+        let mut clients = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            let stream =
+                tokio::time::timeout(Duration::from_secs(2), Stream::connect(name.clone()))
+                    .await
+                    .expect("client connection timed out")
+                    .expect("client failed to connect");
+            let mut stream = BufReader::new(stream);
+            let mut hello = String::new();
+            stream.read_line(&mut hello).await.unwrap();
+            assert!(hello.starts_with("{\"t\":\"hello\""));
+            clients.push(stream);
+        }
+
+        let seventeenth = tokio::time::timeout(Duration::from_secs(2), Stream::connect(name))
+            .await
+            .expect("17th connection timed out")
+            .expect("17th connection failed to connect");
+        let mut seventeenth = BufReader::new(seventeenth);
+
+        let mut hello = String::new();
+        seventeenth.read_line(&mut hello).await.unwrap();
+        assert!(
+            hello.starts_with("{\"t\":\"hello\""),
+            "the 17th connection must still get hello first: {hello}"
+        );
+
+        let mut limit_error = String::new();
+        seventeenth.read_line(&mut limit_error).await.unwrap();
+        assert!(
+            limit_error.contains("\"code\":\"limit\""),
+            "expected a limit error, got: {limit_error}"
+        );
+
+        let mut rest = String::new();
+        let trailing = seventeenth.read_line(&mut rest).await.unwrap();
+        assert_eq!(trailing, 0, "connection should close after the limit error");
+
+        server.stop();
+        drop(clients);
     }
 
     #[cfg(windows)]
