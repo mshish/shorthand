@@ -109,13 +109,13 @@ pub fn plan_request(
     headers: &HashMap<String, String>,
 ) -> Result<PlannedRequest, ErrorCode> {
     let parsed = url::Url::parse(url).map_err(|_| ErrorCode::BadRequest)?;
-    // Plain `http` is accepted for any host, not only loopback. The owner
-    // decided this on 2026-09-12: whether a secret may travel in cleartext is
-    // the user's call, because some corporate users route provider calls
-    // through a local proxy that is unencrypted but does not sit on
-    // localhost. The origin the slot was configured with is still the only
-    // place the secret can go; the scheme check only rules out non-HTTP,
-    // non-WebSocket URLs. `ws`/`wss` are accepted too: `ws_relay.rs` (A6)
+    // Plain `http` is accepted for any host. The app does not decide whether
+    // a secret may travel in cleartext; the user does, by the origin they
+    // configure (owner decision, 2026-09-12). Some corporate setups route
+    // provider calls through an unencrypted local proxy, often reached by a
+    // DNS name rather than a loopback address, so a loopback-only rule would
+    // not even identify it. The slot's origin is still the only place the
+    // secret can go. `ws`/`wss` are accepted too: `ws_relay.rs` (A6)
     // reuses this same function for `ws.open`, whose slot (`notes-acp`) can
     // legitimately have a `ws://`/`wss://` origin (see
     // `CredentialSlot::origin` and `canonical_origin`), and the origin
@@ -609,6 +609,31 @@ mod tests {
         assert!(plan.headers.get("authorization").is_none());
     }
 
+    /// Pins the `STRIPPED_FRAMING_HEADERS` half of review finding Important-3:
+    /// a client-supplied `host`, `content-length` or `transfer-encoding`
+    /// must never survive into `PlannedRequest::headers`, since deciding
+    /// framing for the outgoing request is this proxy's job, not the
+    /// client's (review finding Minor-6).
+    #[test]
+    fn client_supplied_framing_headers_are_stripped_from_the_plan() {
+        let headers = HashMap::from([
+            ("host".to_string(), "evil.example".to_string()),
+            ("content-length".to_string(), "1".to_string()),
+            ("transfer-encoding".to_string(), "chunked".to_string()),
+        ]);
+        let plan = plan_request(
+            &llm(LlmProvider::Openai, "https://api.openai.com"),
+            Some("sk-test"),
+            "https://api.openai.com/v1/chat/completions",
+            "POST",
+            &headers,
+        )
+        .unwrap();
+        assert!(plan.headers.get("host").is_none());
+        assert!(plan.headers.get("content-length").is_none());
+        assert!(plan.headers.get("transfer-encoding").is_none());
+    }
+
     #[test]
     fn origin_mismatch_is_refused_before_any_io() {
         assert!(matches!(
@@ -1031,6 +1056,72 @@ mod tests {
         assert!(
             request_text.contains("{\"hello\":true}"),
             "the decoded body was not sent: {request_text}"
+        );
+    }
+
+    /// Pins the `STRIPPED_FRAMING_HEADERS` half of review finding
+    /// Important-3 at the wire, not just in the in-memory `HeaderMap`: a
+    /// client-supplied `host` must not reach the upstream (it would let a
+    /// shared front end route the slot's secret to a host the slot never
+    /// authorised), and a client-supplied `transfer-encoding` must not
+    /// either (a mismatch against what this proxy actually sends is a
+    /// request-smuggling primitive). `content-length` is stripped the same
+    /// way `plan_request` tests already pin; this test's job is `host` and
+    /// `transfer-encoding`, which only a real request over the wire can show
+    /// (review finding Minor-6 — the wire-level gap `serve_raw`'s other
+    /// tests left).
+    #[tokio::test]
+    async fn client_supplied_host_and_transfer_encoding_never_reach_the_wire() {
+        let server = serve_raw("200 OK", "Content-Length: 0\r\n".to_string(), |_stream| {});
+
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let params = HttpFetchParams {
+            slot: ollama_slot(&server.url),
+            url: server.url.clone(),
+            method: "POST".to_string(),
+            headers: HashMap::from([
+                ("host".to_string(), "evil.example".to_string()),
+                ("content-length".to_string(), "1".to_string()),
+                ("transfer-encoding".to_string(), "chunked".to_string()),
+            ]),
+            body: None,
+        };
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let ok = rx.recv().await.unwrap();
+        let ok_value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(ok_value["result"]["status"], 200);
+
+        let raw_request = server
+            .request
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the server thread never received a request");
+        let request_text = String::from_utf8_lossy(&raw_request);
+
+        let expected_host = server
+            .url
+            .strip_prefix("http://")
+            .expect("serve_raw always returns an http:// url");
+        let host_lines: Vec<&str> = request_text
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("host:"))
+            .collect();
+        assert_eq!(
+            host_lines.len(),
+            1,
+            "expected exactly one host header, got: {request_text}"
+        );
+        assert_eq!(
+            host_lines[0].trim().to_ascii_lowercase(),
+            format!("host: {expected_host}"),
+            "expected the server's own address, got: {request_text}"
+        );
+        assert!(
+            !request_text
+                .to_ascii_lowercase()
+                .contains("transfer-encoding"),
+            "a client-supplied transfer-encoding reached the wire: {request_text}"
         );
     }
 

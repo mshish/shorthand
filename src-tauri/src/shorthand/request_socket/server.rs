@@ -544,17 +544,25 @@ where
                         };
                         spawn_http_fetch(id, params, task_ctx, task_tx, permit);
                     }
-                    // No permit here: once 32 fetches hold every permit on
-                    // this connection, `http.abort` is the only way to free
-                    // one short of the (renewable) per-request timeout. If it
-                    // queued behind the acquire like every other method, a
-                    // client that fills the limit and then cancels one could
-                    // never get the cancel through. See review finding
-                    // Important-6.
+                    // No permit here, and handled inline rather than
+                    // spawned: `handle_abort`'s awaited send is itself the
+                    // backpressure this loop needs, and a task spawned per
+                    // abort line had nothing bounding how many could pile up
+                    // against a slow reader (review finding Important-2).
+                    //
+                    // This does not fully solve "a client that fills the
+                    // limit and then cancels one could never get the cancel
+                    // through": `http.fetch` and every other method still
+                    // call `acquire_owned().await` inside this same read
+                    // loop, so a fetch or an ordinary `credential.status`
+                    // queued behind a full 32-permit limit stalls the loop,
+                    // and any `http.abort` sent after it stalls right along
+                    // with it. Left as is deliberately: the only client
+                    // (core, in the Obsidian plugin) runs a handful of
+                    // requests at a time, never anywhere near 32. See review
+                    // finding Important-1.
                     Request::HttpAbort { request: target } => {
-                        tokio::spawn(async move {
-                            http_proxy::handle_abort(&id, &target, &task_ctx, &task_tx).await;
-                        });
+                        http_proxy::handle_abort(&id, &target, &task_ctx, &task_tx).await;
                     }
                     other => {
                         let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
@@ -590,7 +598,17 @@ where
     // registered fetch here — rather than waiting out each one's own
     // (renewable, per finding 5) 15-minute bound — is what actually releases
     // them. See review finding Important-7.
-    for (_, handle) in ctx.inflight_lock().drain() {
+    // Collected into a `Vec` before aborting, rather than aborted while the
+    // iterator still borrows the map: during runtime shutdown `abort()` can
+    // drop the task's future inline on this thread instead of handing it to
+    // a worker, and that future's `InflightGuard` drop would then re-lock
+    // this same non-reentrant `Mutex` right here (review finding Minor-2).
+    let inflight_handles: Vec<_> = ctx
+        .inflight_lock()
+        .drain()
+        .map(|(_, handle)| handle)
+        .collect();
+    for handle in inflight_handles {
         handle.abort();
     }
     // Same reasoning for `ws.*`: a stream nobody is reading events for
@@ -599,7 +617,12 @@ where
     // drops its half of the split `WebSocketStream`; once the writer-side
     // `WsHandle` in the same drained entry is dropped too, nothing keeps the
     // upstream connection open.
-    for (_, handle) in ctx.streams_lock().drain() {
+    let stream_handles: Vec<_> = ctx
+        .streams_lock()
+        .drain()
+        .map(|(_, handle)| handle)
+        .collect();
+    for handle in stream_handles {
         handle.abort.abort();
     }
     let _ = writer_task.await;
