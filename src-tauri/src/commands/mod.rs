@@ -4,7 +4,10 @@ pub mod models;
 pub mod transcription;
 
 use crate::settings::{get_settings, write_settings, AppSettings, LogLevel};
+use crate::shorthand::credentials::{CredentialSlot, CredentialStatus, CredentialStore};
 use crate::utils::cancel_current_operation;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -229,4 +232,27 @@ pub fn initialize_shortcuts(app: AppHandle) -> Result<(), String> {
 
     log::info!("Shortcuts initialized successfully");
     Ok(())
+}
+
+/// Fork-only. The settings payload no longer carries keys; the UI asks which
+/// providers have one so it can show "saved" without ever seeing the value.
+#[tauri::command]
+#[specta::specta]
+pub fn get_post_process_api_key_status(
+    app: AppHandle,
+) -> Result<HashMap<String, CredentialStatus>, String> {
+    let settings = get_settings(&app);
+    let store = app.state::<Arc<CredentialStore>>();
+    Ok(settings
+        .post_process_providers
+        .iter()
+        .map(|provider| {
+            (
+                provider.id.clone(),
+                store.status(&CredentialSlot::PostProcess {
+                    provider_id: provider.id.clone(),
+                }),
+            )
+        })
+        .collect())
 }
