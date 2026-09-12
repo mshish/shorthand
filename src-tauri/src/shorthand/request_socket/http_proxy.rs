@@ -35,11 +35,50 @@ const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// stalls mid-body must not hold this request open forever.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
-const STRIPPED_HEADERS: [&str; 4] = [
+/// Headers whose presence would let a client see or influence authentication
+/// that is this proxy's decision, not the client's — the four the wire
+/// contract names. Stripped from the client's request before this proxy
+/// injects the slot's own auth (the wire contract's rule), and reused by
+/// `response_headers_json` to strip the same names from the upstream's
+/// response before it is echoed back, in case a response tried to reflect
+/// one (review finding Minor-11).
+const STRIPPED_AUTH_HEADERS: [&str; 4] = [
     "authorization",
     "x-api-key",
     "cookie",
     "proxy-authorization",
+];
+
+/// Framing and routing headers a client must not be allowed to set on the
+/// outgoing request. Deciding these is the proxy's job, not the client's:
+///
+/// - `host` controls which virtual host a shared front end, CDN or reverse
+///   proxy *routes* the request to. Hyper's client only sets `Host` when the
+///   header is absent, so a client-supplied one is sent verbatim even though
+///   the TCP/TLS peer is still the slot's origin — on such a front end, the
+///   injected secret would be delivered to a host the slot never authorised.
+///   That is exactly the origin binding this proxy exists to enforce.
+/// - `content-length` / `transfer-encoding` disagreeing with the body this
+///   proxy actually sends is the classic request-smuggling primitive against
+///   the upstream; deciding framing here means never relying on hyper's
+///   conflict handling for it.
+/// - `connection`, `upgrade`, `te`, `trailer`, `expect` and `keep-alive` are
+///   hop-by-hop, meaningful only between this proxy and the upstream it picks
+///   — a client has no business setting any of them.
+///
+/// This is a superset of the wire contract's own four-header list; see the
+/// "Auth injection rules" paragraph of the wire contract for why (review
+/// finding Important-3).
+const STRIPPED_FRAMING_HEADERS: [&str; 9] = [
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "upgrade",
+    "te",
+    "trailer",
+    "expect",
+    "keep-alive",
 ];
 
 /// The outcome of planning one `http.fetch` call: a URL, method and header
@@ -64,6 +103,12 @@ pub fn plan_request(
     headers: &HashMap<String, String>,
 ) -> Result<PlannedRequest, ErrorCode> {
     let parsed = url::Url::parse(url).map_err(|_| ErrorCode::BadRequest)?;
+    // Plain `http` is accepted for any host, not only loopback. The owner
+    // decided this on 2026-09-12: whether a secret may travel in cleartext is
+    // the user's call, because some corporate users route provider calls
+    // through a local proxy that is unencrypted but does not sit on
+    // localhost. The origin the slot was configured with is still the only
+    // place the secret can go; the scheme check only rules out non-HTTP URLs.
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ErrorCode::BadRequest);
     }
@@ -84,8 +129,9 @@ pub fn plan_request(
 
     let mut header_map = HeaderMap::new();
     for (name, value) in headers {
-        if STRIPPED_HEADERS
+        if STRIPPED_AUTH_HEADERS
             .iter()
+            .chain(STRIPPED_FRAMING_HEADERS.iter())
             .any(|stripped| name.eq_ignore_ascii_case(stripped))
         {
             continue;
@@ -157,7 +203,7 @@ struct InflightGuard<'a> {
 
 impl Drop for InflightGuard<'_> {
     fn drop(&mut self) {
-        self.ctx.inflight.lock().unwrap().remove(self.id);
+        self.ctx.inflight_lock().remove(self.id);
     }
 }
 
@@ -182,14 +228,37 @@ pub async fn run_fetch(
         }
     };
 
-    let secret = match ctx.store.get(&params.slot) {
-        Ok(secret) => secret,
-        Err(error) => {
+    // The keyring API blocks (a locked keychain or a slow Secret Service
+    // round trip can stall for a while), so it runs on the blocking pool
+    // rather than a runtime worker — every other credential path already does
+    // this for the same reason (see server.rs's `credential_set` and
+    // friends). Without it, `handle.abort()` could not interrupt this task
+    // while it sat inside a synchronous call (review finding Important-4).
+    let store = Arc::clone(&ctx.store);
+    let slot_for_lookup = params.slot.clone();
+    let secret = match tokio::task::spawn_blocking(move || store.get(&slot_for_lookup)).await {
+        Ok(Ok(secret)) => secret,
+        Ok(Err(error)) => {
             let _ = out
                 .send(error_line(
                     &id,
                     ErrorCode::CredentialUnavailable,
                     &error.to_string(),
+                ))
+                .await;
+            return;
+        }
+        Err(join_error) => {
+            // A `JoinError` means the blocking task panicked or was
+            // cancelled, not anything about the request itself — its
+            // `Display` can include a panic payload, which may not be safe to
+            // hand to a client. Logged, not sent.
+            log::error!("credential lookup for http.fetch did not complete on the blocking pool: {join_error}");
+            let _ = out
+                .send(error_line(
+                    &id,
+                    ErrorCode::CredentialUnavailable,
+                    "the credential store did not answer",
                 ))
                 .await;
             return;
@@ -220,7 +289,15 @@ pub async fn run_fetch(
         request = request.body(body);
     }
 
-    let response = match tokio::time::timeout(REQUEST_TIMEOUT, request.send()).await {
+    // One deadline for the whole request, not one restarted on every chunk:
+    // the wire contract's "per-request timeout 15 min" means from the send
+    // to the last byte of the body, so an upstream trickling one byte every
+    // 14 minutes must not hold the request (and its semaphore permit, and
+    // its connection) open indefinitely under the 64 MiB cap (review finding
+    // Important-5).
+    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+
+    let response = match tokio::time::timeout_at(deadline, request.send()).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             let _ = out
@@ -260,7 +337,7 @@ pub async fn run_fetch(
     let mut stream = response.bytes_stream();
     let mut received = 0usize;
     loop {
-        let next = match tokio::time::timeout(REQUEST_TIMEOUT, stream.next()).await {
+        let next = match tokio::time::timeout_at(deadline, stream.next()).await {
             Ok(next) => next,
             Err(_) => {
                 let _ = out
@@ -294,7 +371,21 @@ pub async fn run_fetch(
             return;
         }
     }
-    let _ = out.send(end_event(&id)).await;
+
+    // `handle_abort` removes this id from `ctx.inflight` before calling
+    // `AbortHandle::abort()`, but abort only takes effect at this task's next
+    // await point that returns `Pending` — and `out.send` on a non-full
+    // channel can complete without ever yielding. So a task already past the
+    // stream loop can still queue `http.end` after `handle_abort` already
+    // queued the "aborted" error event for the same id. Checking membership
+    // here (the only other place that removes this id is this same
+    // function's own `InflightGuard`, which has not dropped yet) tells the
+    // two cases apart: absent means an abort raced ahead and already spoke
+    // for this id, so this task must not add its own conflicting word
+    // (review finding Minor-8).
+    if ctx.inflight_lock().contains_key(&id) {
+        let _ = out.send(end_event(&id)).await;
+    }
 }
 
 /// Handles `http.abort`. Aborting a request that already finished is not an
@@ -307,7 +398,7 @@ pub async fn handle_abort(
     ctx: &ConnectionContext,
     out: &mpsc::Sender<String>,
 ) {
-    let handle = ctx.inflight.lock().unwrap().remove(target);
+    let handle = ctx.inflight_lock().remove(target);
     if let Some(handle) = handle {
         handle.abort();
         let _ = out.send(error_event(target, "aborted")).await;
@@ -338,13 +429,25 @@ fn plan_error_message(code: ErrorCode) -> &'static str {
     }
 }
 
-/// The response headers as a lower-case string map, minus `set-cookie`: the
-/// wire contract carries no cookie jar, and echoing one back would let a
-/// provider set state in a client that never asked for it.
+/// The response headers as a lower-case string map, minus `set-cookie` and
+/// the same four names `STRIPPED_AUTH_HEADERS` strips from the request. The
+/// wire contract carries no cookie jar, and echoing `set-cookie` back would
+/// let a provider set state in a client that never asked for it; reflecting
+/// `authorization`/`x-api-key`/`cookie`/`proxy-authorization` needs a
+/// cooperating endpoint on the slot's own origin (and a response body could
+/// do the same), so this is defence in depth rather than a live leak — but a
+/// client that by design must never see this proxy's injected secret should
+/// not be handed it back on a silver platter either (review finding
+/// Minor-11).
 fn response_headers_json(headers: &HeaderMap) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     for (name, value) in headers {
-        if name.as_str().eq_ignore_ascii_case("set-cookie") {
+        let name_str = name.as_str();
+        if name_str.eq_ignore_ascii_case("set-cookie")
+            || STRIPPED_AUTH_HEADERS
+                .iter()
+                .any(|stripped| name_str.eq_ignore_ascii_case(stripped))
+        {
             continue;
         }
         if let Ok(text) = value.to_str() {
@@ -439,6 +542,7 @@ fn error_event(request: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::io::{Read as _, Write as _};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::shorthand::credentials::{CredentialStore, MemoryBackend};
 
@@ -570,6 +674,20 @@ mod tests {
         )))
     }
 
+    /// What `serve_raw` hands back: the server's own URL, the exact bytes the
+    /// connecting client sent (headers and, if any, body — review test-gap
+    /// "nothing asserts what the upstream actually received"), and how many
+    /// connections the listener accepted in total. A followed redirect would
+    /// show up as a second accept; `accept_count` lets a test prove one never
+    /// arrived instead of trusting `reqwest::redirect::Policy::none()` alone
+    /// (review test-gap "the redirect test cannot observe a followed
+    /// redirect").
+    struct RawServer {
+        url: String,
+        request: std::sync::mpsc::Receiver<Vec<u8>>,
+        accept_count: Arc<AtomicUsize>,
+    }
+
     /// A one-shot raw HTTP server on loopback, modelled on
     /// `llm_client::tests::serve_one_response`: `run_fetch` is the client
     /// under test, so this needs to control status line, headers and how the
@@ -581,19 +699,59 @@ mod tests {
         status_line: &'static str,
         extra_headers: String,
         write_body: impl FnOnce(&mut std::net::TcpStream) + Send + 'static,
-    ) -> String {
+    ) -> RawServer {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let accept_count = Arc::new(AtomicUsize::new(0));
+        let accept_count_thread = Arc::clone(&accept_count);
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            accept_count_thread.fetch_add(1, Ordering::SeqCst);
+
+            // Drain whatever the client sent instead of reading into a fixed
+            // buffer once: a short read timeout tells "the client stopped
+            // writing" apart from "there is more coming" without guessing a
+            // size that a real request (a decoded body included) might
+            // exceed.
+            stream
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => request.extend_from_slice(&chunk[..n]),
+                    Err(_) => break, // Timed out: the client is done writing.
+                }
+            }
+            let _ = request_tx.send(request);
+
             let header =
                 format!("HTTP/1.1 {status_line}\r\n{extra_headers}Connection: close\r\n\r\n");
             let _ = stream.write_all(header.as_bytes());
             write_body(&mut stream);
+            drop(stream);
+
+            // A followed redirect would arrive as a second connection; give
+            // one a short window rather than assuming silence means none
+            // did. This runs on its own thread and nothing joins it, so it
+            // never adds latency to a test that does not read `accept_count`.
+            listener.set_nonblocking(true).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_millis(150);
+            while std::time::Instant::now() < deadline {
+                if listener.accept().is_ok() {
+                    accept_count_thread.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
         });
-        format!("http://{address}")
+        RawServer {
+            url: format!("http://{address}"),
+            request: request_rx,
+            accept_count,
+        }
     }
 
     fn ollama_slot(origin: &str) -> CredentialSlot {
@@ -613,11 +771,24 @@ mod tests {
         }
     }
 
+    /// Mirrors what `spawn_http_fetch` does in production before it ever
+    /// calls `run_fetch`: registers a placeholder abort handle for `id`. The
+    /// tests here call `run_fetch` directly, bypassing `spawn_http_fetch`, so
+    /// without this the normal-completion path's "is my id still registered"
+    /// check (see `run_fetch`'s handling of review finding Minor-8) would
+    /// always see an unregistered id and skip `http.end`, even though nothing
+    /// aborted the request.
+    fn register_inflight(ctx: &ConnectionContext, id: &str) {
+        let placeholder = tokio::spawn(async {});
+        ctx.inflight_lock()
+            .insert(id.to_string(), placeholder.abort_handle());
+    }
+
     #[tokio::test]
     async fn streams_the_body_across_events_then_ends() {
         let chunks: [&str; 3] = ["hello ", "brave ", "world"];
         let body: String = chunks.concat();
-        let url = serve_raw(
+        let server = serve_raw(
             "200 OK",
             format!("Content-Length: {}\r\n", body.len()),
             move |stream| {
@@ -630,26 +801,26 @@ mod tests {
         );
 
         let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        register_inflight(&ctx, "r1");
         let (tx, mut rx) = mpsc::channel::<String>(64);
-        let params = fetch_params(ollama_slot(&url), &url);
+        let params = fetch_params(ollama_slot(&server.url), &server.url);
         run_fetch(ctx, "r1".into(), params, tx).await;
 
         let ok = rx.recv().await.unwrap();
-        assert!(ok.contains("\"status\":200"), "unexpected ok line: {ok}");
+        let ok_value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(ok_value["ok"], true);
+        assert_eq!(ok_value["result"]["status"], 200);
 
         let mut collected = Vec::new();
         let mut saw_body = false;
         loop {
             let line = rx.recv().await.expect("connection ended before http.end");
-            if line.contains("\"t\":\"http.end\"") {
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value["t"] == "http.end" {
                 break;
             }
-            assert!(
-                line.contains("\"t\":\"http.body\""),
-                "unexpected line: {line}"
-            );
+            assert_eq!(value["t"], "http.body", "unexpected line: {line}");
             saw_body = true;
-            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
             let data = value["data"].as_str().unwrap();
             collected.extend(STANDARD.decode(data).unwrap());
         }
@@ -659,25 +830,38 @@ mod tests {
 
     #[tokio::test]
     async fn redirect_status_is_reported_without_being_followed() {
-        let url = serve_raw(
+        let server = serve_raw(
             "302 Found",
             "Location: https://evil.example/\r\nContent-Length: 0\r\n".to_string(),
             |_stream| {},
         );
 
         let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        register_inflight(&ctx, "r1");
         let (tx, mut rx) = mpsc::channel::<String>(64);
-        let params = fetch_params(ollama_slot(&url), &url);
+        let params = fetch_params(ollama_slot(&server.url), &server.url);
         run_fetch(ctx, "r1".into(), params, tx).await;
 
         let ok = rx.recv().await.unwrap();
-        assert!(ok.contains("\"status\":302"), "unexpected ok line: {ok}");
-        assert!(ok.contains("evil.example"), "location header missing: {ok}");
+        let ok_value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(ok_value["result"]["status"], 302);
+        assert_eq!(
+            ok_value["result"]["headers"]["location"], "https://evil.example/",
+            "unexpected headers: {ok_value}"
+        );
 
         let end = rx.recv().await.unwrap();
-        assert!(
-            end.contains("\"t\":\"http.end\""),
-            "expected http.end, got: {end}"
+        let end_value: serde_json::Value = serde_json::from_str(&end).unwrap();
+        assert_eq!(end_value["t"], "http.end", "expected http.end, got: {end}");
+
+        // Give the server's post-response listen window (see `serve_raw`)
+        // time to notice a second connection, if `reqwest` had ever started
+        // following the redirect instead of just reporting its status.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            server.accept_count.load(Ordering::SeqCst),
+            1,
+            "the redirect must never be followed"
         );
     }
 
@@ -687,7 +871,7 @@ mod tests {
         // on a trusted `Content-Length`: this header lies (100 MiB) while the
         // handler only ever writes enough real bytes to cross the 64 MiB cap.
         const REAL_BODY_LEN: usize = 65 * 1024 * 1024;
-        let url = serve_raw(
+        let server = serve_raw(
             "200 OK",
             "Content-Length: 104857600\r\n".to_string(),
             |stream| {
@@ -702,7 +886,7 @@ mod tests {
 
         let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
         let (tx, mut rx) = mpsc::channel::<String>(64);
-        let params = fetch_params(ollama_slot(&url), &url);
+        let params = fetch_params(ollama_slot(&server.url), &server.url);
         // `run_fetch` streams the 65 MiB body as thousands of `http.body`
         // events into a channel with capacity 64: awaiting it to completion
         // before ever reading `rx` deadlocks the sender against a full,
@@ -712,19 +896,170 @@ mod tests {
         let fetch = tokio::spawn(run_fetch(ctx, "r1".into(), params, tx));
 
         let ok = rx.recv().await.unwrap();
-        assert!(ok.contains("\"status\":200"), "unexpected ok line: {ok}");
+        let ok_value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(ok_value["result"]["status"], 200);
 
         loop {
             let line = rx
                 .recv()
                 .await
                 .expect("connection ended before an error arrived");
-            if line.contains("\"t\":\"http.error\"") {
-                assert!(line.contains("64 MiB"), "unexpected error line: {line}");
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value["t"] == "http.error" {
+                assert_eq!(value["request"], "r1");
+                assert!(
+                    value["message"].as_str().unwrap().contains("64 MiB"),
+                    "unexpected error line: {line}"
+                );
                 break;
             }
         }
         fetch.await.unwrap();
+    }
+
+    /// The `plan_request` tests above only inspect an in-memory `HeaderMap` —
+    /// they would still pass if `.headers(planned.headers)` were dropped
+    /// before the request is actually sent. This drives a real `run_fetch`
+    /// against `serve_raw` and inspects the bytes that left the process:
+    /// the injected secret must be on the wire, the client's own
+    /// `authorization` must not be, and the decoded body must have been sent
+    /// (review test-gap "nothing asserts what the upstream actually
+    /// received").
+    #[tokio::test]
+    async fn injected_auth_reaches_the_wire_client_auth_does_not_and_body_is_sent() {
+        let server = serve_raw("200 OK", "Content-Length: 0\r\n".to_string(), |_stream| {});
+
+        let credential_store = store();
+        let slot = llm(LlmProvider::Openai, &server.url);
+        credential_store.set(&slot, "sk-real").unwrap();
+
+        let ctx = Arc::new(ConnectionContext::for_tests(credential_store, "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let params = HttpFetchParams {
+            slot,
+            url: server.url.clone(),
+            method: "POST".to_string(),
+            headers: HashMap::from([
+                (
+                    "authorization".to_string(),
+                    "Bearer client-supplied".to_string(),
+                ),
+                ("content-type".to_string(), "application/json".to_string()),
+            ]),
+            body: Some(STANDARD.encode(b"{\"hello\":true}")),
+        };
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let ok = rx.recv().await.unwrap();
+        let ok_value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(ok_value["result"]["status"], 200);
+
+        let raw_request = server
+            .request
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the server thread never received a request");
+        let request_text = String::from_utf8_lossy(&raw_request);
+        assert!(
+            request_text.contains("authorization: Bearer sk-real"),
+            "the injected secret never reached the wire: {request_text}"
+        );
+        assert!(
+            !request_text.contains("client-supplied"),
+            "the client-supplied authorization header reached the wire: {request_text}"
+        );
+        assert!(
+            request_text.contains("{\"hello\":true}"),
+            "the decoded body was not sent: {request_text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_over_the_cap_is_too_large() {
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let oversized = STANDARD.encode(vec![b'a'; 16 * 1024 * 1024 + 1]);
+        // No real network attempt is made: `decode_body`'s cap check runs
+        // before `plan_request` or any I/O, so the target does not need to
+        // be reachable.
+        let params = HttpFetchParams {
+            slot: ollama_slot("http://127.0.0.1:1"),
+            url: "http://127.0.0.1:1/".to_string(),
+            method: "POST".to_string(),
+            headers: HashMap::new(),
+            body: Some(oversized),
+        };
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let error = rx.recv().await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "too_large");
+    }
+
+    #[tokio::test]
+    async fn non_base64_body_is_bad_request() {
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let params = HttpFetchParams {
+            slot: ollama_slot("http://127.0.0.1:1"),
+            url: "http://127.0.0.1:1/".to_string(),
+            method: "POST".to_string(),
+            headers: HashMap::new(),
+            body: Some("not valid base64 !!".to_string()),
+        };
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let error = rx.recv().await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(value["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn set_cookie_is_dropped_and_response_headers_are_lower_cased() {
+        let server = serve_raw(
+            "200 OK",
+            "Content-Length: 0\r\nSet-Cookie: session=abc\r\nX-Upstream: Value\r\n".to_string(),
+            |_stream| {},
+        );
+
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let params = fetch_params(ollama_slot(&server.url), &server.url);
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let ok = rx.recv().await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&ok).unwrap();
+        let headers = value["result"]["headers"]
+            .as_object()
+            .expect("headers must be an object");
+        assert!(
+            !headers.contains_key("set-cookie") && !headers.contains_key("Set-Cookie"),
+            "set-cookie leaked: {headers:?}"
+        );
+        assert_eq!(headers.get("x-upstream").unwrap(), "Value");
+    }
+
+    #[tokio::test]
+    async fn acp_slot_without_a_secret_is_credential_missing() {
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let params = HttpFetchParams {
+            slot: CredentialSlot::NotesAcp {
+                vault_id: "v".to_string(),
+                origin: "https://agent.example".to_string(),
+            },
+            url: "https://agent.example/acp".to_string(),
+            method: "GET".to_string(),
+            headers: HashMap::new(),
+            body: None,
+        };
+        // No real network attempt: `notes-acp` never allows an unauthenticated
+        // request, so `plan_request` rejects this before any I/O.
+        run_fetch(ctx, "r1".into(), params, tx).await;
+
+        let error = rx.recv().await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(value["error"]["code"], "credential_missing");
     }
 
     #[tokio::test]

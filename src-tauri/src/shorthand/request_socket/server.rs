@@ -138,10 +138,10 @@ impl RequestSocketServer {
             }
         };
 
-        let ctx = Arc::new(ConnectionContext::new(store, app_version));
+        let shared = Arc::new(ServerShared::new(store, app_version));
         let connections = Arc::new(Mutex::new(Vec::new()));
         let listener_handle =
-            tauri::async_runtime::spawn(accept_loop(listener, ctx, Arc::clone(&connections)));
+            tauri::async_runtime::spawn(accept_loop(listener, shared, Arc::clone(&connections)));
         *running = Some(RunningServer {
             listener: listener_handle,
             connections,
@@ -256,7 +256,7 @@ fn listener_name() -> io::Result<(Name<'static>, String)> {
 
 async fn accept_loop(
     listener: Listener,
-    ctx: Arc<ConnectionContext>,
+    shared: Arc<ServerShared>,
     connection_handles: Arc<Mutex<Vec<TaskHandle>>>,
 ) {
     loop {
@@ -281,11 +281,21 @@ async fn accept_loop(
         handles.retain(|handle| !handle.inner().is_finished());
         if handles.len() >= MAX_CONNECTIONS {
             drop(handles);
-            tauri::async_runtime::spawn(reject_over_connection_limit(stream, ctx.version.clone()));
+            tauri::async_runtime::spawn(reject_over_connection_limit(
+                stream,
+                shared.version.clone(),
+            ));
             continue;
         }
 
-        let connection_ctx = Arc::clone(&ctx);
+        // A fresh `ConnectionContext` per accepted connection, not a clone of
+        // one shared across the whole server: `inflight` (and, from A6,
+        // `streams`) are request-id namespaces that the wire contract scopes
+        // to one connection, so two connections must never share a map. Only
+        // the store, version and HTTP client (which shares its connection
+        // pool across clones) come from `shared`. See review finding
+        // Critical-1 in app-A5-review-findings.md.
+        let connection_ctx = Arc::new(ConnectionContext::new(&shared));
         handles.push(tauri::async_runtime::spawn(async move {
             let (reader, writer) = stream.split();
             handle_connection(reader, writer, connection_ctx).await;
@@ -317,11 +327,44 @@ async fn reject_over_connection_limit(stream: Stream, version: String) {
     }
 }
 
+/// State shared by every connection: the credential store, the advertised
+/// app version, and one `reqwest::Client`. The client is built once here and
+/// cloned into each `ConnectionContext` — a `reqwest::Client` clone shares
+/// the same underlying connection pool, so this still gets connection reuse
+/// across connections without sharing any per-connection request state (see
+/// `ConnectionContext`'s doc comment and review finding Critical-1).
+struct ServerShared {
+    store: Arc<CredentialStore>,
+    version: String,
+    http: reqwest::Client,
+}
+
+impl ServerShared {
+    fn new(store: Arc<CredentialStore>, version: String) -> Self {
+        Self {
+            store,
+            version,
+            // No redirects: `http.fetch`'s origin check (A5) must not be
+            // bypassed by a redirect to a different origin. No timeout here
+            // — per-request timeouts are applied when A5 issues the request.
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("a client with no proxy/TLS overrides always builds"),
+        }
+    }
+}
+
 /// Per-connection state the credential, http and (later) ws handlers share.
 /// `store` and `http` are `pub(crate)` because `http_proxy.rs`'s handlers
-/// (A5) read them directly rather than through server.rs; `streams` is not
-/// read yet — A6 (`ws.*`) is the first handler that populates and drains it,
-/// `#[allow(dead_code)]` in the meantime so its shape does not change there.
+/// (A5) read them directly rather than through server.rs. `inflight` and
+/// `streams` are request-id namespaces the wire contract scopes to one
+/// connection — each connection gets its own `ConnectionContext`, built by
+/// `accept_loop` from the server-wide `ServerShared`, precisely so two
+/// connections never share either map (see review finding Critical-1).
+/// `streams` is not read yet — A6 (`ws.*`) is the first handler that
+/// populates and drains it, `#[allow(dead_code)]` in the meantime so its
+/// shape does not change there.
 pub(crate) struct ConnectionContext {
     pub(crate) store: Arc<CredentialStore>,
     version: String,
@@ -339,25 +382,33 @@ pub(crate) struct WsHandle {
 }
 
 impl ConnectionContext {
-    fn new(store: Arc<CredentialStore>, version: String) -> Self {
+    fn new(shared: &ServerShared) -> Self {
         Self {
-            store,
-            version,
-            // No redirects: `http.fetch`'s origin check (A5) must not be
-            // bypassed by a redirect to a different origin. No timeout here
-            // — per-request timeouts are applied when A5 issues the request.
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("a client with no proxy/TLS overrides always builds"),
+            store: Arc::clone(&shared.store),
+            version: shared.version.clone(),
+            http: shared.http.clone(),
             inflight: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
         }
     }
 
+    /// A panic while a handler holds `inflight`'s lock must not wedge every
+    /// later `http.fetch`/`http.abort` on this connection — same reasoning as
+    /// `credentials::lock` (see that module's doc comment). Used by
+    /// server.rs and http_proxy.rs alike so neither reaches for the bare
+    /// `.lock().unwrap()` the review flagged (Minor-10).
+    pub(crate) fn inflight_lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, tokio::task::AbortHandle>> {
+        self.inflight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[cfg(test)]
     pub(crate) fn for_tests(store: Arc<CredentialStore>, version: &str) -> Self {
-        Self::new(store, version.to_string())
+        let shared = ServerShared::new(store, version.to_string());
+        Self::new(&shared)
     }
 }
 
@@ -451,9 +502,6 @@ where
 
         match parse_line(line) {
             Ok((id, request)) => {
-                let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
-                    break; // Semaphore closed: the connection is tearing down.
-                };
                 let task_ctx = Arc::clone(&ctx);
                 let task_tx = tx.clone();
                 match request {
@@ -463,14 +511,34 @@ where
                     // method, so it is spawned directly rather than through
                     // it. The abort handle is registered before this task is
                     // polled at all, so an `http.abort` for this id arriving
-                    // on the very next line can never race an unregistered id.
+                    // on the very next line can never race an unregistered id
+                    // — see `spawn_http_fetch`'s doc comment for how that
+                    // ordering is actually enforced.
                     Request::HttpFetch(params) => {
+                        let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
+                            break; // Semaphore closed: the connection is tearing down.
+                        };
                         spawn_http_fetch(id, params, task_ctx, task_tx, permit);
                     }
+                    // No permit here: once 32 fetches hold every permit on
+                    // this connection, `http.abort` is the only way to free
+                    // one short of the (renewable) per-request timeout. If it
+                    // queued behind the acquire like every other method, a
+                    // client that fills the limit and then cancels one could
+                    // never get the cancel through. See review finding
+                    // Important-6.
+                    Request::HttpAbort { request: target } => {
+                        tokio::spawn(async move {
+                            http_proxy::handle_abort(&id, &target, &task_ctx, &task_tx).await;
+                        });
+                    }
                     other => {
+                        let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
+                            break; // Semaphore closed: the connection is tearing down.
+                        };
                         tokio::spawn(async move {
                             let _permit = permit;
-                            let response = dispatch(&id, other, &task_ctx, &task_tx).await;
+                            let response = dispatch(&id, other, &task_ctx).await;
                             if let Some(response) = response {
                                 let _ = task_tx.send(response).await;
                             }
@@ -489,6 +557,19 @@ where
     }
 
     drop(tx);
+    // Every fetch still in flight on this connection holds its own clone of
+    // `tx` (see `spawn_http_fetch`), so without this the writer task's
+    // channel would never close for a connection whose upstream answered
+    // headers and then stalled mid-body: nothing else notices the socket is
+    // dead, `handle_connection` never returns, and the slot it holds in
+    // `accept_loop`'s connection count is never freed. Aborting every
+    // registered fetch here — rather than waiting out each one's own
+    // (renewable, per finding 5) 15-minute bound — is what actually releases
+    // them. See review finding Important-7; A6 will need the same drain for
+    // `streams` once ws.* populates it.
+    for (_, handle) in ctx.inflight_lock().drain() {
+        handle.abort();
+    }
     let _ = writer_task.await;
 }
 
@@ -496,10 +577,18 @@ where
 /// `dispatch`: unlike every other method, it writes more than one line over
 /// the connection's lifetime (an `ok`, then streamed `http.body`/`http.end`
 /// events), so it needs direct access to the shared writer channel instead of
-/// handing back a single response line. The abort handle is registered in
-/// `ctx.inflight` here, synchronously, before the read loop moves on to the
-/// next line — so an `http.abort` for this id can never arrive before the id
-/// is registered to receive it.
+/// handing back a single response line.
+///
+/// The abort handle is registered in `ctx.inflight` before the task body
+/// (`http_proxy::run_fetch`) ever runs — not just before `spawn_http_fetch`
+/// returns. Tokio's runtime is multi-threaded, so a spawned task can start
+/// running on another worker immediately; without the `oneshot` gate below, a
+/// task that fails fast (e.g. `origin_mismatch`, checked before any network
+/// I/O) could finish and have its `InflightGuard` remove nothing from the map
+/// before `insert` even runs, leaking the entry forever (review finding
+/// Critical-2). The gate makes "registered" happen-before "polled", which is
+/// exactly the ordering an `http.abort` for this id arriving on the very next
+/// line needs.
 fn spawn_http_fetch(
     id: String,
     params: HttpFetchParams,
@@ -508,44 +597,49 @@ fn spawn_http_fetch(
     permit: OwnedSemaphorePermit,
 ) {
     let id_for_map = id.clone();
-    let inflight = Arc::clone(&ctx);
+    let ctx_for_insert = Arc::clone(&ctx);
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
         let _permit = permit;
+        if start_rx.await.is_err() {
+            // The sender side was dropped without a signal, which only
+            // happens if `insert` below panicked — nothing was registered,
+            // so there is nothing to run for.
+            return;
+        }
         http_proxy::run_fetch(ctx, id, params, tx).await;
     });
-    inflight
-        .inflight
-        .lock()
-        .unwrap()
+    ctx_for_insert
+        .inflight_lock()
         .insert(id_for_map, handle.abort_handle());
+    let _ = start_tx.send(());
 }
 
-/// Handles every method except `http.fetch` (see `spawn_http_fetch`).
-/// `http.abort` also needs the writer channel directly — an aborted request
-/// gets both an ack for the abort itself and, if it was still in flight, an
-/// `http.error` event for the aborted request — so it returns `None` having
-/// already sent everything itself; every other method returns its one
-/// response line for the caller to send.
-async fn dispatch(
-    id: &str,
-    request: Request,
-    ctx: &ConnectionContext,
-    tx: &mpsc::Sender<String>,
-) -> Option<String> {
+/// Handles every method except `http.fetch` and `http.abort` — both are
+/// routed directly from `handle_connection`'s read loop instead: `http.fetch`
+/// because it writes more than one reply line (see `spawn_http_fetch`),
+/// `http.abort` because it must skip the in-flight permit that fetches
+/// acquire (see the read loop's `Request::HttpAbort` arm and review finding
+/// Important-6). Every method `dispatch` does handle answers with exactly one
+/// response line, which the caller sends.
+async fn dispatch(id: &str, request: Request, ctx: &ConnectionContext) -> Option<String> {
     match request {
         Request::CredentialSet { slot, secret } => {
             Some(credential_set(id, ctx, slot, secret).await)
         }
         Request::CredentialClear { slot } => Some(credential_clear(id, ctx, slot).await),
         Request::CredentialStatus { slots } => Some(credential_status(id, ctx, slots).await),
-        Request::HttpAbort { request: target } => {
-            http_proxy::handle_abort(id, &target, ctx, tx).await;
-            None
-        }
-        Request::HttpFetch(_) => {
-            unreachable!(
-                "HttpFetch is spawned directly by spawn_http_fetch, never routed through dispatch"
-            )
+        Request::HttpFetch(_) | Request::HttpAbort { .. } => {
+            // Not `unreachable!`: the read loop routing both of these away
+            // from `dispatch` is a call-site choice, not something the
+            // compiler enforces, so a future edit that forgets one of those
+            // special cases should get a wire error instead of panicking the
+            // connection's request task (review finding Minor-9).
+            Some(error_line(
+                id,
+                ErrorCode::BadRequest,
+                "this method must not be routed through dispatch",
+            ))
         }
         Request::WsOpen(_) | Request::WsSend { .. } | Request::WsClose { .. } => {
             // A6 implements ws.*; it answers the same code until then, so a
@@ -930,6 +1024,158 @@ mod tests {
 
         server.stop();
         drop(clients);
+    }
+
+    /// Before the Critical-1 fix, one `ConnectionContext` (and its `inflight`
+    /// map) was shared by every connection on the server, so `http.abort` on
+    /// one connection could cancel a same-id fetch registered by a completely
+    /// different connection — a real hazard even between two well-behaved
+    /// clients that both use the wire contract's own example id, `r1`. Each
+    /// connection here gets its own `ConnectionContext`, exactly as
+    /// `accept_loop` now builds them, so connection B's abort for "r1" must
+    /// be a no-op against connection A's entry of the same name.
+    #[tokio::test]
+    async fn http_abort_never_reaches_across_connections_for_the_same_id() {
+        let backing_store = store();
+
+        let (client_a, server_a) = tokio::io::duplex(1 << 16);
+        let (server_a_read, server_a_write) = tokio::io::split(server_a);
+        let ctx_a = Arc::new(ConnectionContext::for_tests(backing_store.clone(), "0.5.0"));
+        // A never-finishing task stands in for a real in-flight fetch, same
+        // as http_proxy's own abort test: this test is about which
+        // connection's map an abort reaches, not about a real network call.
+        let never_finishes = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        ctx_a
+            .inflight_lock()
+            .insert("r1".to_string(), never_finishes.abort_handle());
+        tokio::spawn(handle_connection(
+            server_a_read,
+            server_a_write,
+            Arc::clone(&ctx_a),
+        ));
+        let (mut read_a, write_a) = tokio::io::split(client_a);
+        let mut lines_a = BufReader::new(&mut read_a).lines();
+        assert!(lines_a
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .starts_with("{\"t\":\"hello\""));
+
+        let (client_b, server_b) = tokio::io::duplex(1 << 16);
+        let (server_b_read, server_b_write) = tokio::io::split(server_b);
+        let ctx_b = Arc::new(ConnectionContext::for_tests(backing_store, "0.5.0"));
+        tokio::spawn(handle_connection(server_b_read, server_b_write, ctx_b));
+        let (mut read_b, mut write_b) = tokio::io::split(client_b);
+        let mut lines_b = BufReader::new(&mut read_b).lines();
+        assert!(lines_b
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .starts_with("{\"t\":\"hello\""));
+
+        write_b
+            .write_all(
+                b"{\"id\":\"b1\",\"method\":\"http.abort\",\"params\":{\"request\":\"r1\"}}\n",
+            )
+            .await
+            .unwrap();
+        let ack: serde_json::Value =
+            serde_json::from_str(&lines_b.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(ack["id"], "b1");
+        assert_eq!(ack["ok"], true);
+
+        // B's inflight map never had "r1" — it is B's own, separate map — so
+        // its abort must be a no-op: no `http.error` event follows the ack.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), lines_b.next_line())
+                .await
+                .is_err(),
+            "connection B must not receive an event for a request it never held"
+        );
+
+        // Connection A's entry must be untouched: still registered, and the
+        // stand-in task still running.
+        assert!(ctx_a.inflight_lock().contains_key("r1"));
+        assert!(!never_finishes.is_finished());
+
+        drop(write_a);
+        drop(write_b);
+    }
+
+    /// Registration in `ctx.inflight` happens synchronously inside
+    /// `spawn_http_fetch`, before the spawned task is ever polled (see its
+    /// doc comment) — so the entry must already exist the instant
+    /// `spawn_http_fetch` returns, on any runtime. This does not need the
+    /// task to run at all to prove the ordering the Critical-2 fix relies on.
+    #[tokio::test]
+    async fn spawn_http_fetch_registers_before_the_task_is_polled() {
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, _rx) = mpsc::channel::<String>(64);
+        let semaphore = Arc::new(Semaphore::new(MAX_INFLIGHT_PER_CONNECTION));
+        let permit = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+        let params = HttpFetchParams {
+            slot: crate::shorthand::credentials::CredentialSlot::NotesLlm {
+                provider: crate::shorthand::credentials::LlmProvider::Ollama,
+                origin: "http://127.0.0.1:1".to_string(),
+            },
+            url: "http://127.0.0.1:1/".to_string(),
+            method: "GET".to_string(),
+            headers: HashMap::new(),
+            body: None,
+        };
+
+        spawn_http_fetch("ordering".to_string(), params, Arc::clone(&ctx), tx, permit);
+
+        assert!(ctx.inflight_lock().contains_key("ordering"));
+    }
+
+    /// The registration race Critical-2 describes only reproduces on a
+    /// multi-thread runtime: on the default current-thread `#[tokio::test]`,
+    /// a spawned task genuinely cannot run until the spawner yields, which
+    /// hides it. A request that fails inside `plan_request` (no network I/O,
+    /// microseconds of work) is the fast path most likely to win the race
+    /// against `insert` if the ordering guarantee ever regressed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fast_failing_fetch_does_not_leak_its_inflight_entry() {
+        let ctx = Arc::new(ConnectionContext::for_tests(store(), "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let semaphore = Arc::new(Semaphore::new(MAX_INFLIGHT_PER_CONNECTION));
+        let permit = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+        let params = HttpFetchParams {
+            slot: crate::shorthand::credentials::CredentialSlot::NotesLlm {
+                provider: crate::shorthand::credentials::LlmProvider::Openai,
+                origin: "https://api.openai.com".to_string(),
+            },
+            url: "https://evil.example/".to_string(),
+            method: "GET".to_string(),
+            headers: HashMap::new(),
+            body: None,
+        };
+
+        spawn_http_fetch("r1".to_string(), params, Arc::clone(&ctx), tx, permit);
+
+        let error = rx.recv().await.unwrap();
+        assert!(
+            error.contains("\"code\":\"origin_mismatch\""),
+            "unexpected reply: {error}"
+        );
+
+        // The task's own drop (which runs `InflightGuard`) can land a moment
+        // after the channel send above on a real multi-thread scheduler.
+        for _ in 0..50 {
+            if ctx.inflight_lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            ctx.inflight_lock().is_empty(),
+            "a fast-failing fetch must not leak its inflight entry"
+        );
     }
 
     #[cfg(windows)]
