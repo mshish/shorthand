@@ -7,7 +7,10 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -33,6 +36,7 @@ use super::{
         error_line, hello_line, ok_line, parse_line, ErrorCode, HttpFetchParams, Request,
         StatusSlot,
     },
+    ws_relay::{self, WsHandle},
 };
 
 type TaskHandle = tauri::async_runtime::JoinHandle<()>;
@@ -46,6 +50,11 @@ const MAX_INFLIGHT_PER_CONNECTION: usize = 32;
 const MAX_CONNECTIONS: usize = 16;
 /// Max NDJSON line size from the wire contract; see `handle_connection`.
 const MAX_LINE_BYTES: u64 = 32 * 1024 * 1024;
+/// Per-connection cap on open `ws.*` streams from the wire contract. Enforced
+/// as a `Semaphore` on `ConnectionContext` (see `stream_capacity`) rather
+/// than a post-hoc length check on `streams`, so two concurrent `ws.open`
+/// calls racing the 8th slot cannot both succeed.
+pub(crate) const MAX_WS_STREAMS_PER_CONNECTION: usize = 8;
 
 pub struct RequestSocketServer {
     inner: Mutex<Option<RunningServer>>,
@@ -355,30 +364,28 @@ impl ServerShared {
     }
 }
 
-/// Per-connection state the credential, http and (later) ws handlers share.
-/// `store` and `http` are `pub(crate)` because `http_proxy.rs`'s handlers
-/// (A5) read them directly rather than through server.rs. `inflight` and
+/// Per-connection state the credential, http and ws handlers share. `store`
+/// and `http` are `pub(crate)` because `http_proxy.rs`'s handlers (A5) read
+/// them directly rather than through server.rs; `ws_relay.rs`'s handlers (A6)
+/// do the same for `store`, `stream_capacity` and `streams`. `inflight` and
 /// `streams` are request-id namespaces the wire contract scopes to one
 /// connection — each connection gets its own `ConnectionContext`, built by
 /// `accept_loop` from the server-wide `ServerShared`, precisely so two
 /// connections never share either map (see review finding Critical-1).
-/// `streams` is not read yet — A6 (`ws.*`) is the first handler that
-/// populates and drains it, `#[allow(dead_code)]` in the meantime so its
-/// shape does not change there.
 pub(crate) struct ConnectionContext {
     pub(crate) store: Arc<CredentialStore>,
     version: String,
     pub(crate) http: reqwest::Client,
     pub(crate) inflight: Mutex<HashMap<String, tokio::task::AbortHandle>>,
-    #[allow(dead_code)]
     pub(crate) streams: Mutex<HashMap<String, WsHandle>>,
-}
-
-/// Placeholder for the ws-relay handle A6 introduces; present now only so
-/// `ConnectionContext::streams` already has a concrete value type.
-#[allow(dead_code)]
-pub(crate) struct WsHandle {
-    pub(crate) abort: tokio::task::AbortHandle,
+    /// Gates `ws.open` at `MAX_WS_STREAMS_PER_CONNECTION` permits. An
+    /// `Arc` of its own (not just a field behind `ConnectionContext`'s Arc)
+    /// because `Semaphore::try_acquire_owned` needs to hold a permit whose
+    /// lifetime is independent of any single request — the permit ends up
+    /// stored inside the `WsHandle` for as long as that stream stays open,
+    /// well after `ws_relay::run_ws_open` itself has returned.
+    pub(crate) stream_capacity: Arc<tokio::sync::Semaphore>,
+    next_stream_id: AtomicU64,
 }
 
 impl ConnectionContext {
@@ -389,6 +396,8 @@ impl ConnectionContext {
             http: shared.http.clone(),
             inflight: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
+            stream_capacity: Arc::new(tokio::sync::Semaphore::new(MAX_WS_STREAMS_PER_CONNECTION)),
+            next_stream_id: AtomicU64::new(1),
         }
     }
 
@@ -403,6 +412,21 @@ impl ConnectionContext {
         self.inflight
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Same reasoning as `inflight_lock`, for the `ws.*` stream map.
+    pub(crate) fn streams_lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, WsHandle>> {
+        self.streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A stream id unique within this connection, per the wire contract
+    /// ("server-generated stream id unique per connection"). Connection-local
+    /// rather than global: two different connections legitimately reusing
+    /// `s1` is fine, since `streams` is itself per-connection.
+    pub(crate) fn next_stream_id(&self) -> String {
+        format!("s{}", self.next_stream_id.fetch_add(1, Ordering::Relaxed))
     }
 
     #[cfg(test)]
@@ -538,7 +562,7 @@ where
                         };
                         tokio::spawn(async move {
                             let _permit = permit;
-                            let response = dispatch(&id, other, &task_ctx).await;
+                            let response = dispatch(&id, other, &task_ctx, &task_tx).await;
                             if let Some(response) = response {
                                 let _ = task_tx.send(response).await;
                             }
@@ -565,10 +589,18 @@ where
     // `accept_loop`'s connection count is never freed. Aborting every
     // registered fetch here — rather than waiting out each one's own
     // (renewable, per finding 5) 15-minute bound — is what actually releases
-    // them. See review finding Important-7; A6 will need the same drain for
-    // `streams` once ws.* populates it.
+    // them. See review finding Important-7.
     for (_, handle) in ctx.inflight_lock().drain() {
         handle.abort();
+    }
+    // Same reasoning for `ws.*`: a stream nobody is reading events for
+    // anymore must not keep its reader task (and the upstream TCP/TLS
+    // connection it holds open) alive indefinitely. Aborting the reader task
+    // drops its half of the split `WebSocketStream`; once the writer-side
+    // `WsHandle` in the same drained entry is dropped too, nothing keeps the
+    // upstream connection open.
+    for (_, handle) in ctx.streams_lock().drain() {
+        handle.abort.abort();
     }
     let _ = writer_task.await;
 }
@@ -621,8 +653,18 @@ fn spawn_http_fetch(
 /// `http.abort` because it must skip the in-flight permit that fetches
 /// acquire (see the read loop's `Request::HttpAbort` arm and review finding
 /// Important-6). Every method `dispatch` does handle answers with exactly one
-/// response line, which the caller sends.
-async fn dispatch(id: &str, request: Request, ctx: &ConnectionContext) -> Option<String> {
+/// response line, which the caller sends — including `ws.open`, whose
+/// background reader task then goes on to send its own `ws.message`/
+/// `ws.closed`/`ws.error` events straight over `tx`, independently of this
+/// function's own single reply. `ctx` is `&Arc<ConnectionContext>` (not
+/// `&ConnectionContext`, unlike every other private helper here) precisely so
+/// `ws_relay::run_ws_open` can clone it into that longer-lived task.
+async fn dispatch(
+    id: &str,
+    request: Request,
+    ctx: &Arc<ConnectionContext>,
+    tx: &mpsc::Sender<String>,
+) -> Option<String> {
     match request {
         Request::CredentialSet { slot, secret } => {
             Some(credential_set(id, ctx, slot, secret).await)
@@ -641,12 +683,17 @@ async fn dispatch(id: &str, request: Request, ctx: &ConnectionContext) -> Option
                 "this method must not be routed through dispatch",
             ))
         }
-        Request::WsOpen(_) | Request::WsSend { .. } | Request::WsClose { .. } => {
-            // A6 implements ws.*; it answers the same code until then, so a
-            // client cannot tell "this server has never heard of this
-            // method" apart from "not implemented yet" — it doesn't need to.
-            Some(error_line(id, ErrorCode::UnknownMethod, "not yet"))
+        Request::WsOpen(params) => {
+            Some(ws_relay::run_ws_open(id, Arc::clone(ctx), tx.clone(), params).await)
         }
+        Request::WsSend { stream, data } => {
+            Some(ws_relay::run_ws_send(id, ctx, stream, data).await)
+        }
+        Request::WsClose {
+            stream,
+            code,
+            reason,
+        } => Some(ws_relay::run_ws_close(id, ctx, tx, stream, code, reason).await),
     }
 }
 

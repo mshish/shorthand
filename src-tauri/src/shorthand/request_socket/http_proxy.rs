@@ -32,8 +32,14 @@ const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// Per-request timeout from the wire contract, covering both the initial
 /// send and every subsequent chunk: a upstream that answers headers and then
-/// stalls mid-body must not hold this request open forever.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// stalls mid-body must not hold this request open forever. `pub(crate)`:
+/// `ws_relay.rs` (A6) reuses it to bound `ws.open`'s handshake the same way,
+/// since that call holds one of the connection's 32 in-flight permits (see
+/// `handle_connection`'s read loop) for as long as it runs, and an upstream
+/// that never completes the WebSocket upgrade must not be able to hold that
+/// permit — and eventually, one per hung `ws.open`, the whole 32-permit
+/// budget — forever.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Headers whose presence would let a client see or influence authentication
 /// that is this proxy's decision, not the client's — the four the wire
@@ -108,8 +114,15 @@ pub fn plan_request(
     // the user's call, because some corporate users route provider calls
     // through a local proxy that is unencrypted but does not sit on
     // localhost. The origin the slot was configured with is still the only
-    // place the secret can go; the scheme check only rules out non-HTTP URLs.
-    if !matches!(parsed.scheme(), "http" | "https") {
+    // place the secret can go; the scheme check only rules out non-HTTP,
+    // non-WebSocket URLs. `ws`/`wss` are accepted too: `ws_relay.rs` (A6)
+    // reuses this same function for `ws.open`, whose slot (`notes-acp`) can
+    // legitimately have a `ws://`/`wss://` origin (see
+    // `CredentialSlot::origin` and `canonical_origin`), and the origin
+    // comparison below already handles those schemes correctly because
+    // `url::Url` treats `ws`/`wss` as special schemes with the same
+    // tuple-origin algorithm as `http`/`https`.
+    if !matches!(parsed.scheme(), "http" | "https" | "ws" | "wss") {
         return Err(ErrorCode::BadRequest);
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
@@ -419,7 +432,9 @@ fn decode_body(encoded: Option<&str>) -> Result<Vec<u8>, (ErrorCode, &'static st
     Ok(bytes)
 }
 
-fn plan_error_message(code: ErrorCode) -> &'static str {
+/// `pub(crate)`, not private: `ws_relay.rs` (A6) reuses `plan_request` for
+/// `ws.open` and needs the same error-code-to-message mapping.
+pub(crate) fn plan_error_message(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::OriginMismatch => {
             "the request URL's origin does not match the credential slot's origin"
@@ -666,6 +681,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.headers.get("authorization").unwrap(), "Bearer tok");
+    }
+
+    /// `ws_relay.rs` (A6) calls `plan_request` with a `ws://`/`wss://` url for
+    /// `ws.open`, since a `notes-acp` slot's origin can itself be `ws`/`wss`
+    /// (the wire contract's own `SLOT` example is `"wss://agent.example"`).
+    /// This pins that the scheme broadening didn't loosen the origin check
+    /// itself: same-origin `wss` succeeds, cross-scheme and cross-host still
+    /// fail exactly as they do for `http`/`https`.
+    #[test]
+    fn ws_and_wss_origins_are_accepted_and_still_origin_bound() {
+        let slot = CredentialSlot::NotesAcp {
+            vault_id: "v".into(),
+            origin: "wss://agent.example".into(),
+        };
+        let plan = plan_request(
+            &slot,
+            Some("tok"),
+            "wss://agent.example/acp",
+            "GET",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(plan.headers.get("authorization").unwrap(), "Bearer tok");
+
+        assert!(matches!(
+            plan_request(
+                &slot,
+                Some("tok"),
+                "wss://evil.example/acp",
+                "GET",
+                &HashMap::new(),
+            ),
+            Err(ErrorCode::OriginMismatch)
+        ));
+        // A slot whose origin is `wss` must not be satisfied by a plain `ws`
+        // url to the same host: the scheme is part of the origin tuple.
+        assert!(matches!(
+            plan_request(
+                &slot,
+                Some("tok"),
+                "ws://agent.example/acp",
+                "GET",
+                &HashMap::new(),
+            ),
+            Err(ErrorCode::OriginMismatch)
+        ));
     }
 
     fn store() -> Arc<CredentialStore> {

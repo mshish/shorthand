@@ -12,6 +12,7 @@ mod discovery;
 mod http_proxy;
 mod protocol;
 mod server;
+mod ws_relay;
 
 pub use discovery::{config_directory, remove_discovery, write_discovery};
 pub use protocol::{
