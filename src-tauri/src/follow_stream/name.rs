@@ -27,13 +27,13 @@ pub fn socket_name_owned() -> io::Result<Name<'static>> {
 }
 
 #[cfg(unix)]
-fn current_identity() -> io::Result<String> {
+pub(crate) fn current_identity() -> io::Result<String> {
     // SAFETY: geteuid takes no pointers and has no preconditions.
     Ok(unsafe { libc::geteuid() }.to_string())
 }
 
 #[cfg(windows)]
-fn current_identity() -> io::Result<String> {
+pub(crate) fn current_identity() -> io::Result<String> {
     current_user_sid()
 }
 

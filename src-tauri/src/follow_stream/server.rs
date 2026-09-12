@@ -263,7 +263,7 @@ async fn serve_follower(
 }
 
 #[cfg(unix)]
-fn peer_is_current_user(stream: &Stream) -> bool {
+pub(crate) fn peer_is_current_user(stream: &Stream) -> bool {
     use interprocess::local_socket::traits::StreamCommon as _;
 
     let expected = unsafe { libc::geteuid() };
@@ -284,12 +284,12 @@ fn peer_is_current_user(stream: &Stream) -> bool {
 }
 
 #[cfg(windows)]
-fn protected_sddl(sid: &str) -> String {
+pub(crate) fn protected_sddl(sid: &str) -> String {
     format!("D:P(A;;GA;;;{sid})")
 }
 
 #[cfg(windows)]
-fn create_listener(name: Name<'static>) -> io::Result<Listener> {
+pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
     use interprocess::os::windows::{
         local_socket::ListenerOptionsExt, security_descriptor::SecurityDescriptor,
     };
@@ -306,7 +306,7 @@ fn create_listener(name: Name<'static>) -> io::Result<Listener> {
 }
 
 #[cfg(unix)]
-fn create_listener(name: Name<'static>) -> io::Result<Listener> {
+pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
 
     ListenerOptions::new().name(name).mode(0o600).create_tokio()

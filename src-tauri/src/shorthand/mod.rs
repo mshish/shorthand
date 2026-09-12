@@ -8,4 +8,5 @@ pub mod credentials;
 pub mod dictation;
 pub mod mode;
 pub mod obsidian;
+pub mod request_socket;
 pub mod telemetry;

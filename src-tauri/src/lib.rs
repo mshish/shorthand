@@ -289,6 +289,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     let follow_stream_hub = Arc::new(follow_stream::FollowStreamHub::default());
     app_handle.manage(Arc::clone(&follow_stream_hub));
     app_handle.manage(follow_stream::FollowStreamServer::default());
+    app_handle.manage(shorthand::request_socket::RequestSocketServer::default());
     app_handle.manage(ActiveStreamManagers::default());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(SystemAudioTranscription(std::sync::Mutex::new(
@@ -322,6 +323,25 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         let server = startup_app.state::<follow_stream::FollowStreamServer>();
         if let Err(error) = server.start(&startup_app, follow_stream_hub).await {
             log::error!("Failed to start the follow-stream listener: {error}");
+        }
+    });
+
+    // The request socket exists whenever the app runs, for the same reason
+    // the follow-stream listener above does: core and the Obsidian plugin
+    // need somewhere to reach credentials regardless of which capture mode
+    // (if any) is currently active.
+    let request_socket_app = app_handle.clone();
+    let credential_store_for_request_socket = app_handle
+        .state::<Arc<shorthand::credentials::CredentialStore>>()
+        .inner()
+        .clone();
+    tauri::async_runtime::spawn(async move {
+        let server = request_socket_app.state::<shorthand::request_socket::RequestSocketServer>();
+        if let Err(error) = server
+            .start(&request_socket_app, credential_store_for_request_socket)
+            .await
+        {
+            log::error!("Failed to start the request-socket listener: {error}");
         }
     });
 
@@ -1223,6 +1243,15 @@ pub fn run(cli_args: CliArgs) {
             // Teardown transcribe.cpp before exit
             tauri::RunEvent::Exit => {
                 shorthand::telemetry::on_exit();
+                // Clean shutdown: stop accepting connections and remove the
+                // discovery file so a client does not find a socket path
+                // nobody is listening on after this process exits.
+                if let Some(server) =
+                    app.try_state::<shorthand::request_socket::RequestSocketServer>()
+                {
+                    server.stop();
+                }
+                shorthand::request_socket::remove_discovery();
                 // `Stage` in transcription_coordinator.rs owns the session id
                 // now, and exit teardown can't reach it synchronously here —
                 // relying on the coordinator's own thread still being
