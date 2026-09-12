@@ -1,6 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useSettings } from "../../../hooks/useSettings";
-import { commands, type PostProcessProvider } from "@/bindings";
+import {
+  commands,
+  type CredentialStatus,
+  type PostProcessProvider,
+} from "@/bindings";
 import type { ModelOption } from "./types";
 import type { DropdownOption } from "../../ui/Dropdown";
 
@@ -14,8 +19,9 @@ type PostProcessProviderState = {
   baseUrl: string;
   handleBaseUrlChange: (value: string) => void;
   isBaseUrlUpdating: boolean;
-  apiKey: string;
+  apiKeyStatus: CredentialStatus;
   handleApiKeyChange: (value: string) => void;
+  handleApiKeyClear: () => void;
   isApiKeyUpdating: boolean;
   model: string;
   handleModelChange: (value: string) => void;
@@ -40,6 +46,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     updatePostProcessModel,
     fetchPostProcessModels,
     postProcessModelOptions,
+    postProcessApiKeyStatus,
   } = useSettings();
 
   // Settings are guaranteed to have providers after migration
@@ -62,7 +69,10 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
   // Use settings directly as single source of truth
   const baseUrl = selectedProvider?.base_url ?? "";
-  const apiKey = settings?.post_process_api_keys?.[selectedProviderId] ?? "";
+  // The settings payload never carries the key itself; whether a provider
+  // is configured comes from the OS credential store instead.
+  const apiKeyStatus: CredentialStatus =
+    postProcessApiKeyStatus[selectedProviderId] ?? "missing";
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
 
   const providerOptions = useMemo<DropdownOption[]>(() => {
@@ -98,9 +108,9 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
       // to avoid unnecessary backend errors.
       if (providerId !== APPLE_PROVIDER_ID) {
         const provider = providers.find((p) => p.id === providerId);
-        const apiKey = settings?.post_process_api_keys?.[providerId] ?? "";
         const hasBaseUrl = (provider?.base_url ?? "").trim() !== "";
-        const hasApiKey = apiKey.trim() !== "";
+        const hasApiKey =
+          (postProcessApiKeyStatus[providerId] ?? "missing") === "configured";
 
         if (provider?.id === "custom" ? hasBaseUrl : hasApiKey) {
           void fetchPostProcessModels(providerId);
@@ -112,7 +122,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
       setPostProcessProvider,
       fetchPostProcessModels,
       providers,
-      settings,
+      postProcessApiKeyStatus,
     ],
   );
 
@@ -130,14 +140,28 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   );
 
   const handleApiKeyChange = useCallback(
-    (value: string) => {
+    async (value: string) => {
       const trimmed = value.trim();
-      if (trimmed !== apiKey) {
-        void updatePostProcessApiKey(selectedProviderId, trimmed);
+      // An empty (or whitespace-only) entry is "no change" when a key is
+      // already configured — the field never shows the saved value to blank
+      // it out by accident. Use the clear action to remove it explicitly.
+      if (trimmed === "") return;
+      try {
+        await updatePostProcessApiKey(selectedProviderId, trimmed);
+      } catch (error) {
+        toast.error(String(error));
       }
     },
-    [apiKey, selectedProviderId, updatePostProcessApiKey],
+    [selectedProviderId, updatePostProcessApiKey],
   );
+
+  const handleApiKeyClear = useCallback(async () => {
+    try {
+      await updatePostProcessApiKey(selectedProviderId, "");
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }, [selectedProviderId, updatePostProcessApiKey]);
 
   const handleModelChange = useCallback(
     (value: string) => {
@@ -219,8 +243,9 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     baseUrl,
     handleBaseUrlChange,
     isBaseUrlUpdating,
-    apiKey,
+    apiKeyStatus,
     handleApiKeyChange,
+    handleApiKeyClear,
     isApiKeyUpdating,
     model,
     handleModelChange,
