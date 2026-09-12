@@ -86,15 +86,16 @@ The request socket trusts the same-user boundary, not process identity. On Windo
 
 ## Limits
 
-| Limit                              | Value  | Error                                                |
-| ---------------------------------- | ------ | ---------------------------------------------------- |
-| NDJSON line                        | 32 MiB | `too_large`, then the connection is closed           |
-| Request body (`http.fetch`)        | 16 MiB | `too_large`                                          |
-| Response body (`http.fetch`)       | 64 MiB | `too_large`                                          |
-| Per-request timeout                | 15 min | `timeout`                                            |
-| Concurrent connections             | 16     | `hello`, then `limit`, then the connection is closed |
-| In-flight requests per connection  | 32     | `limit`                                              |
-| Open `ws.*` streams per connection | 8      | `limit`                                              |
+| Limit                               | Value  | Error                                                                                                                                |
+| ----------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| NDJSON line                         | 32 MiB | `too_large`, then the connection is closed                                                                                           |
+| Request body (`http.fetch`)         | 16 MiB | `too_large`                                                                                                                          |
+| Response body (`http.fetch`)        | 64 MiB | codeless `http.error` event, since the cap can only trip after the `ok` line has gone out; `too_large` only if it is hit before then |
+| Per-request timeout                 | 15 min | codeless `http.error` event once the response has started; `timeout` only before it                                                  |
+| Concurrent connections              | 16     | `hello`, then `limit`, then the connection is closed                                                                                 |
+| In-flight requests per connection   | 32     | queued on the connection (backpressure); no error                                                                                    |
+| Open `ws.*` streams per connection  | 8      | `limit`                                                                                                                              |
+| `slots` array (`credential.status`) | 64     | `bad_request`                                                                                                                        |
 
 ## Versioning
 

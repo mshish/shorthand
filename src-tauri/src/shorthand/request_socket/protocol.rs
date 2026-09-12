@@ -49,7 +49,11 @@ pub enum ErrorCode {
 /// A successfully parsed request, one variant per wire method. `HttpFetch`
 /// and `WsOpen` carry a named params struct (rather than inline fields) per
 /// task-A4-carryovers.md, because A5 and A6 consume those structs by name.
-#[derive(Debug)]
+///
+/// `Debug` is hand-written, not derived: `credentials.rs`'s module doc
+/// promises "nothing here can put a secret in a log line, an error, or a
+/// settings payload", and a derived `Debug` would print `CredentialSet`'s
+/// plaintext `secret` the moment anything ever logged a `Request`.
 pub enum Request {
     CredentialSet {
         slot: CredentialSlot,
@@ -75,6 +79,47 @@ pub enum Request {
         code: u16,
         reason: String,
     },
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Request::CredentialSet { slot, secret: _ } => f
+                .debug_struct("CredentialSet")
+                .field("slot", slot)
+                .field("secret", &"[REDACTED]")
+                .finish(),
+            Request::CredentialClear { slot } => f
+                .debug_struct("CredentialClear")
+                .field("slot", slot)
+                .finish(),
+            Request::CredentialStatus { slots } => f
+                .debug_struct("CredentialStatus")
+                .field("slots", slots)
+                .finish(),
+            Request::HttpFetch(params) => f.debug_tuple("HttpFetch").field(params).finish(),
+            Request::HttpAbort { request } => f
+                .debug_struct("HttpAbort")
+                .field("request", request)
+                .finish(),
+            Request::WsOpen(params) => f.debug_tuple("WsOpen").field(params).finish(),
+            Request::WsSend { stream, data } => f
+                .debug_struct("WsSend")
+                .field("stream", stream)
+                .field("data", data)
+                .finish(),
+            Request::WsClose {
+                stream,
+                code,
+                reason,
+            } => f
+                .debug_struct("WsClose")
+                .field("stream", stream)
+                .field("code", code)
+                .field("reason", reason)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -354,6 +399,19 @@ mod tests {
         let (id, req) = parse_line(r#"{"id":"r1","method":"credential.set","params":{"slot":{"kind":"notes-llm","provider":"openai","origin":"https://api.openai.com"},"secret":"sk-test"}}"#).unwrap();
         assert_eq!(id, "r1");
         assert!(matches!(req, Request::CredentialSet { .. }));
+    }
+
+    /// M1: a derived `Debug` on `Request` would print `CredentialSet`'s
+    /// plaintext secret; the hand-written impl must not.
+    #[test]
+    fn credential_set_debug_redacts_the_secret() {
+        let (_, req) = parse_line(r#"{"id":"r1","method":"credential.set","params":{"slot":{"kind":"notes-llm","provider":"openai","origin":"https://api.openai.com"},"secret":"sk-super-secret"}}"#).unwrap();
+        let debug = format!("{req:?}");
+        assert!(
+            !debug.contains("sk-super-secret"),
+            "Debug output leaked the secret: {debug}"
+        );
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ import type { CredentialStatus } from "@/bindings";
 
 interface ApiKeyFieldProps {
   status: CredentialStatus;
-  onCommit: (value: string) => void;
+  onCommit: (value: string) => Promise<void>;
   onClear: () => void;
   disabled: boolean;
   className?: string;
@@ -27,10 +27,15 @@ export const ApiKeyField: React.FC<ApiKeyFieldProps> = React.memo(
           ? t("shorthand.apiKey.unavailable")
           : t("shorthand.apiKey.missing");
 
-    const handleBlur = () => {
+    const handleBlur = async () => {
       if (value === "") return;
-      onCommit(value);
-      setValue("");
+      try {
+        await onCommit(value);
+        setValue("");
+      } catch {
+        // onCommit already reports the error; leave the value in place so
+        // the user does not have to find and re-paste the key.
+      }
     };
 
     return (

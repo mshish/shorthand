@@ -20,7 +20,7 @@ type PostProcessProviderState = {
   handleBaseUrlChange: (value: string) => void;
   isBaseUrlUpdating: boolean;
   apiKeyStatus: CredentialStatus;
-  handleApiKeyChange: (value: string) => void;
+  handleApiKeyChange: (value: string) => Promise<void>;
   handleApiKeyClear: () => void;
   isApiKeyUpdating: boolean;
   model: string;
@@ -150,6 +150,9 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
         await updatePostProcessApiKey(selectedProviderId, trimmed);
       } catch (error) {
         toast.error(String(error));
+        // Re-thrown so the field (which awaits this call) knows the write
+        // failed and does not clear what the user just typed.
+        throw error;
       }
     },
     [selectedProviderId, updatePostProcessApiKey],

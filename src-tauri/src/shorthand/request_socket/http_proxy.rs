@@ -71,11 +71,16 @@ const STRIPPED_AUTH_HEADERS: [&str; 4] = [
 /// - `connection`, `upgrade`, `te`, `trailer`, `expect` and `keep-alive` are
 ///   hop-by-hop, meaningful only between this proxy and the upstream it picks
 ///   — a client has no business setting any of them.
+/// - `accept-encoding` decides whether reqwest transparently decompresses
+///   the response: it only does so when *it* added the header, so a
+///   client-supplied one would make the upstream return compressed bytes
+///   that stream through `http.body` unchanged, which a client expecting
+///   plain bytes cannot handle.
 ///
 /// This is a superset of the wire contract's own four-header list; see the
 /// "Auth injection rules" paragraph of the wire contract for why (review
 /// finding Important-3).
-const STRIPPED_FRAMING_HEADERS: [&str; 9] = [
+const STRIPPED_FRAMING_HEADERS: [&str; 10] = [
     "host",
     "content-length",
     "transfer-encoding",
@@ -85,6 +90,7 @@ const STRIPPED_FRAMING_HEADERS: [&str; 9] = [
     "trailer",
     "expect",
     "keep-alive",
+    "accept-encoding",
 ];
 
 /// The outcome of planning one `http.fetch` call: a URL, method and header
@@ -572,7 +578,7 @@ mod tests {
 
     #[test]
     fn openai_gets_bearer_and_loses_client_supplied_auth() {
-        let mut headers = HashMap::from([
+        let headers = HashMap::from([
             (
                 "authorization".to_string(),
                 "Bearer placeholder".to_string(),
@@ -592,7 +598,6 @@ mod tests {
             plan.headers.get("content-type").unwrap(),
             "application/json"
         );
-        headers.clear();
     }
 
     #[test]
@@ -610,16 +615,20 @@ mod tests {
     }
 
     /// Pins the `STRIPPED_FRAMING_HEADERS` half of review finding Important-3:
-    /// a client-supplied `host`, `content-length` or `transfer-encoding`
-    /// must never survive into `PlannedRequest::headers`, since deciding
-    /// framing for the outgoing request is this proxy's job, not the
-    /// client's (review finding Minor-6).
+    /// a client-supplied `host`, `content-length`, `transfer-encoding` or
+    /// `accept-encoding` must never survive into `PlannedRequest::headers`,
+    /// since deciding framing for the outgoing request is this proxy's job,
+    /// not the client's (review finding Minor-6). `accept-encoding` matters
+    /// here specifically because reqwest only auto-decompresses when it set
+    /// that header itself (M2): a client-supplied one would otherwise let
+    /// compressed bytes stream through `http.body` unchanged.
     #[test]
     fn client_supplied_framing_headers_are_stripped_from_the_plan() {
         let headers = HashMap::from([
             ("host".to_string(), "evil.example".to_string()),
             ("content-length".to_string(), "1".to_string()),
             ("transfer-encoding".to_string(), "chunked".to_string()),
+            ("accept-encoding".to_string(), "gzip".to_string()),
         ]);
         let plan = plan_request(
             &llm(LlmProvider::Openai, "https://api.openai.com"),
@@ -632,6 +641,7 @@ mod tests {
         assert!(plan.headers.get("host").is_none());
         assert!(plan.headers.get("content-length").is_none());
         assert!(plan.headers.get("transfer-encoding").is_none());
+        assert!(plan.headers.get("accept-encoding").is_none());
     }
 
     #[test]

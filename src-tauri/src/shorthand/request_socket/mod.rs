@@ -14,9 +14,5 @@ mod protocol;
 mod server;
 mod ws_relay;
 
-pub use discovery::{config_directory, remove_discovery, write_discovery};
-pub use protocol::{
-    error_line, hello_line, ok_line, parse_line, Envelope, ErrorCode, HttpFetchParams, Request,
-    StatusSlot, WsOpenParams, CAPABILITIES, REQUEST_PROTOCOL_VERSION,
-};
+pub use discovery::remove_discovery;
 pub use server::RequestSocketServer;

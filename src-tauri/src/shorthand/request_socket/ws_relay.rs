@@ -162,11 +162,28 @@ pub(crate) async fn run_ws_open(
     let (sink, source) = socket.split();
     let sink = Arc::new(AsyncMutex::new(sink));
 
+    // Same ordering hazard `spawn_http_fetch` has, and the same gate:
+    // tokio's multi-threaded runtime can start `run_reader` on another
+    // worker as soon as it is spawned, and if the upstream already has a
+    // Close frame (or EOF) waiting, the reader's `streams.remove` would run
+    // as a no-op before the `insert` below ever happens. The entry then
+    // gets inserted after the stream is already dead and nothing ever
+    // removes it, leaking both the map entry and the `_permit` inside it.
+    // The `oneshot` makes "registered" happen-before "polled", so the
+    // reader cannot finish (and remove) before the entry it needs to remove
+    // exists.
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let reader_ctx = Arc::clone(&ctx);
     let reader_sink = Arc::clone(&sink);
     let reader_stream_id = stream_id.clone();
     let reader_tx = tx.clone();
     let reader_handle = tokio::spawn(async move {
+        if start_rx.await.is_err() {
+            // The sender side was dropped without a signal, which only
+            // happens if `insert` below panicked — nothing was registered,
+            // so there is nothing to run for.
+            return;
+        }
         run_reader(reader_ctx, reader_stream_id, source, reader_sink, reader_tx).await;
     });
 
@@ -178,6 +195,7 @@ pub(crate) async fn run_ws_open(
             _permit: permit,
         },
     );
+    let _ = start_tx.send(());
 
     ok_line(id, serde_json::json!({ "stream": stream_id }))
 }
@@ -550,6 +568,35 @@ mod tests {
         addr
     }
 
+    /// Sends a Close frame immediately after completing the handshake, for
+    /// as many connections as `connections`, without waiting for anything
+    /// from the client. Stands in for an ACP endpoint that rejects auth
+    /// right after the upgrade, or is mid-restart — the failure mode I1's
+    /// regression test below exercises repeatedly.
+    async fn spawn_close_immediately_server(connections: usize) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for _ in 0..connections {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    let _ = socket
+                        .send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Normal,
+                            reason: "bye".into(),
+                        })))
+                        .await;
+                });
+            }
+        });
+        addr
+    }
+
     /// Accepts one connection and completes the handshake, then never sends
     /// anything back — including never echoing a Close frame it receives.
     /// Stands in for an unresponsive or hostile ACP endpoint.
@@ -809,5 +856,52 @@ mod tests {
             abort.is_finished(),
             "the reader task must be aborted when the connection drops"
         );
+    }
+
+    /// Regression test for I1: `run_ws_open` used to spawn `run_reader`
+    /// before inserting the `WsHandle` into `ctx.streams`. On the
+    /// multi-threaded test runtime the reader can start immediately, and
+    /// with a Close frame already waiting (as here), its `streams.remove`
+    /// would run as a no-op ahead of the `insert` — leaving a dead entry,
+    /// and the `stream_capacity` permit inside it, in the map forever.
+    /// Repeating past `MAX_WS_STREAMS_PER_CONNECTION` proves no permit is
+    /// leaked: every one of the 9 opens below must succeed, which a single
+    /// leaked permit from an earlier round would make impossible.
+    #[tokio::test]
+    async fn upstream_close_right_after_upgrade_does_not_leak_the_stream_permit() {
+        let rounds = MAX_WS_STREAMS_PER_CONNECTION + 1;
+        let addr = spawn_close_immediately_server(rounds).await;
+        let origin = format!("ws://{addr}");
+        let slot = acp_slot("v", &origin);
+        let credential_store = store();
+        credential_store.set(&slot, "tok").unwrap();
+        let ctx = Arc::new(ConnectionContext::for_tests(credential_store, "0.5.0"));
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+
+        for i in 0..rounds {
+            let params = WsOpenParams {
+                slot: slot.clone(),
+                url: format!("{origin}/"),
+                protocols: Vec::new(),
+            };
+            let reply =
+                run_ws_open(&format!("open{i}"), Arc::clone(&ctx), tx.clone(), params).await;
+            assert!(
+                reply.contains("\"ok\":true"),
+                "open {i} should have succeeded (no permit leak): {reply}"
+            );
+
+            let closed = rx.recv().await.unwrap();
+            assert!(
+                closed.contains("\"t\":\"ws.closed\""),
+                "unexpected event on round {i}: {closed}"
+            );
+
+            wait_for(|| ctx.streams_lock().is_empty()).await;
+            assert!(
+                ctx.streams_lock().is_empty(),
+                "round {i} should have removed its own entry"
+            );
+        }
     }
 }
