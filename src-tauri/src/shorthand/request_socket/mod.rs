@@ -9,6 +9,7 @@
 //! external process needs a file to learn the live socket path from.
 
 mod discovery;
+mod http_proxy;
 mod protocol;
 mod server;
 

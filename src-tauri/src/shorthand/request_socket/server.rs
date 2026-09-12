@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 
 use crate::shorthand::credentials::{
@@ -28,8 +28,8 @@ use crate::shorthand::credentials::{
 };
 
 use super::{
-    discovery,
-    protocol::{error_line, hello_line, ok_line, parse_line, ErrorCode, Request},
+    discovery, http_proxy,
+    protocol::{error_line, hello_line, ok_line, parse_line, ErrorCode, HttpFetchParams, Request},
 };
 
 type TaskHandle = tauri::async_runtime::JoinHandle<()>;
@@ -260,18 +260,15 @@ async fn reject_over_connection_limit(stream: Stream) {
     }
 }
 
-/// Per-connection state the credential and (later) http/ws handlers share.
-/// `http`, `inflight` and `streams` are not read yet in this task: A5
-/// (`http.fetch`/`http.abort`) and A6 (`ws.*`) are the first handlers that
-/// populate and drain them. They are part of the struct now, `#[allow
-/// (dead_code)]` in the meantime, so its shape does not change under those
-/// tasks.
+/// Per-connection state the credential, http and (later) ws handlers share.
+/// `store` and `http` are `pub(crate)` because `http_proxy.rs`'s handlers
+/// (A5) read them directly rather than through server.rs; `streams` is not
+/// read yet — A6 (`ws.*`) is the first handler that populates and drains it,
+/// `#[allow(dead_code)]` in the meantime so its shape does not change there.
 pub(crate) struct ConnectionContext {
-    store: Arc<CredentialStore>,
+    pub(crate) store: Arc<CredentialStore>,
     version: String,
-    #[allow(dead_code)]
     pub(crate) http: reqwest::Client,
-    #[allow(dead_code)]
     pub(crate) inflight: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     #[allow(dead_code)]
     pub(crate) streams: Mutex<HashMap<String, WsHandle>>,
@@ -395,11 +392,27 @@ where
                 };
                 let task_ctx = Arc::clone(&ctx);
                 let task_tx = tx.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    let response = dispatch(&id, request, &task_ctx).await;
-                    let _ = task_tx.send(response).await;
-                });
+                match request {
+                    // `http.fetch` sends several lines over the connection's
+                    // lifetime (an `ok`, then streamed `http.body`/`http.end`),
+                    // not the one-line-back shape `dispatch` gives every other
+                    // method, so it is spawned directly rather than through
+                    // it. The abort handle is registered before this task is
+                    // polled at all, so an `http.abort` for this id arriving
+                    // on the very next line can never race an unregistered id.
+                    Request::HttpFetch(params) => {
+                        spawn_http_fetch(id, params, task_ctx, task_tx, permit);
+                    }
+                    other => {
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            let response = dispatch(&id, other, &task_ctx, &task_tx).await;
+                            if let Some(response) = response {
+                                let _ = task_tx.send(response).await;
+                            }
+                        });
+                    }
+                }
             }
             Err(code) => {
                 // See parse_line's doc comment: a line that failed to parse
@@ -415,21 +428,66 @@ where
     let _ = writer_task.await;
 }
 
-async fn dispatch(id: &str, request: Request, ctx: &ConnectionContext) -> String {
+/// Spawns `http.fetch` as its own task rather than routing it through
+/// `dispatch`: unlike every other method, it writes more than one line over
+/// the connection's lifetime (an `ok`, then streamed `http.body`/`http.end`
+/// events), so it needs direct access to the shared writer channel instead of
+/// handing back a single response line. The abort handle is registered in
+/// `ctx.inflight` here, synchronously, before the read loop moves on to the
+/// next line — so an `http.abort` for this id can never arrive before the id
+/// is registered to receive it.
+fn spawn_http_fetch(
+    id: String,
+    params: HttpFetchParams,
+    ctx: Arc<ConnectionContext>,
+    tx: mpsc::Sender<String>,
+    permit: OwnedSemaphorePermit,
+) {
+    let id_for_map = id.clone();
+    let inflight = Arc::clone(&ctx);
+    let handle = tokio::spawn(async move {
+        let _permit = permit;
+        http_proxy::run_fetch(ctx, id, params, tx).await;
+    });
+    inflight
+        .inflight
+        .lock()
+        .unwrap()
+        .insert(id_for_map, handle.abort_handle());
+}
+
+/// Handles every method except `http.fetch` (see `spawn_http_fetch`).
+/// `http.abort` also needs the writer channel directly — an aborted request
+/// gets both an ack for the abort itself and, if it was still in flight, an
+/// `http.error` event for the aborted request — so it returns `None` having
+/// already sent everything itself; every other method returns its one
+/// response line for the caller to send.
+async fn dispatch(
+    id: &str,
+    request: Request,
+    ctx: &ConnectionContext,
+    tx: &mpsc::Sender<String>,
+) -> Option<String> {
     match request {
-        Request::CredentialSet { slot, secret } => credential_set(id, ctx, slot, secret).await,
-        Request::CredentialClear { slot } => credential_clear(id, ctx, slot).await,
-        Request::CredentialStatus { slots } => credential_status(id, ctx, slots).await,
-        Request::HttpFetch(_)
-        | Request::HttpAbort { .. }
-        | Request::WsOpen(_)
-        | Request::WsSend { .. }
-        | Request::WsClose { .. } => {
-            // A5 implements http.*, A6 implements ws.*. Both answer the same
-            // code until then, so a client cannot tell "this server has
-            // never heard of this method" apart from "not implemented yet"
-            // — it doesn't need to.
-            error_line(id, ErrorCode::UnknownMethod, "not yet")
+        Request::CredentialSet { slot, secret } => {
+            Some(credential_set(id, ctx, slot, secret).await)
+        }
+        Request::CredentialClear { slot } => Some(credential_clear(id, ctx, slot).await),
+        Request::CredentialStatus { slots } => Some(credential_status(id, ctx, slots).await),
+        Request::HttpAbort { request: target } => {
+            http_proxy::handle_abort(id, &target, ctx, tx).await;
+            None
+        }
+        Request::HttpFetch(_) => {
+            unreachable!(
+                "HttpFetch is spawned directly by spawn_http_fetch, never routed through dispatch"
+            )
+        }
+        Request::WsOpen(_) | Request::WsSend { .. } | Request::WsClose { .. } => {
+            // A6 implements ws.*; it answers the same code until then, so a
+            // client cannot tell "this server has never heard of this
+            // method" apart from "not implemented yet" — it doesn't need to.
+            Some(error_line(id, ErrorCode::UnknownMethod, "not yet"))
         }
     }
 }
