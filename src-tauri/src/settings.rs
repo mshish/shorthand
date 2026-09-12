@@ -533,7 +533,7 @@ fn default_model() -> String {
     "".to_string()
 }
 
-const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
@@ -1140,6 +1140,9 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
 }
 
 pub fn get_settings(app: &AppHandle) -> AppSettings {
+    use std::sync::Arc;
+    use tauri::Manager;
+
     let store = app
         .store(crate::portable::store_path(SETTINGS_STORE_PATH))
         .expect("Failed to initialize store");
@@ -1158,6 +1161,22 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
 
         if apply_settings_migrations(&mut settings, &settings_value) {
             updated = true;
+        }
+
+        // Fork-only, schema 3: hand any plaintext post-processing key to the
+        // OS credential store and blank the map. Unmanaged in tests and in
+        // any early call made before `lib.rs` manages the store; those loads
+        // simply leave the keys for the next one.
+        if let Some(credentials) =
+            app.try_state::<Arc<crate::shorthand::credentials::CredentialStore>>()
+        {
+            if migrate_post_process_keys(
+                &mut settings,
+                stored_schema_version(&settings_value),
+                &credentials,
+            ) {
+                updated = true;
+            }
         }
 
         // Merge in any bindings added since this store was written.
@@ -1249,10 +1268,7 @@ fn apply_settings_migrations(
         updated = true;
     }
 
-    let stored_schema_version = settings_value
-        .get("settings_schema_version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let stored_schema_version = stored_schema_version(settings_value);
     if stored_schema_version < 1 {
         // Before schema 1 this was a UI ordinal. Preserve the original safety
         // migration: a positive selection was ambiguous even in 0.1.
@@ -1275,7 +1291,9 @@ fn apply_settings_migrations(
         if !matches!(settings.paste_method, PasteMethod::None) {
             settings.paste_method = PasteMethod::None;
         }
-        settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
+        // Schema 3 is stamped by `migrate_post_process_keys`, which needs the
+        // credential store and therefore cannot run inside this pure function.
+        settings.settings_schema_version = 2;
         updated = true;
     }
 
@@ -1307,6 +1325,46 @@ fn apply_settings_migrations(
     }
 
     updated
+}
+
+/// The schema version a settings object was written at. Absent means a store
+/// from before the field existed.
+fn stored_schema_version(settings_value: &serde_json::Value) -> u64 {
+    settings_value
+        .get("settings_schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+}
+
+/// Schema 3: `post_process_api_keys` moves to the OS credential store. Runs
+/// outside `apply_settings_migrations` because it needs the store; runs on
+/// every load until it succeeds, so an unavailable keyring on one launch
+/// leaves the plaintext keys in place rather than losing them.
+pub fn migrate_post_process_keys(
+    settings: &mut AppSettings,
+    stored_schema_version: u64,
+    store: &crate::shorthand::credentials::CredentialStore,
+) -> bool {
+    if stored_schema_version >= 3 {
+        return false;
+    }
+    for (provider_id, key) in settings.post_process_api_keys.iter() {
+        if key.trim().is_empty() {
+            continue;
+        }
+        let slot = crate::shorthand::credentials::CredentialSlot::PostProcess {
+            provider_id: provider_id.clone(),
+        };
+        if let Err(error) = store.set(&slot, key) {
+            warn!("post-process key migration deferred for {provider_id}: {error}");
+            return false;
+        }
+    }
+    for value in settings.post_process_api_keys.values_mut() {
+        value.clear();
+    }
+    settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
+    true
 }
 
 pub fn write_settings(app: &AppHandle, settings: AppSettings) {
@@ -1492,10 +1550,10 @@ mod tests {
         // the fork also moves legacy profiles to no automatic paste delivery.
         assert!(apply_settings_migrations(&mut settings, &stored));
         assert!(matches!(settings.paste_method, PasteMethod::None));
-        assert_eq!(
-            settings.settings_schema_version,
-            CURRENT_SETTINGS_SCHEMA_VERSION
-        );
+        // 2, not the current version: schema 3 is stamped by
+        // `migrate_post_process_keys`, which needs the credential store and so
+        // is not called here.
+        assert_eq!(settings.settings_schema_version, 2);
         assert_eq!(
             settings.transcribe_accelerator,
             TranscribeAcceleratorSetting::Auto
@@ -1806,10 +1864,8 @@ mod tests {
             TranscribeAcceleratorSetting::Auto
         );
         assert_eq!(settings.transcribe_gpu_device, None);
-        assert_eq!(
-            settings.settings_schema_version,
-            CURRENT_SETTINGS_SCHEMA_VERSION
-        );
+        // See the frozen-store test: `apply_settings_migrations` stamps 2.
+        assert_eq!(settings.settings_schema_version, 2);
     }
 
     #[test]
@@ -1886,10 +1942,8 @@ mod tests {
 
         assert!(apply_settings_migrations(&mut settings, &raw));
         assert!(matches!(settings.paste_method, PasteMethod::None));
-        assert_eq!(
-            settings.settings_schema_version,
-            CURRENT_SETTINGS_SCHEMA_VERSION
-        );
+        // See the frozen-store test: `apply_settings_migrations` stamps 2.
+        assert_eq!(settings.settings_schema_version, 2);
     }
 
     #[test]
@@ -1940,5 +1994,115 @@ mod tests {
         let out = format!("{:?}", map);
         assert!(!out.contains("secret"));
         assert!(out.contains("[REDACTED]"));
+    }
+
+    /// Schema 3 hands every stored post-processing key to the credential
+    /// store and leaves the map in settings blank.
+    #[test]
+    fn schema_three_moves_post_process_keys_into_the_store_and_blanks_them() {
+        let store = crate::shorthand::credentials::CredentialStore::with_backend(Box::new(
+            crate::shorthand::credentials::MemoryBackend::default(),
+        ));
+        let mut settings = get_default_settings();
+        settings
+            .post_process_api_keys
+            .insert("openai".into(), "sk-test-openai".into());
+        settings
+            .post_process_api_keys
+            .insert("anthropic".into(), "".into());
+
+        assert!(migrate_post_process_keys(&mut settings, 2, &store));
+
+        assert_eq!(
+            settings
+                .post_process_api_keys
+                .get("openai")
+                .map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
+        );
+        let slot = crate::shorthand::credentials::CredentialSlot::PostProcess {
+            provider_id: "openai".into(),
+        };
+        assert!(matches!(
+            store.status(&slot),
+            crate::shorthand::credentials::CredentialStatus::Configured
+        ));
+        // A blank value was never a secret, so nothing is written for it.
+        let anthropic = crate::shorthand::credentials::CredentialSlot::PostProcess {
+            provider_id: "anthropic".into(),
+        };
+        assert!(matches!(
+            store.status(&anthropic),
+            crate::shorthand::credentials::CredentialStatus::Missing
+        ));
+    }
+
+    /// A keyring that cannot be reached on one launch must not cost the user
+    /// their keys: the migration defers and runs again next time.
+    #[test]
+    fn schema_three_migration_keeps_keys_in_place_when_the_store_is_unavailable() {
+        struct Broken;
+        impl crate::shorthand::credentials::SecretBackend for Broken {
+            fn get(
+                &self,
+                _: &str,
+            ) -> Result<Option<String>, crate::shorthand::credentials::CredentialError>
+            {
+                Err(crate::shorthand::credentials::CredentialError::Unavailable(
+                    "locked".into(),
+                ))
+            }
+            fn set(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<(), crate::shorthand::credentials::CredentialError> {
+                Err(crate::shorthand::credentials::CredentialError::Unavailable(
+                    "locked".into(),
+                ))
+            }
+            fn delete(
+                &self,
+                _: &str,
+            ) -> Result<(), crate::shorthand::credentials::CredentialError> {
+                Err(crate::shorthand::credentials::CredentialError::Unavailable(
+                    "locked".into(),
+                ))
+            }
+        }
+        let store = crate::shorthand::credentials::CredentialStore::with_backend(Box::new(Broken));
+        let mut settings = get_default_settings();
+        settings
+            .post_process_api_keys
+            .insert("openai".into(), "sk-test-openai".into());
+        settings.settings_schema_version = 2;
+
+        assert!(!migrate_post_process_keys(&mut settings, 2, &store));
+
+        assert_eq!(
+            settings
+                .post_process_api_keys
+                .get("openai")
+                .map(String::as_str),
+            Some("sk-test-openai")
+        );
+        assert_eq!(settings.settings_schema_version, 2);
+    }
+
+    #[test]
+    fn schema_three_migration_is_a_no_op_at_current_schema() {
+        let store = crate::shorthand::credentials::CredentialStore::with_backend(Box::new(
+            crate::shorthand::credentials::MemoryBackend::default(),
+        ));
+        let mut settings = get_default_settings();
+        assert!(!migrate_post_process_keys(
+            &mut settings,
+            CURRENT_SETTINGS_SCHEMA_VERSION as u64,
+            &store
+        ));
     }
 }

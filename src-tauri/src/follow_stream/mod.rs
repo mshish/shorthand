@@ -19,6 +19,15 @@ pub use protocol::{
 };
 pub use server::FollowStreamServer;
 
+// Fork-only: the request socket (src-tauri/src/shorthand/request_socket/)
+// mirrors this module's listener lifecycle, protected DACL and peer check
+// rather than duplicating them. These re-exports are its only coupling to
+// follow-stream.
+pub(crate) use name::current_identity;
+pub(crate) use server::create_listener;
+#[cfg(unix)]
+pub(crate) use server::peer_is_current_user;
+
 pub fn hub(app: &tauri::AppHandle) -> Option<Arc<FollowStreamHub>> {
     app.try_state::<Arc<FollowStreamHub>>()
         .map(|state| Arc::clone(&state))

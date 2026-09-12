@@ -240,6 +240,18 @@ async changePostProcessApiKeySetting(providerId: string, apiKey: string) : Promi
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Fork-only. The settings payload no longer carries keys; the UI asks which
+ * providers have one so it can show "saved" without ever seeing the value.
+ */
+async getPostProcessApiKeyStatus() : Promise<Result<Partial<{ [key in string]: CredentialStatus }>, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_post_process_api_key_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changePostProcessModelSetting(providerId: string, model: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_post_process_model_setting", { providerId, model }) };
@@ -1191,6 +1203,7 @@ export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
 export type BindingResponse = { success: boolean; binding: ShortcutBinding | null; error: string | null }
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
+export type CredentialStatus = "configured" | "missing" | "unavailable"
 export type CustomSounds = { start: boolean; stop: boolean }
 /**
  * Dictation's own copy of settings meeting mode also has, so enabling or

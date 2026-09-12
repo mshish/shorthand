@@ -1100,11 +1100,19 @@ pub fn change_post_process_api_key_setting(
     provider_id: String,
     api_key: String,
 ) -> Result<(), String> {
-    let mut settings = settings::get_settings(&app);
+    // Fork-only: the key goes to the OS credential store, so neither
+    // settings_store.json nor the settings payload ever holds it.
+    let settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
-    settings.post_process_api_keys.insert(provider_id, api_key);
-    settings::write_settings(&app, settings);
-    Ok(())
+    let store = app.state::<std::sync::Arc<crate::shorthand::credentials::CredentialStore>>();
+    let slot = crate::shorthand::credentials::CredentialSlot::PostProcess { provider_id };
+    let result = if api_key.trim().is_empty() {
+        store.clear(&slot)
+    } else {
+        store.set(&slot, &api_key)
+    };
+    // `CredentialError` carries the platform's own message, never the key.
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1234,11 +1242,15 @@ pub async fn fetch_post_process_models(
         }
     }
 
-    // Get API key
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider_id)
-        .cloned()
+    // Get API key (fork-only: from the OS credential store, not from settings)
+    let api_key = app
+        .state::<std::sync::Arc<crate::shorthand::credentials::CredentialStore>>()
+        .get(
+            &crate::shorthand::credentials::CredentialSlot::PostProcess {
+                provider_id: provider_id.clone(),
+            },
+        )
+        .map_err(|error| error.to_string())?
         .unwrap_or_default();
 
     // Skip fetching if no API key for providers that typically need one
