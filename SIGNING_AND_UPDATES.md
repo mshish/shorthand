@@ -113,6 +113,14 @@ Developer Program ($99/year); the release workflow expects `APPLE_CERTIFICATE`,
 current setting) produces something that runs on the machine that built it and
 nowhere else.
 
+Hardened runtime means library validation is on, which requires every dylib
+nested in the bundle to carry the same Team ID as the app itself — ad-hoc
+included, where that Team ID is empty. A prebuilt dependency signed with its
+publisher's own Developer ID fails that check and crashes the app at launch,
+so it has to be re-signed to match before bundling. CI's `Verify macOS dylib
+bundling` step checks this for every dylib in `Contents/Frameworks/` and fails
+the build on a mismatch.
+
 ## CI, and the nine inherited workflows
 
 Actions is **on**, and all nine workflow files inherited from upstream are
