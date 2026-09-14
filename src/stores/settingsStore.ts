@@ -11,6 +11,7 @@ import type {
   SystemAudioAvailability,
   SystemAudioDevice,
   VadBackend,
+  CredentialStatus,
 } from "@/bindings";
 import { commands } from "@/bindings";
 import { toast } from "sonner";
@@ -35,6 +36,12 @@ interface SettingsStore {
   isProbingSystemAudio: boolean;
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
+  /**
+   * Whether each post-processing provider has an API key saved in the OS
+   * credential store. The settings payload never carries the key itself, so
+   * this is the only way the UI knows whether a provider is configured.
+   */
+  postProcessApiKeyStatus: Partial<Record<string, CredentialStatus>>;
 
   // Actions
   initialize: () => Promise<void>;
@@ -45,6 +52,7 @@ interface SettingsStore {
   ) => Promise<void>;
   resetSetting: (key: keyof Settings) => Promise<void>;
   refreshSettings: () => Promise<void>;
+  refreshPostProcessApiKeyStatus: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
   refreshSystemAudioDevices: () => Promise<void>;
@@ -288,6 +296,7 @@ export const useSettingsStore = create<SettingsStore>()(
     isProbingSystemAudio: false,
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
+    postProcessApiKeyStatus: {},
 
     // Internal setters
     setSettings: (settings) => set({ settings }),
@@ -328,6 +337,26 @@ export const useSettingsStore = create<SettingsStore>()(
       } catch (error) {
         console.error("Failed to load settings:", error);
         set({ isLoading: false });
+      }
+      await get().refreshPostProcessApiKeyStatus();
+    },
+
+    // Whether each post-processing provider has a saved API key. Backed by
+    // the OS credential store, not the settings payload — see
+    // `postProcessApiKeyStatus` above.
+    refreshPostProcessApiKeyStatus: async () => {
+      try {
+        const result = await commands.getPostProcessApiKeyStatus();
+        if (result.status === "ok") {
+          set({ postProcessApiKeyStatus: result.data });
+        } else {
+          console.error(
+            "Failed to load post-process API key status:",
+            result.error,
+          );
+        }
+      } catch (error) {
+        console.error("Failed to load post-process API key status:", error);
       }
     },
 
@@ -698,14 +727,36 @@ export const useSettingsStore = create<SettingsStore>()(
     },
 
     updatePostProcessApiKey: async (providerId, apiKey) => {
-      // Clear cached models when API key changes - user should click refresh after
+      const { setUpdating, refreshSettings, refreshPostProcessApiKeyStatus } =
+        get();
+      const updateKey = `post_process_api_key:${providerId}`;
+
+      setUpdating(updateKey, true);
+
+      // Clear cached models when the key changes - user should click refresh after
       set((state) => ({
         postProcessModelOptions: {
           ...state.postProcessModelOptions,
           [providerId]: [],
         },
       }));
-      return get().updatePostProcessSetting("api_key", providerId, apiKey);
+
+      try {
+        const result = await commands.changePostProcessApiKeySetting(
+          providerId,
+          apiKey,
+        );
+        if (result.status === "error") {
+          // Thrown (rather than logged) so the caller can surface it to the
+          // user — the key never round-trips through settings, so there is
+          // no optimistic value here to roll back.
+          throw new Error(result.error);
+        }
+        await refreshSettings();
+      } finally {
+        await refreshPostProcessApiKeyStatus();
+        setUpdating(updateKey, false);
+      }
     },
 
     updatePostProcessModel: async (providerId, model) => {

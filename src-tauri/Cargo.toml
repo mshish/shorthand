@@ -1,6 +1,6 @@
 [package]
 name = "shorthand"
-version = "0.4.2"
+version = "0.5.0"
 description = "Shorthand"
 authors = ["cjpais"]
 edition = "2021"
@@ -69,12 +69,24 @@ log = "0.4.25"
 env_filter = "0.1.0"
 tokio = { version = "1.43.0", features = ["sync", "rt", "net", "io-util", "time"] }
 interprocess = { version = "2.4.3", features = ["tokio"] }
+# Fork-only: provider secrets live in the OS credential store rather than
+# settings_store.json. See src/shorthand/credentials.rs; the platform store
+# crates are in the target tables below.
+keyring-core = "1"
+base64 = "0.22"
+url = "2"
 vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
 earshot = "1.2.2"
 enigo = "0.6.1"
 rodio = { git = "https://github.com/mshish/rodio.git", rev = "11a327a5e0b571bbd5e018508645abedc20adb2c" }
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "brotli", "deflate"] }
 futures-util = "0.3"
+# Fork-only: the ws.* relay (src/shorthand/request_socket/ws_relay.rs) speaks
+# the ACP network transport's WebSocket on the app's behalf. `native-tls`
+# matches reqwest above: neither dependency sets `default-features = false`,
+# so reqwest already links native-tls (its own default) for http.fetch, and
+# pulling in rustls here too would put two separate TLS stacks in one binary.
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 rustfft = "6.4.0"
 strsim = "0.11.0"
 natural = "0.5.0"
@@ -155,6 +167,9 @@ windows = { version = "0.61.3", features = [
 widestring = "1"
 winreg = "0.55"
 
+# Fork-only: platform credential store (see src/shorthand/credentials.rs).
+windows-native-keyring-store = "1.1"
+
 # Whisper backend per Windows arch. x86_64 ships the Vulkan GPU backend and
 # keeps the dynamic-backends posture (loadable per-ISA CPU modules + Vulkan),
 # where runtime ISA scoring (GGML_CPU_ALL_VARIANTS) earns the extra shipped DLLs.
@@ -189,6 +204,9 @@ objc2-service-management = "0.3.2"
 libloading = "0.8"
 objc2-core-foundation = "0.3"
 
+# Fork-only: platform credential store (see src/shorthand/credentials.rs).
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 gtk = "0.18"
@@ -201,6 +219,9 @@ transcribe-cpp = { version = "0.2.0", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }
+
+# Fork-only: platform credential store (see src/shorthand/credentials.rs).
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
 # TEMPORARY: tao pinned past 0.35.3 for the Wayland client-side-decorations fix
 # (tao #1218, fixes tauri #11856 — dead titlebar buttons after visible(false) →

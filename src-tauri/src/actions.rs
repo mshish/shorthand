@@ -228,7 +228,11 @@ fn combine_finalize_results<M, S>(
     (mic, system)
 }
 
-async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
+async fn post_process_transcription(
+    app: &AppHandle,
+    settings: &AppSettings,
+    transcription: &str,
+) -> Option<String> {
     if is_blank_transcription(transcription) {
         debug!("Post-processing skipped because the transcription is empty");
         return None;
@@ -289,11 +293,24 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         provider.id, model
     );
 
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
+    // Fork-only: the key lives in the OS credential store, not in settings.
+    let slot = crate::shorthand::credentials::CredentialSlot::PostProcess {
+        provider_id: provider.id.clone(),
+    };
+    let api_key = match app
+        .state::<Arc<crate::shorthand::credentials::CredentialStore>>()
+        .get(&slot)
+    {
+        Ok(api_key) => api_key.unwrap_or_default(),
+        Err(error) => {
+            // The message is the platform's own; it never holds the key.
+            warn!(
+                "Post-processing skipped because provider '{}' key could not be read: {error}",
+                provider.id
+            );
+            return None;
+        }
+    };
 
     // Ask these providers to skip reasoning/thinking — post-processing rarely
     // benefits from it and it adds seconds of latency. llm_client picks the
@@ -550,7 +567,8 @@ pub(crate) async fn process_transcription_output(
     }
 
     if post_process {
-        if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
+        if let Some(processed_text) = post_process_transcription(app, &settings, &final_text).await
+        {
             post_processed_text = Some(processed_text.clone());
             final_text = processed_text;
 

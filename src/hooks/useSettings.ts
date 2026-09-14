@@ -5,6 +5,7 @@ import type {
   AudioDevice,
   SystemAudioAvailability,
   SystemAudioDevice,
+  CredentialStatus,
 } from "@/bindings";
 
 interface UseSettingsReturn {
@@ -19,6 +20,7 @@ interface UseSettingsReturn {
   isProbingSystemAudio: boolean;
   audioFeedbackEnabled: boolean;
   postProcessModelOptions: Record<string, string[]>;
+  postProcessApiKeyStatus: Partial<Record<string, CredentialStatus>>;
 
   // Actions
   updateSetting: <K extends keyof Settings>(
@@ -27,6 +29,7 @@ interface UseSettingsReturn {
   ) => Promise<void>;
   resetSetting: (key: keyof Settings) => Promise<void>;
   refreshSettings: () => Promise<void>;
+  refreshPostProcessApiKeyStatus: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
   refreshSystemAudioDevices: () => Promise<void>;
@@ -74,9 +77,11 @@ export const useSettings = (): UseSettingsReturn => {
     isProbingSystemAudio: store.isProbingSystemAudio,
     audioFeedbackEnabled: store.settings?.audio_feedback || false,
     postProcessModelOptions: store.postProcessModelOptions,
+    postProcessApiKeyStatus: store.postProcessApiKeyStatus,
     updateSetting: store.updateSetting,
     resetSetting: store.resetSetting,
     refreshSettings: store.refreshSettings,
+    refreshPostProcessApiKeyStatus: store.refreshPostProcessApiKeyStatus,
     refreshAudioDevices: store.refreshAudioDevices,
     refreshOutputDevices: store.refreshOutputDevices,
     refreshSystemAudioDevices: store.refreshSystemAudioDevices,

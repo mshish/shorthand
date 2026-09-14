@@ -6,6 +6,10 @@ The rest is deliberately not imported — open it only when the work calls for i
   record shapes. `shorthand-core` is a live consumer, and the protocol has
   already shipped a field addition without a version bump that silently dropped
   every event downstream.
+- `REQUEST_SOCKET.md` — before touching the request socket (credentials,
+  `http.fetch`, `ws.*`) or its wire contract. `shorthand-core` and the Obsidian
+  plugin are live consumers; new methods and fields are advertised through
+  `capabilities`, and `protocol` bumps only for incompatible framing.
 - `BUILD.md` — before build, packaging, or platform-specific work, and for
   running the CI workflows locally with `act`.
 - `SIGNING_AND_UPDATES.md` — before anything touching release signing or the

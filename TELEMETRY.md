@@ -16,10 +16,11 @@ against each other.
 **Crash and error reports**
 
 - A Rust panic: the panic message and stack frames.
-- One of three named failures, with a short kind and, where the text cannot
+- One of four named failures, with a short kind and, where the text cannot
   contain a path, a fixed detail: `model_load` (kind only), `transcription`
   (a fixed reason code: engine error, engine panic, finalize timeout, or
-  other), `follow_stream_listen` (the I/O error kind only).
+  other), `follow_stream_listen` and `request_socket_listen` (the I/O error
+  kind only).
 - With every report: Shorthand version, operating system name and version,
   CPU architecture, Rust version, and the time.
 

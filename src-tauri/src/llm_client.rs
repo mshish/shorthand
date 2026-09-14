@@ -241,7 +241,11 @@ fn reqwest_error_kinds(error: &reqwest::Error) -> String {
     }
 }
 
-fn sanitized_url(url: &reqwest::Url) -> String {
+/// `pub(crate)`: the request-socket's `http.fetch` proxy
+/// (`shorthand/request_socket/http_proxy.rs`) reuses this to sanitise
+/// reqwest errors the same way, rather than duplicating the URL-stripping
+/// logic for a second HTTP client in the same process.
+pub(crate) fn sanitized_url(url: &reqwest::Url) -> String {
     let mut url = url.clone();
 
     // Custom endpoints should not contain credentials or query-string tokens,
