@@ -722,6 +722,15 @@ jobs:
           BINARY="$APP/Contents/MacOS/$(basename "$APP" .app)"
           BINARY_TEAM_ID="$(get_team_id "$BINARY")"
           echo "Binary TeamIdentifier: $BINARY_TEAM_ID"
+          # An empty result means the TeamIdentifier line was absent entirely, which
+          # is not the same as "not set" (ad-hoc). Without this guard a parse failure
+          # would leave both sides empty and the comparison below would pass
+          # vacuously, turning this check into a no-op exactly when it is needed.
+          if [ -z "$BINARY_TEAM_ID" ]; then
+            echo "ERROR: no TeamIdentifier line in codesign output for $BINARY; cannot verify Team IDs" >&2
+            codesign -dv --verbose=4 "$BINARY" || true
+            exit 1
+          fi
           for dylib in "$APP/Contents/Frameworks/"*; do
             [ -f "$dylib" ] || continue
             DYLIB_TEAM_ID="$(get_team_id "$dylib")"
