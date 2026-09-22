@@ -933,7 +933,19 @@ fn decide_explicit_capture(
                 _ => ExplicitOutcome::NoOp,
             },
         },
-        capture_command::Decision::NoOp => ExplicitOutcome::NoOp,
+        capture_command::Decision::NoOp => {
+            // "Already running" must stay true once reported: a capture this
+            // mode began from a held key would otherwise still end on that
+            // key's release. Lock it, exactly as a Forward start is locked.
+            if op == capture_command::ExplicitOp::Start
+                && matches!(&state.stage, Stage::Recording { mode: active, .. } if *active == mode)
+            {
+                if let Some(hold) = &mut state.hold {
+                    hold.locked = true;
+                }
+            }
+            ExplicitOutcome::NoOp
+        }
         capture_command::Decision::Refuse(reason) => ExplicitOutcome::Refuse(reason),
     }
 }
@@ -2772,6 +2784,53 @@ mod tests {
             effect.is_none(),
             "the cleared release must not fire once its grace window elapses"
         );
+    }
+
+    /// An explicit start that finds its mode already recording from a held
+    /// key reports "already running". The key's later release must not then
+    /// stop it: the NoOp locks the capture the way a forwarded start is
+    /// locked, so only an explicit stop or the next press ends it.
+    #[test]
+    fn explicit_start_locks_a_capture_already_running_from_a_held_key() {
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        let held = |is_pressed| InputEvent {
+            binding_id: ASSISTED_NOTES.to_string(),
+            hotkey_string: "keyboard".to_string(),
+            is_pressed,
+            mode: ShortcutActivation::PushToTalk,
+            hold_threshold: Duration::ZERO,
+            external: false,
+        };
+        assert!(matches!(
+            state.on_input(held(true), t0),
+            Some(Effect::Start { .. })
+        ));
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+
+        assert!(state
+            .on_input(held(false), t0 + Duration::from_secs(2))
+            .is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(
+            matches!(state.stage, Stage::Recording { .. }),
+            "the release must not stop a capture the caller was told is running"
+        );
+
+        // The next press still ends it, as for any locked capture.
+        assert!(matches!(
+            state.on_input(held(true), t0 + Duration::from_secs(3)),
+            Some(Effect::Stop { .. })
+        ));
     }
 
     /// Same setup, but the deferred release belongs to a *different* mode
