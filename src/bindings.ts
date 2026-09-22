@@ -1202,7 +1202,13 @@ assisted_notes?: AssistedNotesSettings }
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
  * shape of `dictation::DictationSettings`.
  */
-export type AssistedNotesSettings = { enabled: boolean; push_to_talk: boolean; clipboard_handling: ClipboardHandling; append_trailing_space: boolean; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+export type AssistedNotesSettings = { enabled: boolean; 
+/**
+ * How this mode's shortcut starts and stops recording. Replaces the
+ * per-mode `push_to_talk` bool; see
+ * `dictation::migrate_per_mode_shortcut_activation`.
+ */
+shortcut_activation: ShortcutActivation; clipboard_handling: ClipboardHandling; append_trailing_space: boolean; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
 /**
  * Whether this mode's transcript is published to `--follow-stream`
  * followers. The defining similarity to a meeting: a follower process
@@ -1232,7 +1238,12 @@ export type CustomSounds = { start: boolean; stop: boolean }
  * and shared settings" in the design doc for which fields live here versus
  * staying shared on `AppSettings`.
  */
-export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+export type DictationSettings = { enabled: boolean; 
+/**
+ * How dictation's shortcut starts and stops recording. Replaces the
+ * per-mode `push_to_talk` bool; see [`migrate_per_mode_shortcut_activation`].
+ */
+shortcut_activation: ShortcutActivation; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
 /**
  * Whether dictation also captures system audio. Meetings and dictation
  * want opposite answers often enough that one shared switch was wrong:

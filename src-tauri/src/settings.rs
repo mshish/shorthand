@@ -370,7 +370,7 @@ pub struct AppSettings {
     pub bindings: HashMap<String, ShortcutBinding>,
     /// Replaces the pre-0.10 `push_to_talk` bool; stores missing this key are
     /// migrated from it in `apply_settings_migrations`.
-    #[serde(default)]
+    #[serde(default = "default_shortcut_activation")]
     pub shortcut_activation: ShortcutActivation,
     /// Hold-or-toggle only: a press held at least this long is push-to-talk,
     /// anything shorter is a tap that locks recording on.
@@ -559,6 +559,16 @@ const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
+}
+
+fn default_shortcut_activation() -> ShortcutActivation {
+    // Meetings only; Dictation and Assisted notes carry their own.
+    //
+    // A meeting runs for an hour: holding a key for the duration is not a
+    // thing anyone does, so meetings toggle. Upstream's hold-or-toggle would
+    // also let a slightly long press when starting a meeting end it on
+    // release. Dictation is seconds long and keeps upstream's default.
+    ShortcutActivation::Toggle
 }
 
 fn default_hold_threshold_ms() -> u64 {
@@ -1042,7 +1052,7 @@ pub fn get_default_settings() -> AppSettings {
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
-        shortcut_activation: ShortcutActivation::default(),
+        shortcut_activation: default_shortcut_activation(),
         hold_threshold_ms: default_hold_threshold_ms(),
         audio_feedback: false,
         audio_feedback_volume: default_audio_feedback_volume(),
@@ -1300,6 +1310,9 @@ fn apply_settings_migrations(
         }
     }
 
+    updated |=
+        crate::shorthand::dictation::migrate_per_mode_shortcut_activation(settings, settings_value);
+
     let stored_schema_version = stored_schema_version(settings_value);
     if stored_schema_version < 1 {
         // Before schema 1 this was a UI ordinal. Preserve the original safety
@@ -1462,10 +1475,10 @@ mod tests {
     fn empty_store_parses_with_defaults() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
             .expect("all AppSettings fields need serde defaults");
-        // Dictation holds; meetings follow the global shortcut activation.
-        assert!(settings.dictation.push_to_talk);
+        // Meetings toggle; dictation takes upstream's hold-or-toggle.
+        assert_eq!(settings.shortcut_activation, ShortcutActivation::Toggle);
         assert_eq!(
-            settings.shortcut_activation,
+            settings.dictation.shortcut_activation,
             ShortcutActivation::HoldOrToggle
         );
         assert_eq!(settings.hold_threshold_ms, default_hold_threshold_ms());
@@ -1855,7 +1868,10 @@ mod tests {
         assert!(settings.assisted_notes.follow_stream_enabled);
         // A note-taking session runs as long as the thinking does; like
         // meeting, and unlike dictation, nobody holds a key for that.
-        assert!(!settings.assisted_notes.push_to_talk);
+        assert_eq!(
+            settings.assisted_notes.shortcut_activation,
+            ShortcutActivation::Toggle
+        );
         assert_eq!(
             settings.assisted_notes.post_process_provider_id,
             settings.post_process_provider_id
@@ -1946,15 +1962,14 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_activation_defaults_to_hold_or_toggle_without_legacy_key() {
+    fn shortcut_activation_defaults_to_toggle_without_legacy_key() {
+        // Upstream defaults to hold-or-toggle; the fork's meetings toggle (see
+        // default_shortcut_activation).
         let mut settings = get_default_settings();
         let raw = serde_json::json!({ "selected_model": "" });
 
         apply_settings_migrations(&mut settings, &raw);
-        assert_eq!(
-            settings.shortcut_activation,
-            ShortcutActivation::HoldOrToggle
-        );
+        assert_eq!(settings.shortcut_activation, ShortcutActivation::Toggle);
     }
 
     #[test]

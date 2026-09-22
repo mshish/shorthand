@@ -4,6 +4,7 @@ import { type } from "@tauri-apps/plugin-os";
 import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import { ShortcutInput } from "@/components/settings/ShortcutInput";
 import { ShortcutActivationSetting } from "@/components/settings/ShortcutActivation";
+import { ModeShortcutActivation } from "../ModeShortcutActivation";
 import { PasteMethodSetting } from "@/components/settings/PasteMethod";
 import { TypingToolSetting } from "@/components/settings/TypingTool";
 import { ClipboardHandlingSetting } from "@/components/settings/ClipboardHandling";
@@ -319,12 +320,8 @@ export const ModesSettings: React.FC = () => {
                         because paste is always `PasteMethod::None`. */}
                     <AdvancedOnly>
                       {/* Advanced, matching Meetings; see the note there. */}
-                      <AssistedNotesToggleField
-                        field="push_to_talk"
-                        label={t("settings.general.pushToTalk.label")}
-                        description={t(
-                          "settings.general.pushToTalk.description",
-                        )}
+                      <ModeShortcutActivation
+                        mode="assisted_notes"
                         descriptionMode="tooltip"
                         grouped={true}
                       />
@@ -405,10 +402,8 @@ export const ModesSettings: React.FC = () => {
                   descriptionMode="inline"
                   grouped={true}
                 />
-                <DictationToggleField
-                  field="push_to_talk"
-                  label={t("settings.general.pushToTalk.label")}
-                  description={t("settings.general.pushToTalk.description")}
+                <ModeShortcutActivation
+                  mode="dictation"
                   descriptionMode="inline"
                   grouped={true}
                 />

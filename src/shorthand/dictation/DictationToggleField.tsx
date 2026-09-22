@@ -20,9 +20,9 @@ interface DictationToggleFieldProps {
 
 /**
  * Fork-only sibling covering every boolean row in the Dictation section
- * (enabled, push_to_talk, append_trailing_space, save_recordings,
+ * (enabled, append_trailing_space, save_recordings,
  * save_transcripts, post_process_enabled). Upstream's equivalent toggles
- * (PushToTalk.tsx, SaveRecordings.tsx, SaveTranscripts.tsx,
+ * (SaveRecordings.tsx, SaveTranscripts.tsx,
  * AppendTrailingSpace.tsx, PostProcessingToggle.tsx) each hardcode a
  * top-level getSetting/updateSetting key and cannot address
  * settings.dictation.*; useSettings's getSetting/updateSetting are
