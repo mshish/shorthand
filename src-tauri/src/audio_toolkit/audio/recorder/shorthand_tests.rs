@@ -3,13 +3,15 @@
 //! Upstream's tests live unmodified in `tests.rs`.
 
 use super::{
-    downmix_loopback, is_microphone_access_denied, is_no_input_device_error, run_consumer,
-    run_loopback_pump, run_system_consumer, AudioChunk, AudioRecorder, CaptureProcessor,
-    CaptureTransportState, Cmd, LoopbackChunk, LoopbackPumpCmd, SystemAudioSession, VadPolicy,
+    downmix_loopback, is_microphone_access_denied, is_no_input_device_error,
+    loopback_error_callback, run_consumer, run_loopback_pump, run_system_consumer,
+    spawn_system_audio_lane, AudioChunk, AudioRecorder, CaptureProcessor, CaptureTransportState,
+    Cmd, LoopbackCallback, LoopbackChunk, LoopbackPumpCmd, SystemAudioSession, VadPolicy,
+    SYSTEM_STOP_DRAIN_TIMEOUT,
 };
 use rtrb::RingBuffer;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc, Arc,
 };
 use std::thread;
@@ -117,10 +119,10 @@ impl LoopbackHarness {
     }
 
     fn start(&self) -> mpsc::Receiver<()> {
-        self.session.generation.fetch_add(1, Ordering::AcqRel);
-        self.session.active.store(true, Ordering::Release);
+        let generation = self.session.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.session.active.store(true, Ordering::SeqCst);
         self.pump_tx
-            .send(LoopbackPumpCmd::StartSession)
+            .send(LoopbackPumpCmd::StartSession(generation))
             .expect("pump start session");
         let (ready_tx, ready_rx) = mpsc::channel();
         self.cmd_tx
@@ -141,13 +143,29 @@ impl LoopbackHarness {
             .expect("loopback samples");
     }
 
+    fn raw_sender(&self) -> mpsc::SyncSender<LoopbackChunk> {
+        self.raw_tx.as_ref().expect("loopback sender").clone()
+    }
+
     fn fail_device(&mut self) {
         self.raw_tx.take();
     }
 
     fn stop(&self) -> Vec<f32> {
-        self.session.active.store(false, Ordering::Release);
+        self.end_session();
+        self.finish_stop()
+    }
+
+    /// The part of `AudioRecorder::stop()` that ends the session, before any
+    /// command reaches the lane.
+    fn end_session(&self) {
+        self.session.active.store(false, Ordering::SeqCst);
         self.session.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The rest of `AudioRecorder::stop()`: stop the consumer, end the pump's
+    /// session, and wait for the recording.
+    fn finish_stop(&self) -> Vec<f32> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx.send(Cmd::Stop(reply_tx)).expect("stop command");
         self.pump_tx
@@ -285,7 +303,7 @@ fn bursty_packets_follow_elapsed_time_without_phantom_ticks() {
         )
     });
     control_tx
-        .send(LoopbackPumpCmd::StartSession)
+        .send(LoopbackPumpCmd::StartSession(1))
         .expect("start pump");
     // Deliver 20 packets (200 ms of audio) back-to-back in a few ms. This is
     // the shape WASAPI loopback actually uses, and it is what separates the two
@@ -488,4 +506,311 @@ fn recorder_stop_returns_both_lanes_with_ring_microphone() {
     mic_worker.join().expect("mic consumer exits");
     drop(recorder);
     harness.shutdown();
+}
+
+fn contains(samples: &[f32], value: f32) -> bool {
+    samples.iter().any(|sample| (*sample - value).abs() < 1e-6)
+}
+
+/// A loopback stream that dies (headphones plugged in, a Bluetooth switch)
+/// must rebuild capture before the next recording; one that reports a
+/// condition it recovers from must not.
+#[test]
+fn fatal_loopback_stream_error_requests_reopen() {
+    let recorder = AudioRecorder::new().expect("recorder");
+    let mut on_error = loopback_error_callback(Arc::clone(&recorder.system_audio_error));
+
+    on_error(cpal::Error::new(cpal::ErrorKind::Xrun));
+    on_error(cpal::Error::new(cpal::ErrorKind::DeviceChanged));
+    on_error(cpal::Error::new(cpal::ErrorKind::RealtimeDenied));
+    assert!(
+        !recorder.needs_reopen(),
+        "a loopback stream that keeps capturing must not be rebuilt"
+    );
+
+    on_error(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
+    assert!(
+        recorder.needs_reopen(),
+        "a dead loopback stream must be rebuilt before the next recording"
+    );
+}
+
+/// A recorder whose system-audio lane threads have exited, as after a panic
+/// in the system consumer.
+fn recorder_with_dead_system_lane(mic_tx: mpsc::Sender<Cmd>) -> AudioRecorder {
+    let (system_tx, _) = mpsc::channel::<Cmd>();
+    let (pump_tx, _) = mpsc::channel::<LoopbackPumpCmd>();
+    let mut recorder = AudioRecorder::new().expect("recorder");
+    recorder.cmd_tx = Some(mic_tx);
+    recorder.system_cmd_tx = Some(system_tx);
+    recorder.loopback_pump_tx = Some(pump_tx);
+    recorder
+}
+
+#[test]
+fn start_records_microphone_only_when_the_system_lane_is_dead() {
+    let (mic_tx, mic_rx) = mpsc::channel();
+    let recorder = recorder_with_dead_system_lane(mic_tx);
+
+    recorder
+        .start(VadPolicy::Disabled)
+        .expect("a dead system-audio lane must not fail the microphone");
+    assert!(
+        matches!(mic_rx.try_recv(), Ok(Cmd::Start(..))),
+        "the microphone was not started"
+    );
+    assert!(
+        recorder.needs_reopen(),
+        "the dead lane must be rebuilt before the next recording"
+    );
+}
+
+#[test]
+fn failed_start_ends_the_system_audio_session() {
+    let (mic_tx, _) = mpsc::channel();
+    let recorder = recorder_with_dead_system_lane(mic_tx);
+
+    assert!(recorder.start(VadPolicy::Disabled).is_err());
+    assert!(
+        !recorder.system_audio_session.active.load(Ordering::SeqCst),
+        "a failed start left the system-audio session active"
+    );
+}
+
+#[test]
+fn loopback_callback_forwards_its_pool_buffer_without_reallocating() {
+    let (buffer_tx, buffer_rx) = mpsc::sync_channel(1);
+    let pooled = Vec::with_capacity(4096);
+    let pooled_ptr = pooled.as_ptr();
+    buffer_tx.send(pooled).expect("fill the pool");
+    let (loopback_tx, loopback_rx) = mpsc::sync_channel(1);
+    let session = Arc::new(SystemAudioSession::default());
+    session.generation.store(1, Ordering::SeqCst);
+    session.active.store(true, Ordering::SeqCst);
+    let mut callback = LoopbackCallback {
+        channels: 2,
+        sample_rate: 48_000,
+        session: Arc::clone(&session),
+        emergency_buffer: None,
+        buffer_rx,
+        loopback_tx,
+        dropped_samples: Arc::new(AtomicUsize::new(0)),
+    };
+
+    callback.process(&[0.5_f32; 960]);
+
+    let chunk = loopback_rx.try_recv().expect("forwarded block");
+    assert_eq!(chunk.samples.len(), 480);
+    assert_eq!(chunk.session_generation, 1);
+    assert_eq!(
+        chunk.samples.as_ptr(),
+        pooled_ptr,
+        "the callback reallocated its pool buffer"
+    );
+    assert!(!session.callback_busy.load(Ordering::SeqCst));
+}
+
+#[test]
+fn pump_returns_pool_buffers_with_their_capacity() {
+    let (raw_tx, raw_rx) = mpsc::sync_channel(1);
+    let (buffer_tx, buffer_rx) = mpsc::sync_channel(1);
+    let (sample_tx, sample_rx) = mpsc::channel();
+    let (control_tx, control_rx) = mpsc::channel();
+    let session = Arc::new(SystemAudioSession::default());
+    session.generation.store(1, Ordering::SeqCst);
+    session.active.store(true, Ordering::SeqCst);
+    let pump_session = Arc::clone(&session);
+    let pump = thread::spawn(move || {
+        run_loopback_pump(
+            raw_rx,
+            buffer_tx,
+            sample_tx,
+            control_rx,
+            pump_session,
+            16_000,
+        )
+    });
+    control_tx
+        .send(LoopbackPumpCmd::StartSession(1))
+        .expect("start pump");
+    let mut samples = Vec::with_capacity(4096);
+    samples.extend_from_slice(&[0.5; 160]);
+    raw_tx
+        .send(LoopbackChunk {
+            samples,
+            sample_rate: 16_000,
+            session_generation: 1,
+        })
+        .expect("loopback block");
+
+    let returned = buffer_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("buffer returned to the pool");
+    assert!(returned.is_empty());
+    assert!(
+        returned.capacity() >= 4096,
+        "the pool got back a buffer the callback must reallocate: capacity {}",
+        returned.capacity()
+    );
+    let forwarded = loop {
+        match sample_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("forwarded samples")
+        {
+            AudioChunk::Samples(samples) if contains(&samples, 0.5) => break samples,
+            AudioChunk::Samples(_) => {}
+            AudioChunk::EndOfStream => panic!("no session end was requested"),
+        }
+    };
+    assert_eq!(forwarded, vec![0.5; 160]);
+
+    drop(control_tx);
+    drop(raw_tx);
+    pump.join().expect("pump exits");
+}
+
+#[test]
+fn stop_keeps_the_loopback_block_handed_over_after_stop() {
+    let harness = LoopbackHarness::new();
+    harness.start();
+    let generation = harness.session.generation.load(Ordering::Acquire);
+
+    harness.end_session();
+    // The callback that was mid-block when stop() ran hands it over only now.
+    harness.send(vec![0.25; 480], generation);
+    let recorded = harness.finish_stop();
+
+    assert!(contains(&recorded, 0.25), "the recording lost its tail");
+    harness.shutdown();
+}
+
+#[test]
+fn stop_waits_for_a_loopback_callback_still_in_flight() {
+    let harness = LoopbackHarness::new();
+    harness.start();
+    let generation = harness.session.generation.load(Ordering::Acquire);
+
+    harness.session.callback_busy.store(true, Ordering::SeqCst);
+    harness.end_session();
+    let raw_tx = harness.raw_sender();
+    let session = Arc::clone(&harness.session);
+    let callback = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(30));
+        raw_tx
+            .send(LoopbackChunk {
+                samples: vec![0.25; 480],
+                sample_rate: 16_000,
+                session_generation: generation,
+            })
+            .expect("in-flight block");
+        session.callback_busy.store(false, Ordering::SeqCst);
+    });
+    let recorded = harness.finish_stop();
+    callback.join().expect("callback exits");
+
+    assert!(
+        contains(&recorded, 0.25),
+        "the block in flight at stop was lost"
+    );
+    harness.shutdown();
+}
+
+/// A stop that times out waiting for its end-of-stream marker leaves that
+/// marker, and the session tail ahead of it, to arrive later. They must not
+/// end the next stop's drain early or be counted as the next recording.
+#[test]
+fn late_end_marker_from_a_timed_out_stop_does_not_cut_the_next_recording() {
+    let (sample_tx, sample_rx) = mpsc::channel();
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let consumer = thread::spawn(move || {
+        run_system_consumer(system_processor(16_000), sample_rx, cmd_rx);
+    });
+    let start = || {
+        let (ready_tx, _) = mpsc::channel();
+        cmd_tx
+            .send(Cmd::Start(VadPolicy::Disabled, Instant::now(), ready_tx))
+            .expect("start command");
+    };
+
+    start();
+    let (first_tx, first_rx) = mpsc::channel();
+    cmd_tx.send(Cmd::Stop(first_tx)).expect("first stop");
+    first_rx
+        .recv_timeout(SYSTEM_STOP_DRAIN_TIMEOUT + Duration::from_secs(1))
+        .expect("a timed-out stop still replies");
+
+    // The second recording is stopped before the first session's late tail
+    // and marker arrive, followed by its own audio and marker.
+    start();
+    let (second_tx, second_rx) = mpsc::channel();
+    cmd_tx.send(Cmd::Stop(second_tx)).expect("second stop");
+    sample_tx
+        .send(AudioChunk::Samples(vec![0.75; 480]))
+        .expect("late tail");
+    sample_tx
+        .send(AudioChunk::EndOfStream)
+        .expect("late marker");
+    sample_tx
+        .send(AudioChunk::Samples(vec![0.25; 480]))
+        .expect("second recording");
+    sample_tx
+        .send(AudioChunk::EndOfStream)
+        .expect("second marker");
+
+    let second = second_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("second stop replies");
+    assert!(
+        contains(&second, 0.25),
+        "the late marker ended the second recording's drain"
+    );
+    assert!(
+        !contains(&second, 0.75),
+        "the first session's tail was credited to the second recording"
+    );
+
+    cmd_tx.send(Cmd::Shutdown).expect("shutdown");
+    consumer.join().expect("consumer exits");
+}
+
+/// After upstream's pause-timeout early return the capture worker drops its
+/// streams and shuts the lane down while the recorder still holds its own
+/// senders. The lane must exit anyway, or the worker never finishes.
+#[test]
+fn system_lane_exits_while_the_recorder_still_holds_its_senders() {
+    let (sample_tx, sample_rx) = mpsc::channel();
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (_raw_tx, raw_rx) = mpsc::sync_channel(1);
+    let (buffer_tx, _buffer_rx) = mpsc::sync_channel(1);
+    let (pump_tx, pump_rx) = mpsc::channel();
+    let lane = spawn_system_audio_lane(
+        16_000,
+        None,
+        None,
+        sample_tx,
+        sample_rx,
+        cmd_rx,
+        raw_rx,
+        buffer_tx,
+        pump_rx,
+        Arc::new(SystemAudioSession::default()),
+    )
+    .expect("spawn lane");
+    let recorder_cmd_tx = cmd_tx.clone();
+    let recorder_pump_tx = pump_tx.clone();
+
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        lane.shut_down(&cmd_tx, &pump_tx);
+        let _ = done_tx.send(());
+    });
+    let finished = done_rx.recv_timeout(Duration::from_secs(1));
+
+    // Release a hung lane so a failure does not leak its threads.
+    drop(recorder_cmd_tx);
+    drop(recorder_pump_tx);
+    assert!(
+        finished.is_ok(),
+        "the lane waited for the recorder's senders to drop"
+    );
 }
