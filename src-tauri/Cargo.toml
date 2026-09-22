@@ -62,6 +62,7 @@ rdev = { git = "https://github.com/rustdesk-org/rdev" }
 # ALSA microphone capture. The optional dependencies are target-gated inside
 # CPAL, so enabling them here does not add Linux libraries to Windows/macOS.
 cpal = { version = "=0.18.2", features = ["pipewire", "pulseaudio"] }
+rtrb = "0.4.0"
 anyhow = "1.0.95"
 rubato = "0.16.2"
 hound = "3.5.1"
@@ -104,7 +105,7 @@ sha2 = "0.10"
 # transcribe-rs is now ONNX-only (Parakeet, Moonshine, SenseVoice, GigaAM,
 # Canary, Cohere). Per-platform backend features are added in the target tables.
 transcribe-rs = { version = "0.3.8", features = ["onnx"] }
-transcribe-cpp = { version = "0.2.0", default-features = false }
+transcribe-cpp = { version = "0.2.3", default-features = false }
 handy-keys = "0.3.4"
 ferrous-opencc = "0.2.3"
 clap = { version = "4", features = ["derive"] }
@@ -139,6 +140,10 @@ tauri-plugin-single-instance = "2.3.2"
 tauri-plugin-updater = "2.10.1"
 
 [target.'cfg(windows)'.dependencies]
+# Used to reach ICoreWebView2Settings3 through the webview's controller
+# (disabling browser accelerator keys in the main window). Must match the
+# version wry links against so the COM types are identical.
+webview2-com = "0.38"
 # ONNX Runtime on Windows is CPU-only (no ort-directml), matching macOS/Linux.
 # The DirectML EP was experimental and, more importantly, pulled in pyke's
 # prebuilt ONNX Runtime which is compiled with a global /arch:AVX2 baseline that
@@ -184,17 +189,17 @@ windows-native-keyring-store = "1.1"
 # signtool verify entirely. CI pins -DGGML_NATIVE=OFF (see build.yml) so the
 # static build targets a portable ARM baseline, not the build runner's CPU.
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
-transcribe-cpp = { version = "0.2.0", default-features = false, features = [
+transcribe-cpp = { version = "0.2.3", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }
 
 [target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
-transcribe-cpp = { version = "0.2.0", default-features = false }
+transcribe-cpp = { version = "0.2.3", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
-transcribe-cpp = { version = "0.2.0", default-features = false, features = ["metal"] }
+transcribe-cpp = { version = "0.2.3", default-features = false, features = ["metal"] }
 # Used by the receipt-sequenced ("reliable") paste path for lazy NSPasteboard
 # promises. Versions track what Tauri already pulls in.
 objc2 = "0.6"
@@ -215,7 +220,7 @@ gtk = "0.18"
 pulseaudio = "0.3.1"
 futures = "0.3"
 libc = "0.2"
-transcribe-cpp = { version = "0.2.0", default-features = false, features = [
+transcribe-cpp = { version = "0.2.3", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }

@@ -4,7 +4,7 @@
 //! docs/superpowers/plans/2026-08-26-assisted-notes-mode.md.
 //!
 //! The per-mode *resolver* (`apply_mode`, `resolve_settings`,
-//! `resolve_push_to_talk`) deliberately stays in `dictation.rs` rather than
+//! `resolve_shortcut_activation`) deliberately stays in `dictation.rs` rather than
 //! moving to a neutrally-named module here: `crate::shorthand::dictation::resolve_settings`
 //! is called from seven sites in upstream-owned files, and renaming the
 //! module would touch every one of them for no behavioural gain.

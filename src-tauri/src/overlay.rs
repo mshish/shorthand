@@ -18,10 +18,10 @@ use tauri::WebviewUrl;
 use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelBuilder, PanelLevel, StyleMask};
 
 #[cfg(target_os = "linux")]
-use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use crate::utils;
 
 #[cfg(target_os = "linux")]
-use std::env;
+use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 #[cfg(target_os = "macos")]
 tauri_panel! {
@@ -40,11 +40,14 @@ tauri_panel! {
 // where the card sits — only OVERLAY_TOP_OFFSET / OVERLAY_BOTTOM_OFFSET do. Keep
 // these in sync with the CSS card geometry.
 //
+// On Windows these sizes are additionally multiplied by the accessibility text
+// scale (see windows_text_scale_factor), which WebView2 applies as a zoom.
+//
 // Compact overlay (Minimal / transcribing / processing): the 40h pill animates
 // width from 172 (--ov-rest-w) to 216 (--ov-work-w) and expands from center, so
 // the window must fit the widest state plus a little slack.
 const OVERLAY_WIDTH: f64 = 256.0;
-const OVERLAY_HEIGHT: f64 = 46.0;
+const OVERLAY_HEIGHT: f64 = 50.0;
 
 // Actual is 394x118, just a little extra
 const OVERLAY_STREAM_WIDTH: f64 = 400.0;
@@ -137,26 +140,11 @@ fn configure_layer_shell_surface(
     gtk_window.resize(1, 1);
 }
 
-/// Returns true when the environment variable is set to a truthy value
-/// (e.g. "1", "true", "yes", "on").
-/// "0", "false", "no", "off" and empty string are treated as falsy (case-insensitive).
-/// Returns false when the variable is not set.
-#[cfg(target_os = "linux")]
-fn env_flag_enabled(name: &str) -> bool {
-    match env::var(name) {
-        Ok(v) => !matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "false" | "no" | "off"
-        ),
-        Err(_) => false,
-    }
-}
-
 /// Initializes GTK layer shell for Linux overlay window
 /// Returns true if layer shell was successfully initialized, false otherwise
 #[cfg(target_os = "linux")]
 fn init_gtk_layer_shell(overlay_window: &tauri::webview::WebviewWindow) -> bool {
-    if env_flag_enabled("HANDY_NO_GTK_LAYER_SHELL") {
+    if utils::env_flag_enabled("HANDY_NO_GTK_LAYER_SHELL") {
         debug!("Skipping GTK layer shell init (HANDY_NO_GTK_LAYER_SHELL is enabled)");
         return false;
     }
@@ -326,6 +314,18 @@ fn current_overlay_logical_size(window: &tauri::webview::WebviewWindow) -> Optio
 #[cfg(target_os = "windows")]
 static WINDOWS_OVERLAY_IS_STREAMING: AtomicBool = AtomicBool::new(false);
 
+/// Windows accessibility text size (Settings > Accessibility > Text size), a
+/// separate axis from display scaling that WebView2 applies as a document zoom.
+#[cfg(target_os = "windows")]
+fn windows_text_scale_factor() -> f64 {
+    // Absent until the user moves the slider off 100%; stored as a percentage.
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Accessibility")
+        .and_then(|key| key.get_value::<u32, _>("TextScaleFactor"))
+        .map(|percent| (percent as f64 / 100.0).clamp(1.0, 2.25))
+        .unwrap_or(1.0)
+}
+
 /// Overlay rectangle in the destination monitor's physical pixels, so nothing
 /// is converted through the window's previous-monitor DPI.
 #[cfg(target_os = "windows")]
@@ -333,12 +333,16 @@ fn windows_overlay_bounds(
     monitor_position: PhysicalPosition<i32>,
     monitor_size: PhysicalSize<u32>,
     scale: f64,
+    text_scale: f64,
     logical_width: f64,
     logical_height: f64,
     overlay_position: OverlayPosition,
 ) -> (i32, i32, i32, i32) {
-    let width = (logical_width * scale).round().max(1.0) as i32;
-    let height = (logical_height * scale).round().max(1.0) as i32;
+    // Grow the window with the text scale; offsets stay DPI-only since the
+    // card sits flush against the window's screen-edge side.
+    let content_scale = scale * text_scale;
+    let width = (logical_width * content_scale).round().max(1.0) as i32;
+    let height = (logical_height * content_scale).round().max(1.0) as i32;
     let x = (monitor_position.x as f64 + (monitor_size.width as f64 - width as f64) / 2.0).round()
         as i32;
     let y = match overlay_position {
@@ -367,10 +371,12 @@ fn place_windows_overlay(
 
     let monitor = get_monitor_with_cursor(app_handle)
         .ok_or_else(|| "failed to determine the monitor containing the cursor".to_string())?;
+    let text_scale = windows_text_scale_factor();
     let (x, y, width, height) = windows_overlay_bounds(
         *monitor.position(),
         *monitor.size(),
         monitor.scale_factor(),
+        text_scale,
         logical_width,
         logical_height,
         settings::get_settings(app_handle).overlay_position,
@@ -393,12 +399,13 @@ fn place_windows_overlay(
     }
 
     log::debug!(
-        "windows overlay bounds: x={} y={} width={} height={} scale={}",
+        "windows overlay bounds: x={} y={} width={} height={} scale={} text_scale={}",
         x,
         y,
         width,
         height,
-        monitor.scale_factor()
+        monitor.scale_factor(),
+        text_scale
     );
     Ok(())
 }
@@ -883,22 +890,24 @@ mod tests {
                 monitor_position,
                 monitor_size,
                 1.5,
+                1.0,
                 OVERLAY_WIDTH,
                 OVERLAY_HEIGHT,
                 OverlayPosition::Bottom,
             ),
-            (3648, 2031, 384, 69)
+            (3648, 2025, 384, 75)
         );
         assert_eq!(
             windows_overlay_bounds(
                 monitor_position,
                 monitor_size,
                 1.5,
+                1.0,
                 OVERLAY_WIDTH,
                 OVERLAY_HEIGHT,
                 OverlayPosition::Top,
             ),
-            (3648, 6, 384, 69)
+            (3648, 6, 384, 75)
         );
     }
 
@@ -910,6 +919,7 @@ mod tests {
                 PhysicalPosition::new(-2560, -200),
                 PhysicalSize::new(2560, 1440),
                 1.25,
+                1.0,
                 OVERLAY_STREAM_WIDTH,
                 OVERLAY_STREAM_HEIGHT,
                 OverlayPosition::Bottom,
@@ -943,5 +953,38 @@ mod tests {
         assert!(!overlay_events_enabled(OverlayStyle::None));
         assert!(overlay_events_enabled(OverlayStyle::Minimal));
         assert!(overlay_events_enabled(OverlayStyle::Live));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_overlay_bounds_grow_with_text_scale_without_moving_the_anchored_edge() {
+        let monitor_position = PhysicalPosition::new(-2560, -200);
+        let monitor_size = PhysicalSize::new(2560, 1440);
+
+        let (x, y, width, height) = windows_overlay_bounds(
+            monitor_position,
+            monitor_size,
+            1.25,
+            1.1,
+            OVERLAY_STREAM_WIDTH,
+            OVERLAY_STREAM_HEIGHT,
+            OverlayPosition::Bottom,
+        );
+        // 400x120 logical at 1.25 DPI x 1.1 text, still centered horizontally.
+        assert_eq!((x, y, width, height), (-1555, 1025, 550, 165));
+        // Bottom edge unchanged from the 1.0 case above (1040 + 150).
+        assert_eq!(y + height, 1190);
+
+        let (_, top_y, _, _) = windows_overlay_bounds(
+            monitor_position,
+            monitor_size,
+            1.25,
+            1.1,
+            OVERLAY_STREAM_WIDTH,
+            OVERLAY_STREAM_HEIGHT,
+            OverlayPosition::Top,
+        );
+        // Top offset rides the DPI scale alone, so the top edge doesn't move.
+        assert_eq!(top_y, -195);
     }
 }

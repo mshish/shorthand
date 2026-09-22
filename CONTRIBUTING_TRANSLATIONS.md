@@ -160,7 +160,7 @@ Some languages have complex plural rules. For now, use a general form that works
 
 ## Currently Supported Languages
 
-24 locales, listed in `src/i18n/languages.ts`. `bun run check:translations`
+26 locales, listed in `src/i18n/languages.ts`. `bun run check:translations`
 enforces key parity across all of them for upstream's catalogues, and
 `bun run check:fork-translations` does the same for the fork-only catalogues
 above — so "supported" means both files, not just this one.
@@ -191,6 +191,8 @@ above — so "supported" means both files, not just this one.
 | Nepali              | `ne`    | Complete                                                                                                                                                                                                                                                        |
 | Hindi               | `hi`    | Complete                                                                                                                                                                                                                                                        |
 | Danish              | `da`    | Complete                                                                                                                                                                                                                                                        |
+| Catalan             | `ca`    | Complete                                                                                                                                                                                                                                                        |
+| Indonesian          | `id`    | Complete                                                                                                                                                                                                                                                        |
 
 This table used to list 7 languages as complete and ask for help with Korean
 and Portuguese — both had already shipped by the time anyone re-read it.

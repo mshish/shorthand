@@ -904,23 +904,41 @@ impl TranscriptionManager {
             error: None,
         });
 
-        let model_info = self
-            .model_manager
-            .get_model_info(model_id)
-            .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+        let model_info = match self.model_manager.get_model_info(model_id) {
+            Some(model_info) => model_info,
+            None => {
+                let error_msg = format!("Model not found: {}", model_id);
+                self.emit_model_state(ModelStateEvent {
+                    event_type: "loading_failed".to_string(),
+                    model_id: Some(model_id.to_string()),
+                    model_name: None,
+                    error: Some(error_msg.clone()),
+                });
+                return Err(anyhow::anyhow!(error_msg));
+            }
+        };
 
-        if !model_info.is_downloaded {
-            let error_msg = "Model not downloaded";
+        // Every failure after loading starts must emit a terminal event so the
+        // frontend can never remain in its loading state.
+        let emit_loading_failed = |error_msg: &str| {
             self.emit_model_state(ModelStateEvent {
                 event_type: "loading_failed".to_string(),
                 model_id: Some(model_id.to_string()),
                 model_name: Some(model_info.name.clone()),
                 error: Some(error_msg.to_string()),
             });
+        };
+
+        if !model_info.is_downloaded {
+            let error_msg = "Model not downloaded";
+            emit_loading_failed(error_msg);
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let model_path = self.model_manager.get_model_path(model_id)?;
+        let model_path = self
+            .model_manager
+            .get_model_path(model_id)
+            .inspect_err(|error| emit_loading_failed(&error.to_string()))?;
 
         // Drop the current engine BEFORE building the new one so transcribe-cpp
         // frees the previous native context first — avoids holding two models at
@@ -936,14 +954,6 @@ impl TranscriptionManager {
         }
 
         // Create appropriate engine based on model type
-        let emit_loading_failed = |error_msg: &str| {
-            self.emit_model_state(ModelStateEvent {
-                event_type: "loading_failed".to_string(),
-                model_id: Some(model_id.to_string()),
-                model_name: Some(model_info.name.clone()),
-                error: Some(error_msg.to_string()),
-            });
-        };
 
         let loaded_engine = match model_info.engine_type {
             EngineType::TranscribeCpp => {
@@ -2108,10 +2118,6 @@ fn normalize_cjk_language(language: &str) -> &str {
     }
 }
 
-fn base_language_code(language: &str) -> &str {
-    language.split(&['-', '_'][..]).next().unwrap_or(language)
-}
-
 /// Resolve the persisted language intent into the language a specific model can
 /// use without writing the coerced value back to settings.
 fn effective_language_for_model(
@@ -2149,7 +2155,8 @@ fn resolve_output_language_evidence(
     if let Some(language) = applied_language_hint.filter(|lang| !lang.is_empty() && *lang != "auto")
     {
         if settings.selected_language != "auto"
-            && base_language_code(&settings.selected_language) == base_language_code(language)
+            && crate::managers::model::canonical_language_code(&settings.selected_language)
+                == crate::managers::model::canonical_language_code(language)
         {
             return OutputLanguageEvidence::UserSelected(language.to_string());
         }
@@ -2977,6 +2984,22 @@ mod tests {
             OutputLanguageEvidence::UserSelected("pt".to_string())
         );
         assert_eq!(result, "eu vi um carro");
+    }
+
+    #[test]
+    fn norwegian_alias_is_recorded_as_user_selected_evidence() {
+        let settings = AppSettings {
+            selected_language: "no".to_string(),
+            ..Default::default()
+        };
+
+        let evidence =
+            resolve_output_language_evidence(&settings, Some("nb"), &languages(&["nb"]), false);
+
+        assert_eq!(
+            evidence,
+            OutputLanguageEvidence::UserSelected("nb".to_string())
+        );
     }
 
     #[test]

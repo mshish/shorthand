@@ -3,7 +3,8 @@
 
 use super::mode::{self, Mode};
 use crate::settings::{
-    AppSettings, AutoSubmitKey, ClipboardHandling, OverlayStyle, PasteMethod, TypingTool,
+    AppSettings, AutoSubmitKey, ClipboardHandling, OverlayStyle, PasteMethod, ShortcutActivation,
+    TypingTool,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -98,17 +99,28 @@ impl Default for DictationSettings {
     }
 }
 
-/// Whether push-to-talk applies to `binding_id`'s capture. Read at dispatch
-/// time in `shortcut::handler::handle_shortcut_event`, before
-/// `TranscribeAction::start` runs — so, unlike every other resolver in this
-/// module, it cannot go through the mode cell (`mode::active` isn't updated
-/// for this press yet). It derives the mode from `binding_id` directly
-/// instead, the same way `mode::set_active` will a moment later.
-pub fn resolve_push_to_talk(settings: &AppSettings, binding_id: &str) -> bool {
+/// A per-mode push-to-talk switch expressed as upstream's shortcut
+/// activation: on holds, off toggles — the two behaviours the switch had
+/// before upstream added hold-or-toggle.
+fn activation_for_push_to_talk(push_to_talk: bool) -> ShortcutActivation {
+    if push_to_talk {
+        ShortcutActivation::PushToTalk
+    } else {
+        ShortcutActivation::Toggle
+    }
+}
+
+/// How the shortcut for `binding_id`'s capture starts and stops recording.
+/// Read at dispatch time in `shortcut::handler::handle_shortcut_event`,
+/// before `TranscribeAction::start` runs — so, unlike every other resolver in
+/// this module, it cannot go through the mode cell (`mode::active` isn't
+/// updated for this press yet). It derives the mode from `binding_id`
+/// directly instead, the same way `mode::set_active` will a moment later.
+pub fn resolve_shortcut_activation(settings: &AppSettings, binding_id: &str) -> ShortcutActivation {
     match mode::mode_for_binding(binding_id) {
-        Mode::Dictation => settings.dictation.push_to_talk,
-        Mode::AssistedNotes => settings.assisted_notes.push_to_talk,
-        Mode::Meeting => settings.push_to_talk,
+        Mode::Dictation => activation_for_push_to_talk(settings.dictation.push_to_talk),
+        Mode::AssistedNotes => activation_for_push_to_talk(settings.assisted_notes.push_to_talk),
+        Mode::Meeting => settings.shortcut_activation,
     }
 }
 
@@ -132,7 +144,7 @@ pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
         Mode::Dictation => {
             let dictation = settings.dictation.clone();
             AppSettings {
-                push_to_talk: dictation.push_to_talk,
+                shortcut_activation: activation_for_push_to_talk(dictation.push_to_talk),
                 paste_method: dictation.paste_method,
                 clipboard_handling: dictation.clipboard_handling,
                 auto_submit: dictation.auto_submit,
@@ -168,7 +180,7 @@ pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
         Mode::AssistedNotes => {
             let assisted = settings.assisted_notes.clone();
             AppSettings {
-                push_to_talk: assisted.push_to_talk,
+                shortcut_activation: activation_for_push_to_talk(assisted.push_to_talk),
                 // Not a field on AssistedNotesSettings. Delivering to follower
                 // processes instead of the focused window is what *defines* this
                 // mode, so "never paste" is an invariant of the mode rather than a
@@ -230,28 +242,31 @@ mod tests {
     }
 
     #[test]
-    fn resolve_push_to_talk_reads_the_matching_mode_field() {
+    fn resolve_shortcut_activation_reads_the_matching_mode_field() {
         let mut settings = crate::settings::get_default_settings();
-        settings.push_to_talk = false;
+        settings.shortcut_activation = ShortcutActivation::HoldOrToggle;
         settings.dictation.push_to_talk = true;
-
-        assert!(!resolve_push_to_talk(&settings, "transcribe"));
-        assert!(!resolve_push_to_talk(&settings, "cancel"));
-        assert!(resolve_push_to_talk(&settings, "dictate"));
-        assert!(resolve_push_to_talk(&settings, "dictate_with_post_process"));
-
         settings.assisted_notes.push_to_talk = false;
-        assert!(!resolve_push_to_talk(&settings, "assisted_notes"));
-        assert!(!resolve_push_to_talk(
-            &settings,
-            "assisted_notes_with_post_process"
-        ));
+
+        let resolve = |binding| resolve_shortcut_activation(&settings, binding);
+        assert_eq!(resolve("transcribe"), ShortcutActivation::HoldOrToggle);
+        assert_eq!(resolve("cancel"), ShortcutActivation::HoldOrToggle);
+        assert_eq!(resolve("dictate"), ShortcutActivation::PushToTalk);
+        assert_eq!(
+            resolve("dictate_with_post_process"),
+            ShortcutActivation::PushToTalk
+        );
+        assert_eq!(resolve("assisted_notes"), ShortcutActivation::Toggle);
+        assert_eq!(
+            resolve("assisted_notes_with_post_process"),
+            ShortcutActivation::Toggle
+        );
     }
 
     #[test]
     fn apply_mode_leaves_every_field_unchanged_for_meeting() {
         let mut settings = crate::settings::get_default_settings();
-        settings.push_to_talk = false;
+        settings.shortcut_activation = ShortcutActivation::HoldOrToggle;
         settings.paste_method = PasteMethod::CtrlV;
         settings.clipboard_handling = ClipboardHandling::CopyToClipboard;
         settings.auto_submit = true;
@@ -304,7 +319,7 @@ mod tests {
 
         let result = apply_mode(settings, Mode::Meeting);
 
-        assert!(!result.push_to_talk);
+        assert_eq!(result.shortcut_activation, ShortcutActivation::HoldOrToggle);
         assert_eq!(result.paste_method, PasteMethod::CtrlV);
         assert_eq!(
             result.clipboard_handling,
@@ -339,7 +354,7 @@ mod tests {
         let mut settings = crate::settings::get_default_settings();
         settings.dictation.enabled = true;
         settings.selected_model = "whisper-large-v3-turbo".to_string();
-        settings.push_to_talk = false;
+        settings.shortcut_activation = ShortcutActivation::HoldOrToggle;
         settings.paste_method = PasteMethod::None;
         settings.clipboard_handling = ClipboardHandling::DontModify;
         settings.auto_submit = false;
@@ -382,7 +397,7 @@ mod tests {
 
         let result = apply_mode(settings, Mode::Dictation);
 
-        assert!(result.push_to_talk);
+        assert_eq!(result.shortcut_activation, ShortcutActivation::PushToTalk);
         assert_eq!(result.paste_method, PasteMethod::CtrlV);
         assert_eq!(
             result.clipboard_handling,
@@ -427,7 +442,7 @@ mod tests {
         let mut settings = crate::settings::get_default_settings();
         settings.assisted_notes.enabled = true;
         settings.selected_model = "whisper-large-v3-turbo".to_string();
-        settings.push_to_talk = true;
+        settings.shortcut_activation = ShortcutActivation::HoldOrToggle;
         settings.paste_method = PasteMethod::CtrlV;
         settings.clipboard_handling = ClipboardHandling::DontModify;
         settings.append_trailing_space = false;
@@ -456,7 +471,7 @@ mod tests {
 
         let result = apply_mode(settings, Mode::AssistedNotes);
 
-        assert!(!result.push_to_talk);
+        assert_eq!(result.shortcut_activation, ShortcutActivation::Toggle);
         // Never pastes, regardless of the top-level Advanced escape hatch.
         assert_eq!(result.paste_method, PasteMethod::None);
         assert_eq!(
