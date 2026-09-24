@@ -1704,6 +1704,13 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
+        if self.wait_for_leased_engine() == EngineAvailability::Leased {
+            return Err(anyhow::anyhow!(
+                "Timed out waiting {:?} for live transcription to release the model",
+                STREAM_FINALIZE_REPLY_TIMEOUT
+            ));
+        }
+
         // Check if model is loaded, if not try to load it
         {
             // If the model is loading, wait for it to complete.
@@ -2367,6 +2374,78 @@ fn cpp_translation_task(
 /// finalizes or cancels. Used when streaming can't actually run (model not
 /// loaded / not streaming-capable) so the finalize handshake still completes
 /// and the caller falls back to batch transcription.
+/// What batch transcription finds in the engine slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineAvailability {
+    Ready,
+    /// The slot is empty because a live-preview stream worker holds the
+    /// engine on lease and has not returned it yet.
+    Leased,
+    /// Empty with no lease: not loaded (or still loading).
+    Absent,
+}
+
+/// Re-probes while the engine is `Leased`, up to `limit`, and returns the
+/// last state seen. Any other state returns at once.
+fn wait_while_engine_leased(
+    mut probe: impl FnMut() -> EngineAvailability,
+    limit: Duration,
+    poll: Duration,
+) -> EngineAvailability {
+    let deadline = Instant::now() + limit;
+    loop {
+        let state = probe();
+        if state != EngineAvailability::Leased || Instant::now() >= deadline {
+            return state;
+        }
+        thread::sleep(poll);
+    }
+}
+
+impl TranscriptionManager {
+    fn engine_availability(&self) -> EngineAvailability {
+        if self.lock_engine().is_some() {
+            EngineAvailability::Ready
+        } else if self.active_engine_lease.load(Ordering::Acquire) != 0 {
+            EngineAvailability::Leased
+        } else {
+            EngineAvailability::Absent
+        }
+    }
+
+    /// Batch transcription runs after a stream's finalize, but a stream whose
+    /// finalize timed out keeps its worker, and that worker keeps the engine
+    /// until its own finalize completes. That happens on a cold GPU, where the
+    /// first stream compute can take far longer than the 30 s finalize wait.
+    /// The next recording then found the slot empty and failed with "Model is
+    /// not loaded". Wait for the worker to hand the engine back instead,
+    /// bounded like the finalize wait. The wait is entered only while the
+    /// engine is leased, so no other path is delayed.
+    fn wait_for_leased_engine(&self) -> EngineAvailability {
+        let initial = self.engine_availability();
+        if initial != EngineAvailability::Leased {
+            return initial;
+        }
+        info!(
+            "Live transcription still holds the model; waiting up to {:?} for it",
+            STREAM_FINALIZE_REPLY_TIMEOUT
+        );
+        let started = Instant::now();
+        let state = wait_while_engine_leased(
+            || self.engine_availability(),
+            STREAM_FINALIZE_REPLY_TIMEOUT,
+            Duration::from_millis(50),
+        );
+        if state != EngineAvailability::Leased {
+            info!(
+                "Live transcription released the model after {:?}",
+                started.elapsed()
+            );
+        }
+        state
+    }
+}
+
 fn drain_until_finalize(rx: mpsc::Receiver<StreamCmd>) {
     while let Ok(cmd) = rx.recv() {
         match cmd {
@@ -2696,6 +2775,55 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leased_engine_wait_returns_at_once_unless_leased() {
+        for state in [EngineAvailability::Ready, EngineAvailability::Absent] {
+            let mut probes = 0;
+            let result = wait_while_engine_leased(
+                || {
+                    probes += 1;
+                    state
+                },
+                Duration::from_secs(30),
+                Duration::from_millis(1),
+            );
+            assert_eq!(result, state);
+            assert_eq!(probes, 1, "{state:?} must not wait");
+        }
+    }
+
+    #[test]
+    fn leased_engine_wait_proceeds_once_the_worker_returns_the_engine() {
+        let mut probes = 0;
+        let result = wait_while_engine_leased(
+            || {
+                probes += 1;
+                if probes < 4 {
+                    EngineAvailability::Leased
+                } else {
+                    EngineAvailability::Ready
+                }
+            },
+            Duration::from_secs(30),
+            Duration::from_millis(1),
+        );
+        assert_eq!(result, EngineAvailability::Ready);
+        assert_eq!(probes, 4);
+    }
+
+    #[test]
+    fn leased_engine_wait_gives_up_at_its_bound() {
+        let started = Instant::now();
+        let result = wait_while_engine_leased(
+            || EngineAvailability::Leased,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+        );
+        assert_eq!(result, EngineAvailability::Leased);
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     /// A thread shaped like the idle watcher's loop: parks for 10 s between
     /// ticks and exits once the signal is set.

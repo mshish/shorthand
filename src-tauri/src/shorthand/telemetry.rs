@@ -362,6 +362,11 @@ pub fn transcription_reason(err: &str) -> &'static str {
     let err = err.to_lowercase();
     if err.contains("panicked") {
         "engine_panic"
+    } else if err.contains("release the model") {
+        // Before "timed out": this message also contains it.
+        "engine_busy"
+    } else if err.contains("model is not loaded") {
+        "model_not_loaded"
     } else if err.contains("timed out") {
         "finalize_timeout"
     } else if err.contains("transcription failed") {
@@ -500,6 +505,17 @@ mod tests {
         assert_eq!(
             transcription_reason("transcription failed: no audio"),
             "engine_error"
+        );
+        assert_eq!(
+            transcription_reason(
+                "Timed out waiting 30s for live transcription to release the model"
+            ),
+            "engine_busy",
+            "a timeout waiting for the engine is not a finalize timeout"
+        );
+        assert_eq!(
+            transcription_reason("Model is not loaded for transcription."),
+            "model_not_loaded"
         );
         assert_eq!(transcription_reason("something else entirely"), "other");
     }
