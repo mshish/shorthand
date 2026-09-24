@@ -636,6 +636,46 @@ pub fn transcription_managers(app: &AppHandle) -> Vec<Arc<TranscriptionManager>>
     managers
 }
 
+/// Stops the idle watcher of every transcription manager that exists, whether
+/// or not its lane is in service. Called from the `RunEvent::Exit` handler.
+///
+/// Tauri clears the resource table right after that handler returns (see
+/// `App::run`), which frees the settings store. A watcher tick that lands
+/// after that point panics in `get_settings`'s `expect("Failed to
+/// initialize store")`, and `Drop` never stops the watcher at exit because
+/// the watcher holds its own clone of the manager. Joining here, while the
+/// store still exists, guarantees no tick can outlive it.
+pub fn stop_idle_watchers(app: &AppHandle) {
+    if let Some(primary) = app.try_state::<Arc<TranscriptionManager>>() {
+        primary.stop_idle_watcher();
+    }
+    if let Some(system) = app.try_state::<SystemAudioTranscription>() {
+        let manager = system.0.lock().ok().and_then(|slot| slot.clone());
+        if let Some(manager) = manager {
+            manager.stop_idle_watcher();
+        }
+    }
+}
+
+/// Signals a parked idle watcher to stop, wakes it, and waits for it to exit.
+/// A no-op once the watcher is gone, so it is safe to call more than once.
+fn stop_watcher_thread(
+    shutdown_signal: &AtomicBool,
+    watcher_handle: &Mutex<Option<thread::JoinHandle<()>>>,
+) {
+    shutdown_signal.store(true, Ordering::Relaxed);
+    let handle = match watcher_handle.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    };
+    if let Some(handle) = handle {
+        handle.thread().unpark();
+        if let Err(e) = handle.join() {
+            warn!("Failed to join idle watcher thread: {:?}", e);
+        }
+    }
+}
+
 fn model_ids_match<I>(model_ids: I) -> bool
 where
     I: IntoIterator<Item = Option<String>>,
@@ -706,7 +746,9 @@ impl TranscriptionManager {
             let handle = thread::spawn(move || {
                 debug!("Idle watcher thread started");
                 while !shutdown_signal.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_secs(10)); // Check every 10 seconds
+                    // Check every 10 seconds. Parked rather than slept so
+                    // `stop_idle_watcher` can wake it at once.
+                    thread::park_timeout(Duration::from_secs(10));
 
                     // Check shutdown signal again after sleep
                     if shutdown_signal.load(Ordering::Relaxed) {
@@ -2609,6 +2651,13 @@ pub fn get_available_accelerators() -> AvailableAccelerators {
     }
 }
 
+impl TranscriptionManager {
+    /// Stops this manager's idle watcher now; see [`stop_idle_watchers`].
+    pub fn stop_idle_watcher(&self) {
+        stop_watcher_thread(&self.shutdown_signal, &self.watcher_handle);
+    }
+}
+
 impl Drop for TranscriptionManager {
     fn drop(&mut self) {
         // Skip shutdown unless this is the very last clone. TranscriptionManager
@@ -2647,6 +2696,50 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A thread shaped like the idle watcher's loop: parks for 10 s between
+    /// ticks and exits once the signal is set.
+    fn spawn_parked_watcher(
+        shutdown_signal: Arc<AtomicBool>,
+        ticks: Arc<AtomicU64>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            while !shutdown_signal.load(Ordering::Relaxed) {
+                thread::park_timeout(Duration::from_secs(10));
+                if shutdown_signal.load(Ordering::Relaxed) {
+                    break;
+                }
+                ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    }
+
+    #[test]
+    fn stopping_the_idle_watcher_wakes_it_instead_of_waiting_out_its_sleep() {
+        let shutdown_signal = Arc::new(AtomicBool::new(false));
+        let ticks = Arc::new(AtomicU64::new(0));
+        let watcher_handle = Mutex::new(Some(spawn_parked_watcher(
+            Arc::clone(&shutdown_signal),
+            Arc::clone(&ticks),
+        )));
+        // Let it reach the park.
+        thread::sleep(Duration::from_millis(50));
+
+        let started = Instant::now();
+        stop_watcher_thread(&shutdown_signal, &watcher_handle);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "stop must not wait out the 10 s park (took {:?})",
+            started.elapsed()
+        );
+        assert!(watcher_handle.lock().unwrap().is_none());
+        // Joined: it can never tick (and so never read settings) again.
+        assert_eq!(ticks.load(Ordering::Relaxed), 0);
+
+        // Exit calls it, and Drop may follow: a second stop is a no-op.
+        stop_watcher_thread(&shutdown_signal, &watcher_handle);
+    }
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
