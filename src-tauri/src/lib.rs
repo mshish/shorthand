@@ -1337,6 +1337,10 @@ pub fn run(cli_args: CliArgs) {
                 // tasks, so a follower may observe EOF instead of this cancel.
                 hub.cancel_active();
             }
+            // Before the unloads, and before this handler returns: Tauri
+            // frees the settings store as soon as it does, and a watcher
+            // tick after that panics (see `stop_idle_watchers`).
+            managers::transcription::stop_idle_watchers(app);
             for tm in transcription_managers(app) {
                 let _ = tm.unload_model();
             }
