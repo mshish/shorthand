@@ -1,6 +1,7 @@
 use crate::actions::ACTION_MAP;
 use crate::follow_stream::FollowMode;
 use crate::managers::audio::AudioRecordingManager;
+use crate::settings::ShortcutActivation;
 use crate::shorthand::capture_command::{self, CaptureState};
 use crate::shorthand::mode::{self, Mode};
 use log::{debug, error, warn};
@@ -20,10 +21,20 @@ enum PttAction {
     CancelRelease,
 }
 
+/// A key-up deferred by `RELEASE_GRACE` so a synthesized X11 auto-repeat
+/// press can cancel it (#1539). When the grace elapses the hold is resolved
+/// by [`CoordinatorState::finish_hold`] (recording) or
+/// [`CoordinatorState::finish_pending_hold`] (press remembered while busy).
 struct PendingRelease {
     binding_id: String,
     hotkey_string: String,
     deadline: Instant,
+    /// When the key actually went up. The hold duration is measured to this
+    /// instant, not to the grace expiry.
+    released_at: Instant,
+    /// Holds at least this long stop recording; shorter ones lock it on.
+    /// Push-to-talk passes zero so every release stops.
+    hold_threshold: Duration,
 }
 
 /// A press that arrived while the pipeline was still busy processing the
@@ -33,36 +44,81 @@ struct PendingRelease {
 struct PendingPress {
     binding_id: String,
     hotkey_string: String,
+    /// The real key-down time, so a hold that straddles the drain is still
+    /// measured from when the user pressed, not from when recording began.
+    pressed_at: Instant,
+    /// The recording will start locked on when the pipeline drains: set from
+    /// the start for toggle, and for hold-or-toggle once the key came back up
+    /// within the threshold (a tap). An unlocked pending press is a key we
+    /// believe is still held.
+    locked: bool,
+}
+
+impl PendingPress {
+    fn remembered(&self) -> Remembered {
+        if self.locked {
+            Remembered::Locked
+        } else {
+            Remembered::Held
+        }
+    }
+}
+
+/// What kind of press is already waiting for the pipeline to drain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Remembered {
+    /// The key is still down as far as we know.
+    Held,
+    /// A toggle press or a classified tap: it will start a locked session.
+    Locked,
+}
+
+/// Bookkeeping for the key press that started the current recording.
+struct Hold {
+    pressed_at: Instant,
+    /// Recording outlives the key: the next press stops it, releases are
+    /// ignored. Always set for toggle; set for hold-or-toggle once a release
+    /// has been classified as a tap.
+    locked: bool,
 }
 
 /// What to do with an input that arrives while the pipeline is busy
-/// (`Stage::Processing`). `remembered` is whether a press for the same binding
-/// is already waiting for the pipeline to drain.
+/// (`Stage::Processing`). `remembered` is the press for the same binding
+/// already waiting for the pipeline to drain, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BusyAction {
     /// Ignore the input entirely.
     Ignore,
     /// Remember the press; start recording when the pipeline finishes.
     Remember,
-    /// This input cancels a previously remembered press (toggle parity: two
-    /// presses during one busy window net to no-op; PTT: the key was already
-    /// released, so the remembered press must not fire).
+    /// This press cancels a previously remembered press: two presses during
+    /// one busy window net to no-op, exactly as a press stops a locked
+    /// session once recording.
     Forget,
 }
 
-fn classify_busy_input(is_pressed: bool, push_to_talk: bool, remembered: bool) -> BusyAction {
-    match (push_to_talk, is_pressed) {
+fn classify_busy_input(
+    is_pressed: bool,
+    mode: ShortcutActivation,
+    remembered: Option<Remembered>,
+) -> BusyAction {
+    use ShortcutActivation::*;
+    match (mode, is_pressed, remembered) {
         // Toggle: presses alternate remember/forget to preserve parity.
-        (false, true) if remembered => BusyAction::Forget,
-        (false, true) => BusyAction::Remember,
+        (Toggle, true, Some(_)) => BusyAction::Forget,
+        (Toggle, true, None) => BusyAction::Remember,
         // Toggle mode ignores releases.
-        (false, false) => BusyAction::Ignore,
-        // PTT: a press while busy means the user is holding the key — start as
-        // soon as the pipeline drains. A release while busy means the tap is
-        // already over; forget the remembered press (or ignore if none).
-        (true, true) => BusyAction::Remember,
-        (true, false) if remembered => BusyAction::Forget,
-        (true, false) => BusyAction::Ignore,
+        (Toggle, false, _) => BusyAction::Ignore,
+        // Hold modes: a press while busy means the user is holding the key —
+        // start as soon as the pipeline drains. A press on a queued tap stops
+        // it (parity); a press while the key is already down is a repeat.
+        (PushToTalk | HoldOrToggle, true, None) => BusyAction::Remember,
+        (PushToTalk | HoldOrToggle, true, Some(Remembered::Locked)) => BusyAction::Forget,
+        (PushToTalk | HoldOrToggle, true, Some(Remembered::Held)) => BusyAction::Ignore,
+        // Releases of a held pending press are deferred by the grace window
+        // before reaching here and resolved by `finish_pending_hold`; any
+        // other release (no press remembered, or already locked) is noise.
+        (PushToTalk | HoldOrToggle, false, _) => BusyAction::Ignore,
     }
 }
 
@@ -118,11 +174,24 @@ struct InputEvent {
     binding_id: String,
     hotkey_string: String,
     is_pressed: bool,
-    push_to_talk: bool,
+    mode: ShortcutActivation,
+    /// Hold-or-toggle: minimum press duration that counts as a hold.
+    hold_threshold: Duration,
     /// External triggers (SIGUSR2, CLI flags) rather than physical keys.
     /// They fire on every edge by design and must never be debounced —
     /// dropping one desyncs toggle parity and wedges recording on.
     external: bool,
+}
+
+impl InputEvent {
+    /// The hold duration at or above which a release stops recording.
+    fn effective_hold_threshold(&self) -> Duration {
+        match self.mode {
+            ShortcutActivation::HoldOrToggle => self.hold_threshold,
+            // Every release stops; toggle never defers releases at all.
+            ShortcutActivation::PushToTalk | ShortcutActivation::Toggle => Duration::ZERO,
+        }
+    }
 }
 
 /// A side effect decided by [`CoordinatorState`]; the coordinator thread is
@@ -228,14 +297,20 @@ enum Command {
     },
 }
 
+/// Decide whether a key-up should be deferred (so auto-repeat can cancel it)
+/// or a key-down cancels a deferred release. `hold_to_talk` is whether a
+/// release currently ends the session: true for push-to-talk and for an
+/// unlocked hold-or-toggle session, false for toggle and a locked session.
+/// `held_binding` is the binding whose key we believe is down — the one
+/// recording, or the one remembered while the pipeline is busy.
 fn classify_ptt_event(
     pending_release_binding: Option<&str>,
     is_pressed: bool,
-    push_to_talk: bool,
+    hold_to_talk: bool,
     binding_id: &str,
-    recording_binding: Option<&str>,
+    held_binding: Option<&str>,
 ) -> PttAction {
-    if !push_to_talk {
+    if !hold_to_talk {
         return PttAction::Passthrough;
     }
 
@@ -245,19 +320,28 @@ fn classify_ptt_event(
         } else {
             PttAction::Passthrough
         }
-    } else if recording_binding == Some(binding_id) && pending_release_binding.is_none() {
+    } else if held_binding == Some(binding_id) && pending_release_binding.is_none() {
         PttAction::DeferRelease
     } else {
         PttAction::Passthrough
     }
 }
 
-/// Pure lifecycle state machine: owns every transition decision (PTT grace,
-/// debounce, busy-pipeline remember/forget, cancel, drain). Produces
-/// [`Effect`]s instead of touching the app, so unit tests exercise the real
-/// production logic.
+/// Pure lifecycle state machine: owns every transition decision (release
+/// grace, hold-vs-tap classification, debounce, busy-pipeline
+/// remember/forget, cancel, drain). Produces [`Effect`]s instead of touching
+/// the app, so unit tests exercise the real production logic.
+///
+/// All three activation modes run through one machine. A recording starts on
+/// key-down in every mode; what differs is how it ends:
+///
+/// * push-to-talk — every release stops (hold threshold of zero)
+/// * toggle — releases are ignored, the next press stops (locked from the start)
+/// * hold-or-toggle — a release after a long hold stops; a release after a
+///   short tap locks the session, and the next press stops
 struct CoordinatorState {
     stage: Stage,
+    hold: Option<Hold>,
     last_press: Option<Instant>,
     pending_release: Option<PendingRelease>,
     pending_press: Option<PendingPress>,
@@ -267,6 +351,7 @@ impl CoordinatorState {
     fn new() -> Self {
         Self {
             stage: Stage::Idle,
+            hold: None,
             last_press: None,
             pending_release: None,
             pending_press: None,
@@ -278,22 +363,31 @@ impl CoordinatorState {
         self.pending_release.as_ref().map(|p| p.deadline)
     }
 
+    /// Whether the current session (recording, or remembered for the drain)
+    /// outlives the key, so releases are ignored and the next press ends it.
+    fn is_locked(&self) -> bool {
+        self.hold.as_ref().is_some_and(|h| h.locked)
+            || self.pending_press.as_ref().is_some_and(|p| p.locked)
+    }
+
     fn on_input(&mut self, input: InputEvent, now: Instant) -> Option<Effect> {
         let pending_release_binding = self
             .pending_release
             .as_ref()
             .map(|pending| pending.binding_id.as_str());
-        let recording_binding = match &self.stage {
+        let held_binding = match &self.stage {
             Stage::Recording { binding_id, .. } => Some(binding_id.as_str()),
-            _ => None,
+            Stage::Processing { .. } => self.pending_press.as_ref().map(|p| p.binding_id.as_str()),
+            Stage::Idle => None,
         };
+        let hold_to_talk = input.mode != ShortcutActivation::Toggle && !self.is_locked();
 
         match classify_ptt_event(
             pending_release_binding,
             input.is_pressed,
-            input.push_to_talk,
+            hold_to_talk,
             &input.binding_id,
-            recording_binding,
+            held_binding,
         ) {
             PttAction::CancelRelease => {
                 self.pending_release = None;
@@ -301,9 +395,11 @@ impl CoordinatorState {
             }
             PttAction::DeferRelease => {
                 self.pending_release = Some(PendingRelease {
+                    hold_threshold: input.effective_hold_threshold(),
                     binding_id: input.binding_id,
                     hotkey_string: input.hotkey_string,
                     deadline: now + RELEASE_GRACE,
+                    released_at: now,
                 });
                 return None;
             }
@@ -311,7 +407,7 @@ impl CoordinatorState {
         }
 
         // Debounce rapid-fire press events (key repeat / double-tap).
-        // Push-to-talk releases may be deferred above to absorb X11 auto-repeat.
+        // Releases in the hold modes are deferred above to absorb X11 auto-repeat.
         // External triggers are exempt: each one is a deliberate edge from the
         // user's own integration, and dropping it desyncs toggle parity.
         if input.is_pressed && !input.external {
@@ -342,16 +438,19 @@ impl CoordinatorState {
                     return None;
                 }
             }
-            let remembered = self.pending_press.is_some();
-            match classify_busy_input(input.is_pressed, input.push_to_talk, remembered) {
+            let remembered = self.pending_press.as_ref().map(|p| p.remembered());
+            match classify_busy_input(input.is_pressed, input.mode, remembered) {
                 BusyAction::Remember => {
                     debug!(
                         "Remembering press for '{}': pipeline busy",
                         input.binding_id
                     );
                     self.pending_press = Some(PendingPress {
+                        // Toggle never ends on a release: locked from the start.
+                        locked: input.mode == ShortcutActivation::Toggle,
                         binding_id: input.binding_id,
                         hotkey_string: input.hotkey_string,
+                        pressed_at: now,
                     });
                 }
                 BusyAction::Forget => {
@@ -365,45 +464,126 @@ impl CoordinatorState {
             return None;
         }
 
-        if input.push_to_talk {
-            if input.is_pressed {
-                if matches!(self.stage, Stage::Idle) {
-                    // Hotkey/PTT path: nobody asked for a stream, so there is
-                    // no pre-decided publication value to carry -- `None`
-                    // lets `actions.rs` resolve it itself, same as always.
-                    return Some(self.begin_recording(input.binding_id, input.hotkey_string, None));
-                }
-            } else if matches!(&self.stage, Stage::Recording { binding_id, .. } if binding_id == &input.binding_id)
-            {
-                return Some(self.begin_processing(input.binding_id, input.hotkey_string));
-            }
-        } else if input.is_pressed {
+        if input.is_pressed {
             match &self.stage {
                 Stage::Idle => {
-                    return Some(self.begin_recording(input.binding_id, input.hotkey_string, None));
+                    // Toggle never ends on a release: locked from the start.
+                    let locked = input.mode == ShortcutActivation::Toggle;
+                    // Hotkey path: nobody asked for a stream, so there is no
+                    // pre-decided publication value to carry -- `None` lets
+                    // `run_effect` resolve it, same as always.
+                    return Some(self.begin_recording(
+                        input.binding_id,
+                        input.hotkey_string,
+                        now,
+                        locked,
+                        None,
+                    ));
                 }
                 Stage::Recording { binding_id, .. } if binding_id == &input.binding_id => {
-                    return Some(self.begin_processing(input.binding_id, input.hotkey_string));
+                    // A locked session ends on the next press. In toggle mode
+                    // every press ends it, even if the recording began under a
+                    // hold mode (the setting changed mid-recording) — otherwise
+                    // nothing but Escape could stop it.
+                    if self.is_locked() || input.mode == ShortcutActivation::Toggle {
+                        return Some(self.begin_processing(input.binding_id, input.hotkey_string));
+                    }
+                    // The key is still held (its release will end this
+                    // recording), so a repeated press means nothing.
+                    debug!("Ignoring press for '{}': key is held", input.binding_id);
                 }
                 _ => debug!(
                     "Ignoring press for '{}': another binding is recording",
                     input.binding_id
                 ),
             }
+        } else if hold_to_talk
+            && matches!(&self.stage, Stage::Recording { binding_id, .. } if binding_id == &input.binding_id)
+        {
+            // A release that was not deferred (one is already pending for this
+            // binding): resolve it immediately rather than dropping it.
+            let threshold = input.effective_hold_threshold();
+            return self.finish_hold(input.binding_id, input.hotkey_string, now, threshold);
         }
         None
     }
 
     /// The `RELEASE_GRACE` window elapsed with no cancelling press arriving:
-    /// fire the deferred release iff we are still recording that binding.
+    /// resolve the deferred release against whatever that binding's key was
+    /// holding — the live recording, or a press remembered while busy.
     fn on_grace_expired(&mut self) -> Option<Effect> {
         let pending = self.pending_release.take()?;
-        if matches!(&self.stage, Stage::Recording { binding_id, .. } if binding_id == &pending.binding_id)
-        {
-            Some(self.begin_processing(pending.binding_id, pending.hotkey_string))
-        } else {
-            None
+        match &self.stage {
+            Stage::Recording { binding_id, .. } if *binding_id == pending.binding_id => self
+                .finish_hold(
+                    pending.binding_id,
+                    pending.hotkey_string,
+                    pending.released_at,
+                    pending.hold_threshold,
+                ),
+            Stage::Processing { .. } => {
+                self.finish_pending_hold(&pending);
+                None
+            }
+            _ => None,
         }
+    }
+
+    /// A press remembered while the pipeline was busy has been released for
+    /// real, still before the drain. A completed hold has nothing left to
+    /// start; a tap queues a locked session so the drain starts it — the
+    /// same hold-vs-tap rule as [`CoordinatorState::finish_hold`].
+    fn finish_pending_hold(&mut self, release: &PendingRelease) {
+        let Some(pending) = self
+            .pending_press
+            .as_mut()
+            .filter(|p| p.binding_id == release.binding_id)
+        else {
+            return;
+        };
+        let held = release
+            .released_at
+            .saturating_duration_since(pending.pressed_at);
+        if held < release.hold_threshold {
+            debug!(
+                "Tap ({held:?}) for '{}' while busy: will start locked on when the pipeline drains",
+                release.binding_id
+            );
+            pending.locked = true;
+        } else {
+            debug!(
+                "Forgetting remembered press for '{}': released after a {held:?} hold while busy",
+                release.binding_id
+            );
+            self.pending_press = None;
+        }
+    }
+
+    /// The key that started the current recording has been released for real.
+    /// A hold at least `threshold` long stops recording; anything shorter was a
+    /// tap, which locks the session on until the next press.
+    fn finish_hold(
+        &mut self,
+        binding_id: String,
+        hotkey_string: String,
+        released_at: Instant,
+        threshold: Duration,
+    ) -> Option<Effect> {
+        let held = self
+            .hold
+            .as_ref()
+            .map(|h| released_at.saturating_duration_since(h.pressed_at))
+            // No hold bookkeeping means we cannot tell a tap from a hold;
+            // stopping is the safe reading (it is what push-to-talk always did).
+            .unwrap_or(Duration::MAX);
+        if held >= threshold {
+            return Some(self.begin_processing(binding_id, hotkey_string));
+        }
+        if let Some(hold) = &mut self.hold {
+            debug!("Tap ({held:?}) for '{binding_id}': recording locked on until the next press");
+            hold.locked = true;
+        }
+        None
     }
 
     fn on_cancel(&mut self, recording_was_active: bool) {
@@ -416,6 +596,7 @@ impl CoordinatorState {
             && (recording_was_active || matches!(self.stage, Stage::Recording { .. }))
         {
             self.stage = Stage::Idle;
+            self.hold = None;
         }
     }
 
@@ -462,14 +643,21 @@ impl CoordinatorState {
 
     fn on_processing_finished(&mut self) -> Option<Effect> {
         self.stage = Stage::Idle;
+        self.hold = None;
         let pending = self.pending_press.take()?;
         debug!(
             "Pipeline drained; starting remembered press for '{}'",
             pending.binding_id
         );
-        // A remembered hotkey/PTT press, replayed once the pipeline drains --
+        // A remembered hotkey press, replayed once the pipeline drains --
         // still no pre-decided publication value. See `Effect::Start`.
-        Some(self.begin_recording(pending.binding_id, pending.hotkey_string, None))
+        Some(self.begin_recording(
+            pending.binding_id,
+            pending.hotkey_string,
+            pending.pressed_at,
+            pending.locked,
+            None,
+        ))
     }
 
     /// Reconcile the optimistic `Stage::Recording` after the executor reports
@@ -515,6 +703,7 @@ impl CoordinatorState {
             None
         } else {
             self.stage = Stage::Idle;
+            self.hold = None;
             publication_session
         }
     }
@@ -562,6 +751,7 @@ impl CoordinatorState {
     /// [`CoordinatorState::on_start_result`] if the effect fails to start
     /// recording for real.
     ///
+    /// `pressed_at`/`locked` seed the hold bookkeeping (see [`Hold`]).
     /// `publication_enabled` becomes `Effect::Start`'s field of the same
     /// name -- see its doc comment for why this is threaded through rather
     /// than resolved here or in `actions.rs` alone. Every caller except
@@ -570,6 +760,8 @@ impl CoordinatorState {
         &mut self,
         binding_id: String,
         hotkey_string: String,
+        pressed_at: Instant,
+        locked: bool,
         publication_enabled: Option<bool>,
     ) -> Effect {
         let mode = mode::mode_for_binding(&binding_id);
@@ -580,6 +772,7 @@ impl CoordinatorState {
             // Not known yet -- see `on_start_result`.
             publication_session: None,
         };
+        self.hold = Some(Hold { pressed_at, locked });
         Effect::Start {
             binding_id,
             hotkey_string,
@@ -608,6 +801,7 @@ impl CoordinatorState {
             publication_enabled,
             publication_session,
         };
+        self.hold = None;
         Effect::Stop {
             binding_id,
             hotkey_string,
@@ -709,10 +903,14 @@ fn decide_explicit_capture(
             // above, carried onto `Effect::Start` verbatim instead of left for
             // `actions.rs` to re-read later -- see `Effect::Start`'s doc
             // comment for the unobservable-start bug a second, later read
-            // used to allow.
+            // used to allow. Locked from the start: no key is held, so no
+            // release may end it, and it ends on an explicit stop or the next
+            // press of its binding, exactly like a toggle.
             capture_command::ExplicitOp::Start => ExplicitOutcome::Effect(state.begin_recording(
                 binding_id.to_string(),
                 "CLI".to_string(),
+                Instant::now(),
+                true,
                 Some(publication_enabled),
             )),
             // Stop must end whatever binding is actually recording, not the
@@ -735,7 +933,19 @@ fn decide_explicit_capture(
                 _ => ExplicitOutcome::NoOp,
             },
         },
-        capture_command::Decision::NoOp => ExplicitOutcome::NoOp,
+        capture_command::Decision::NoOp => {
+            // "Already running" must stay true once reported: a capture this
+            // mode began from a held key would otherwise still end on that
+            // key's release. Lock it, exactly as a Forward start is locked.
+            if op == capture_command::ExplicitOp::Start
+                && matches!(&state.stage, Stage::Recording { mode: active, .. } if *active == mode)
+            {
+                if let Some(hold) = &mut state.hold {
+                    hold.locked = true;
+                }
+            }
+            ExplicitOutcome::NoOp
+        }
         capture_command::Decision::Refuse(reason) => ExplicitOutcome::Refuse(reason),
     }
 }
@@ -894,22 +1104,37 @@ impl TranscriptionCoordinator {
         Self { tx }
     }
 
-    /// Send a keyboard/signal input event for a transcribe binding.
-    /// For signal-based toggles, use `is_pressed: true` and `push_to_talk: false`.
+    /// Send a keyboard input event for a transcribe binding. `hold_threshold`
+    /// only matters for [`ShortcutActivation::HoldOrToggle`].
     pub fn send_input(
         &self,
         binding_id: &str,
         hotkey_string: &str,
         is_pressed: bool,
-        push_to_talk: bool,
+        mode: ShortcutActivation,
+        hold_threshold: Duration,
     ) {
-        self.send(binding_id, hotkey_string, is_pressed, push_to_talk, false);
+        self.send(
+            binding_id,
+            hotkey_string,
+            is_pressed,
+            mode,
+            hold_threshold,
+            false,
+        );
     }
 
     /// Send an external trigger (SIGUSR2, CLI flag). Always a toggle press,
     /// always exempt from debounce — see [`InputEvent::external`].
     pub fn send_external_input(&self, binding_id: &str, source: &str) {
-        self.send(binding_id, source, true, false, true);
+        self.send(
+            binding_id,
+            source,
+            true,
+            ShortcutActivation::Toggle,
+            Duration::ZERO,
+            true,
+        );
     }
 
     fn send(
@@ -917,7 +1142,8 @@ impl TranscriptionCoordinator {
         binding_id: &str,
         hotkey_string: &str,
         is_pressed: bool,
-        push_to_talk: bool,
+        mode: ShortcutActivation,
+        hold_threshold: Duration,
         external: bool,
     ) {
         if self
@@ -926,7 +1152,8 @@ impl TranscriptionCoordinator {
                 binding_id: binding_id.to_string(),
                 hotkey_string: hotkey_string.to_string(),
                 is_pressed,
-                push_to_talk,
+                mode,
+                hold_threshold,
                 external,
             }))
             .is_err()
@@ -1318,56 +1545,67 @@ mod tests {
     #[test]
     fn toggle_press_during_processing_remembers_start() {
         assert_eq!(
-            classify_busy_input(true, false, false),
+            classify_busy_input(true, ShortcutActivation::Toggle, None),
             BusyAction::Remember
         );
     }
 
     #[test]
     fn second_toggle_press_during_processing_forgets_press() {
-        assert_eq!(classify_busy_input(true, false, true), BusyAction::Forget);
+        assert_eq!(
+            classify_busy_input(true, ShortcutActivation::Toggle, Some(Remembered::Locked)),
+            BusyAction::Forget
+        );
     }
 
     #[test]
     fn toggle_release_during_processing_is_ignored() {
-        assert_eq!(classify_busy_input(false, false, false), BusyAction::Ignore);
-        assert_eq!(classify_busy_input(false, false, true), BusyAction::Ignore);
+        assert_eq!(
+            classify_busy_input(false, ShortcutActivation::Toggle, None),
+            BusyAction::Ignore
+        );
+        assert_eq!(
+            classify_busy_input(false, ShortcutActivation::Toggle, Some(Remembered::Locked)),
+            BusyAction::Ignore
+        );
     }
 
     #[test]
-    fn ptt_press_during_processing_remembers_start() {
-        assert_eq!(classify_busy_input(true, true, false), BusyAction::Remember);
-    }
+    fn hold_modes_classify_busy_inputs_by_pending_state() {
+        let cases = [
+            (true, None, BusyAction::Remember),
+            (true, Some(Remembered::Held), BusyAction::Ignore),
+            (true, Some(Remembered::Locked), BusyAction::Forget),
+            (false, None, BusyAction::Ignore),
+            (false, Some(Remembered::Held), BusyAction::Ignore),
+            (false, Some(Remembered::Locked), BusyAction::Ignore),
+        ];
 
-    #[test]
-    fn ptt_release_during_processing_forgets_remembered_press() {
-        assert_eq!(classify_busy_input(false, true, true), BusyAction::Forget);
-        assert_eq!(classify_busy_input(false, true, false), BusyAction::Ignore);
+        for mode in [
+            ShortcutActivation::PushToTalk,
+            ShortcutActivation::HoldOrToggle,
+        ] {
+            for (is_pressed, remembered, expected) in cases {
+                assert_eq!(classify_busy_input(is_pressed, mode, remembered), expected);
+            }
+        }
     }
 
     /// Toggle parity across a busy window: an odd number of presses remembers
     /// one start, each further press flips the remembered press off/on again.
     #[test]
     fn toggle_presses_alternate_remember_and_forget_while_busy() {
-        let mut remembered = false;
+        let mut remembered = None;
         for expected in [
             BusyAction::Remember,
             BusyAction::Forget,
             BusyAction::Remember,
         ] {
-            let action = classify_busy_input(true, false, remembered);
+            let action = classify_busy_input(true, ShortcutActivation::Toggle, remembered);
             assert_eq!(action, expected);
-            remembered = action == BusyAction::Remember;
+            remembered = (action == BusyAction::Remember).then_some(Remembered::Locked);
         }
-        assert!(remembered);
-    }
-
-    /// A quick PTT tap that lands entirely inside the busy window must net to
-    /// no-op: the press is remembered, the release forgets it, nothing starts.
-    #[test]
-    fn ptt_tap_inside_busy_window_nets_noop() {
-        assert_eq!(classify_busy_input(true, true, false), BusyAction::Remember);
-        assert_eq!(classify_busy_input(false, true, true), BusyAction::Forget);
+        assert!(remembered.is_some());
     }
 
     // ---------------------------------------------------------------------
@@ -1412,7 +1650,8 @@ mod tests {
             binding_id: BINDING.to_string(),
             hotkey_string: BINDING.to_string(),
             is_pressed,
-            push_to_talk: true,
+            mode: ShortcutActivation::PushToTalk,
+            hold_threshold: Duration::ZERO,
             external: false,
         }
     }
@@ -1549,7 +1788,8 @@ mod tests {
                     binding_id: BINDING.to_string(),
                     hotkey_string: BINDING.to_string(),
                     is_pressed: true,
-                    push_to_talk: false,
+                    mode: ShortcutActivation::Toggle,
+                    hold_threshold: Duration::ZERO,
                     external: true,
                 },
                 at,
@@ -1610,7 +1850,8 @@ mod tests {
             binding_id: binding_id.to_string(),
             hotkey_string: binding_id.to_string(),
             is_pressed: true,
-            push_to_talk: false,
+            mode: ShortcutActivation::Toggle,
+            hold_threshold: Duration::ZERO,
             external,
         }
     }
@@ -2165,6 +2406,8 @@ mod tests {
         state.begin_recording(
             ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
             "keyboard".to_string(),
+            Instant::now(),
+            false,
             None,
         );
 
@@ -2192,7 +2435,13 @@ mod tests {
     #[test]
     fn explicit_start_is_refused_while_a_different_mode_is_processing() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            "transcribe".to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage("transcribe"));
 
@@ -2225,7 +2474,13 @@ mod tests {
     #[test]
     fn explicit_start_while_the_same_mode_is_processing_is_refused_as_busy() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            ASSISTED_NOTES.to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
 
@@ -2255,7 +2510,13 @@ mod tests {
     #[test]
     fn explicit_stop_while_the_same_mode_is_processing_is_a_noop() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            ASSISTED_NOTES.to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage(ASSISTED_NOTES));
 
@@ -2276,7 +2537,13 @@ mod tests {
     #[test]
     fn explicit_stop_while_a_different_mode_is_processing_is_a_noop() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            "transcribe".to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         assert_eq!(state.stage, processing_stage("transcribe"));
 
@@ -2351,7 +2618,13 @@ mod tests {
     #[test]
     fn explicit_stop_is_not_refused_when_publication_is_disabled() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            ASSISTED_NOTES.to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         assert_eq!(state.stage, recording_stage(ASSISTED_NOTES));
 
         let outcome = decide_explicit_capture(
@@ -2385,11 +2658,20 @@ mod tests {
     #[test]
     fn explicit_stop_during_processing_clears_a_same_mode_pending_press() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            ASSISTED_NOTES.to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing(ASSISTED_NOTES.to_string(), "keyboard".to_string());
         state.pending_press = Some(PendingPress {
             binding_id: ASSISTED_NOTES.to_string(),
             hotkey_string: "keyboard".to_string(),
+            // Held, as a push-to-talk key-down remembered while busy would be.
+            pressed_at: Instant::now(),
+            locked: false,
         });
 
         let outcome = decide_explicit_capture(
@@ -2420,11 +2702,20 @@ mod tests {
     #[test]
     fn explicit_stop_leaves_a_different_mode_pending_press_untouched() {
         let mut state = CoordinatorState::new();
-        state.begin_recording("transcribe".to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            "transcribe".to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.begin_processing("transcribe".to_string(), "keyboard".to_string());
         state.pending_press = Some(PendingPress {
             binding_id: "transcribe".to_string(),
             hotkey_string: "keyboard".to_string(),
+            // Held, as a push-to-talk key-down remembered while busy would be.
+            pressed_at: Instant::now(),
+            locked: false,
         });
 
         let outcome = decide_explicit_capture(
@@ -2456,11 +2747,20 @@ mod tests {
     #[test]
     fn explicit_start_while_already_recording_clears_a_same_mode_pending_release() {
         let mut state = CoordinatorState::new();
-        state.begin_recording(ASSISTED_NOTES.to_string(), "keyboard".to_string(), None);
+        state.begin_recording(
+            ASSISTED_NOTES.to_string(),
+            "keyboard".to_string(),
+            Instant::now(),
+            false,
+            None,
+        );
         state.pending_release = Some(PendingRelease {
             binding_id: ASSISTED_NOTES.to_string(),
             hotkey_string: "keyboard".to_string(),
             deadline: Instant::now() + RELEASE_GRACE,
+            released_at: Instant::now(),
+            // Push-to-talk: every release stops.
+            hold_threshold: Duration::ZERO,
         });
 
         let outcome = decide_explicit_capture(
@@ -2486,6 +2786,53 @@ mod tests {
         );
     }
 
+    /// An explicit start that finds its mode already recording from a held
+    /// key reports "already running". The key's later release must not then
+    /// stop it: the NoOp locks the capture the way a forwarded start is
+    /// locked, so only an explicit stop or the next press ends it.
+    #[test]
+    fn explicit_start_locks_a_capture_already_running_from_a_held_key() {
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        let held = |is_pressed| InputEvent {
+            binding_id: ASSISTED_NOTES.to_string(),
+            hotkey_string: "keyboard".to_string(),
+            is_pressed,
+            mode: ShortcutActivation::PushToTalk,
+            hold_threshold: Duration::ZERO,
+            external: false,
+        };
+        assert!(matches!(
+            state.on_input(held(true), t0),
+            Some(Effect::Start { .. })
+        ));
+
+        let outcome = decide_explicit_capture(
+            &mut state,
+            capture_command::ExplicitOp::Start,
+            ASSISTED_NOTES,
+            true,
+            true,
+            Mode::AssistedNotes,
+        );
+        assert_eq!(outcome, ExplicitOutcome::NoOp);
+
+        assert!(state
+            .on_input(held(false), t0 + Duration::from_secs(2))
+            .is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(
+            matches!(state.stage, Stage::Recording { .. }),
+            "the release must not stop a capture the caller was told is running"
+        );
+
+        // The next press still ends it, as for any locked capture.
+        assert!(matches!(
+            state.on_input(held(true), t0 + Duration::from_secs(3)),
+            Some(Effect::Stop { .. })
+        ));
+    }
+
     /// Same setup, but the deferred release belongs to a *different* mode
     /// than the one the start targets -- it must survive untouched, and
     /// `grace_deadline()` must keep reporting it so the coordinator loop
@@ -2502,6 +2849,9 @@ mod tests {
             binding_id: "transcribe".to_string(),
             hotkey_string: "keyboard".to_string(),
             deadline,
+            released_at: Instant::now(),
+            // Push-to-talk: every release stops.
+            hold_threshold: Duration::ZERO,
         });
 
         let outcome = decide_explicit_capture(
@@ -2536,6 +2886,8 @@ mod tests {
         state.begin_recording(
             ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
             "keyboard".to_string(),
+            Instant::now(),
+            false,
             None,
         );
         state.begin_processing(
@@ -2545,6 +2897,9 @@ mod tests {
         state.pending_press = Some(PendingPress {
             binding_id: ASSISTED_NOTES_WITH_POST_PROCESS.to_string(),
             hotkey_string: "keyboard".to_string(),
+            // Held, as a push-to-talk key-down remembered while busy would be.
+            pressed_at: Instant::now(),
+            locked: false,
         });
 
         let outcome = decide_explicit_capture(
@@ -2578,7 +2933,13 @@ mod tests {
         let mut state = CoordinatorState::new();
         let binding_id = "transcribe";
 
-        state.begin_recording(binding_id.into(), "Ctrl+Space".into(), Some(true));
+        state.begin_recording(
+            binding_id.into(),
+            "Ctrl+Space".into(),
+            Instant::now(),
+            false,
+            Some(true),
+        );
         state.mark_publication_suppressed(FollowMode::Meeting);
 
         assert!(matches!(
@@ -2637,5 +2998,415 @@ mod tests {
             !coordinator.notify_publication_suppressed(FollowMode::Dictation),
             "the receiver is gone, so the send must be reported as failed"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Hold-or-toggle (the combined mode from #147) and the two legacy modes,
+    // driven through the real machine on a synthetic clock. Recording starts
+    // on key-down in every mode; the tests pin how each mode ends it.
+    // ---------------------------------------------------------------------
+
+    const HOLD_THRESHOLD: Duration = Duration::from_millis(300);
+
+    fn input(mode: ShortcutActivation, is_pressed: bool) -> InputEvent {
+        InputEvent {
+            binding_id: BINDING.to_string(),
+            hotkey_string: BINDING.to_string(),
+            is_pressed,
+            mode,
+            hold_threshold: HOLD_THRESHOLD,
+            external: false,
+        }
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// Hold-or-toggle: a key held past the threshold is push-to-talk — the
+    /// (deferred) release stops recording.
+    #[test]
+    fn hold_or_toggle_long_hold_stops_on_release() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        assert!(matches!(
+            state.on_input(input(mode, true), t0),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.on_input(input(mode, false), t0 + ms(800)).is_none());
+        assert!(
+            matches!(state.on_grace_expired(), Some(Effect::Stop { .. })),
+            "an 800ms hold must stop when its release grace elapses"
+        );
+        assert_eq!(state.stage, processing_stage(BINDING));
+    }
+
+    /// Hold-or-toggle: a tap keeps recording (locked on); the next press stops.
+    #[test]
+    fn hold_or_toggle_tap_locks_recording_until_next_press() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        assert!(matches!(
+            state.on_input(input(mode, true), t0),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.on_input(input(mode, false), t0 + ms(120)).is_none());
+        assert!(
+            state.on_grace_expired().is_none(),
+            "a 120ms tap must not stop recording"
+        );
+        assert_eq!(state.stage, recording_stage(BINDING));
+        assert!(state.is_locked());
+
+        // Seconds later the user presses again to finish.
+        assert!(matches!(
+            state.on_input(input(mode, true), t0 + ms(5000)),
+            Some(Effect::Stop { .. })
+        ));
+        assert_eq!(state.stage, processing_stage(BINDING));
+        // The release of that stopping press lands in the busy window and is
+        // ignored, so nothing is remembered for the drain.
+        assert!(state.on_input(input(mode, false), t0 + ms(5080)).is_none());
+        assert!(state.on_processing_finished().is_none());
+        assert_eq!(state.stage, Stage::Idle);
+    }
+
+    /// Hold-or-toggle: a locked session ignores stray releases — only a press
+    /// ends it.
+    #[test]
+    fn hold_or_toggle_locked_session_ignores_release() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        state.on_input(input(mode, true), t0);
+        state.on_input(input(mode, false), t0 + ms(100));
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.is_locked());
+
+        assert!(state.on_input(input(mode, false), t0 + ms(900)).is_none());
+        assert!(
+            state.grace_deadline().is_none(),
+            "no release may be deferred once locked"
+        );
+        assert_eq!(state.stage, recording_stage(BINDING));
+    }
+
+    /// Hold-or-toggle: while the key is genuinely held, extra presses do not
+    /// stop the recording (that is the release's job).
+    #[test]
+    fn hold_or_toggle_press_while_held_is_ignored() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        state.on_input(input(mode, true), t0);
+        assert!(state.on_input(input(mode, true), t0 + ms(400)).is_none());
+        assert_eq!(state.stage, recording_stage(BINDING));
+        assert!(!state.is_locked());
+    }
+
+    /// Hold-or-toggle under X11 auto-repeat: the synthesized release/press
+    /// pairs must not be misread as taps. The hold is measured from the
+    /// original key-down to the genuine key-up.
+    #[test]
+    fn hold_or_toggle_autorepeat_burst_is_one_long_hold() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        let mut clock = t0;
+
+        assert!(matches!(
+            state.on_input(input(mode, true), clock),
+            Some(Effect::Start { .. })
+        ));
+        // ~600ms of auto-repeat pairs a few ms apart.
+        for _ in 0..60 {
+            clock += ms(5);
+            assert!(state.on_input(input(mode, false), clock).is_none());
+            clock += ms(5);
+            assert!(state.on_input(input(mode, true), clock).is_none());
+            assert!(
+                state.grace_deadline().is_none(),
+                "auto-repeat press must cancel the deferred release"
+            );
+        }
+        assert!(!state.is_locked(), "no tap may be classified mid-burst");
+
+        clock += ms(5);
+        assert!(state.on_input(input(mode, false), clock).is_none());
+        assert!(
+            matches!(state.on_grace_expired(), Some(Effect::Stop { .. })),
+            "the genuine release after a ~600ms hold must stop recording"
+        );
+    }
+
+    /// Hold-or-toggle: a press remembered during the busy window is measured
+    /// from the real key-down, so a hold that straddles the drain still counts
+    /// as a hold when it is released shortly after recording actually starts.
+    #[test]
+    fn hold_or_toggle_remembered_press_measures_hold_from_real_key_down() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        // Previous session: hold, release, stop → Processing.
+        state.on_input(input(mode, true), t0);
+        state.on_input(input(mode, false), t0 + ms(800));
+        assert!(matches!(
+            state.on_grace_expired(),
+            Some(Effect::Stop { .. })
+        ));
+
+        // Pressed again while busy; still held when the pipeline drains 700ms later.
+        assert!(state.on_input(input(mode, true), t0 + ms(1000)).is_none());
+        assert!(matches!(
+            state.on_processing_finished(),
+            Some(Effect::Start { .. })
+        ));
+        // Released 100ms after recording began — but 800ms after key-down.
+        assert!(state.on_input(input(mode, false), t0 + ms(1800)).is_none());
+        assert!(
+            matches!(state.on_grace_expired(), Some(Effect::Stop { .. })),
+            "held 800ms overall: must stop, not lock"
+        );
+    }
+
+    /// Toggle: releases never stop, the next press does. (Toggle is the
+    /// combined machine with the session locked from the start.)
+    #[test]
+    fn toggle_mode_ignores_release_and_stops_on_next_press() {
+        let mode = ShortcutActivation::Toggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        assert!(matches!(
+            state.on_input(input(mode, true), t0),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.is_locked());
+        assert!(state.on_input(input(mode, false), t0 + ms(100)).is_none());
+        assert!(
+            state.grace_deadline().is_none(),
+            "toggle never defers releases"
+        );
+        assert!(state.on_input(input(mode, false), t0 + ms(3000)).is_none());
+        assert!(matches!(
+            state.on_input(input(mode, true), t0 + ms(4000)),
+            Some(Effect::Stop { .. })
+        ));
+    }
+
+    /// Push-to-talk: even a very short press stops on release — there is no
+    /// tap-to-lock in this mode (hold threshold of zero).
+    #[test]
+    fn push_to_talk_short_press_still_stops_on_release() {
+        let mode = ShortcutActivation::PushToTalk;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        assert!(matches!(
+            state.on_input(input(mode, true), t0),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.on_input(input(mode, false), t0 + ms(40)).is_none());
+        assert!(matches!(
+            state.on_grace_expired(),
+            Some(Effect::Stop { .. })
+        ));
+    }
+
+    /// Cancel (Escape) during a locked hold-or-toggle session resets cleanly so
+    /// the next press starts a fresh recording rather than stopping a dead one.
+    #[test]
+    fn hold_or_toggle_cancel_clears_locked_session() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        state.on_input(input(mode, true), t0);
+        state.on_input(input(mode, false), t0 + ms(100));
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.is_locked());
+
+        state.on_cancel(true);
+        assert_eq!(state.stage, Stage::Idle);
+        assert!(!state.is_locked());
+        assert!(matches!(
+            state.on_input(input(mode, true), t0 + ms(2000)),
+            Some(Effect::Start { .. })
+        ));
+    }
+
+    /// Switching to toggle while an unlocked hold recording is running must not
+    /// strand it: in toggle mode a press always stops.
+    #[test]
+    fn toggle_press_stops_recording_started_as_hold() {
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+
+        state.on_input(input(ShortcutActivation::HoldOrToggle, true), t0);
+        assert!(!state.is_locked());
+        assert!(matches!(
+            state.on_input(input(ShortcutActivation::Toggle, true), t0 + ms(2000)),
+            Some(Effect::Stop { .. })
+        ));
+    }
+
+    // Hold-vs-tap classification while the previous transcription is busy.
+    fn hold_or_toggle_into_processing(state: &mut CoordinatorState, t0: Instant) {
+        let mode = ShortcutActivation::HoldOrToggle;
+        assert!(matches!(
+            state.on_input(input(mode, true), t0),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.on_input(input(mode, false), t0 + ms(800)).is_none());
+        assert!(matches!(
+            state.on_grace_expired(),
+            Some(Effect::Stop { .. })
+        ));
+        assert_eq!(state.stage, processing_stage(BINDING));
+    }
+
+    #[test]
+    fn hold_or_toggle_tap_during_processing_queues_locked_start() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        assert!(state.on_input(input(mode, true), t0 + ms(1000)).is_none());
+        assert!(state.on_input(input(mode, false), t0 + ms(1100)).is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.is_locked(), "a busy tap should queue a locked start");
+        assert!(matches!(
+            state.on_processing_finished(),
+            Some(Effect::Start { .. })
+        ));
+        assert!(state.is_locked());
+    }
+
+    #[test]
+    fn hold_or_toggle_completed_hold_during_processing_nets_noop() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        assert!(state.on_input(input(mode, true), t0 + ms(1000)).is_none());
+        assert!(state.on_input(input(mode, false), t0 + ms(1600)).is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(!state.is_locked());
+
+        assert!(
+            state.on_processing_finished().is_none(),
+            "a 600ms hold that ended before the drain has nothing left to start"
+        );
+        assert_eq!(state.stage, Stage::Idle);
+    }
+
+    #[test]
+    fn hold_or_toggle_two_taps_during_processing_net_noop() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        assert!(state.on_input(input(mode, true), t0 + ms(1000)).is_none());
+        assert!(state.on_input(input(mode, false), t0 + ms(1100)).is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.is_locked());
+
+        assert!(state.on_input(input(mode, true), t0 + ms(1500)).is_none());
+        assert!(
+            !state.is_locked(),
+            "the second tap's press forgets the queued tap"
+        );
+        assert!(state.on_input(input(mode, false), t0 + ms(1600)).is_none());
+        assert!(state.grace_deadline().is_none());
+
+        assert!(state.on_processing_finished().is_none());
+        assert_eq!(state.stage, Stage::Idle);
+    }
+
+    #[test]
+    fn ptt_tap_inside_busy_window_nets_noop() {
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        assert!(state.on_input(ptt_input(true), t0 + ms(1000)).is_none());
+        assert!(state.on_input(ptt_input(false), t0 + ms(1040)).is_none());
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.on_processing_finished().is_none());
+    }
+
+    /// The pipeline drains inside the 50ms grace of a busy tap: recording
+    /// starts first (unlocked, from the real key-down), and the grace then
+    /// resolves against the live recording, locking it as the tap it was.
+    #[test]
+    fn hold_or_toggle_drain_inside_busy_release_grace_still_classifies_tap() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        assert!(state.on_input(input(mode, true), t0 + ms(1000)).is_none());
+        assert!(state.on_input(input(mode, false), t0 + ms(1100)).is_none());
+        assert!(matches!(
+            state.on_processing_finished(),
+            Some(Effect::Start { .. })
+        ));
+        assert!(!state.is_locked());
+
+        assert!(state.on_grace_expired().is_none());
+        assert!(state.is_locked(), "the deferred 100ms release is a tap");
+    }
+
+    /// X11 auto-repeat while busy, key still held at the drain: recording
+    /// starts measured from the first press, not from the last synthesized
+    /// press before the drain. Released 400ms after the real key-down but
+    /// only ~100ms after the drain — a hold, so it must stop rather than lock.
+    #[test]
+    fn hold_or_toggle_autorepeat_burst_straddling_drain_measures_from_first_press() {
+        let mode = ShortcutActivation::HoldOrToggle;
+        let mut state = CoordinatorState::new();
+        let t0 = Instant::now();
+        hold_or_toggle_into_processing(&mut state, t0);
+
+        let mut clock = t0 + ms(1000);
+        assert!(state.on_input(input(mode, true), clock).is_none());
+        for _ in 0..30 {
+            clock += ms(5);
+            assert!(state.on_input(input(mode, false), clock).is_none());
+            clock += ms(5);
+            assert!(state.on_input(input(mode, true), clock).is_none());
+            assert!(state.grace_deadline().is_none());
+        }
+
+        // Drain at ~t0 + 1300ms with the key still down.
+        assert!(matches!(
+            state.on_processing_finished(),
+            Some(Effect::Start { .. })
+        ));
+        assert!(!state.is_locked());
+
+        for _ in 0..10 {
+            clock += ms(5);
+            assert!(state.on_input(input(mode, false), clock).is_none());
+            clock += ms(5);
+            assert!(state.on_input(input(mode, true), clock).is_none());
+        }
+        assert_eq!(clock, t0 + ms(1400));
+        assert!(state.on_input(input(mode, false), clock).is_none());
+        assert!(
+            matches!(state.on_grace_expired(), Some(Effect::Stop { .. })),
+            "held 400ms since the real key-down: must stop, not lock"
+        );
+        assert_eq!(state.stage, processing_stage(BINDING));
     }
 }

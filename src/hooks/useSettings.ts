@@ -21,6 +21,7 @@ interface UseSettingsReturn {
   audioFeedbackEnabled: boolean;
   postProcessModelOptions: Record<string, string[]>;
   postProcessApiKeyStatus: Partial<Record<string, CredentialStatus>>;
+  updateChecksLocked: boolean | null;
 
   // Actions
   updateSetting: <K extends keyof Settings>(
@@ -78,6 +79,7 @@ export const useSettings = (): UseSettingsReturn => {
     audioFeedbackEnabled: store.settings?.audio_feedback || false,
     postProcessModelOptions: store.postProcessModelOptions,
     postProcessApiKeyStatus: store.postProcessApiKeyStatus,
+    updateChecksLocked: store.updateChecksLocked,
     updateSetting: store.updateSetting,
     resetSetting: store.resetSetting,
     refreshSettings: store.refreshSettings,

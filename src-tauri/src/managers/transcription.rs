@@ -636,6 +636,46 @@ pub fn transcription_managers(app: &AppHandle) -> Vec<Arc<TranscriptionManager>>
     managers
 }
 
+/// Stops the idle watcher of every transcription manager that exists, whether
+/// or not its lane is in service. Called from the `RunEvent::Exit` handler.
+///
+/// Tauri clears the resource table right after that handler returns (see
+/// `App::run`), which frees the settings store. A watcher tick that lands
+/// after that point panics in `get_settings`'s `expect("Failed to
+/// initialize store")`, and `Drop` never stops the watcher at exit because
+/// the watcher holds its own clone of the manager. Joining here, while the
+/// store still exists, guarantees no tick can outlive it.
+pub fn stop_idle_watchers(app: &AppHandle) {
+    if let Some(primary) = app.try_state::<Arc<TranscriptionManager>>() {
+        primary.stop_idle_watcher();
+    }
+    if let Some(system) = app.try_state::<SystemAudioTranscription>() {
+        let manager = system.0.lock().ok().and_then(|slot| slot.clone());
+        if let Some(manager) = manager {
+            manager.stop_idle_watcher();
+        }
+    }
+}
+
+/// Signals a parked idle watcher to stop, wakes it, and waits for it to exit.
+/// A no-op once the watcher is gone, so it is safe to call more than once.
+fn stop_watcher_thread(
+    shutdown_signal: &AtomicBool,
+    watcher_handle: &Mutex<Option<thread::JoinHandle<()>>>,
+) {
+    shutdown_signal.store(true, Ordering::Relaxed);
+    let handle = match watcher_handle.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    };
+    if let Some(handle) = handle {
+        handle.thread().unpark();
+        if let Err(e) = handle.join() {
+            warn!("Failed to join idle watcher thread: {:?}", e);
+        }
+    }
+}
+
 fn model_ids_match<I>(model_ids: I) -> bool
 where
     I: IntoIterator<Item = Option<String>>,
@@ -706,7 +746,9 @@ impl TranscriptionManager {
             let handle = thread::spawn(move || {
                 debug!("Idle watcher thread started");
                 while !shutdown_signal.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_secs(10)); // Check every 10 seconds
+                    // Check every 10 seconds. Parked rather than slept so
+                    // `stop_idle_watcher` can wake it at once.
+                    thread::park_timeout(Duration::from_secs(10));
 
                     // Check shutdown signal again after sleep
                     if shutdown_signal.load(Ordering::Relaxed) {
@@ -904,23 +946,41 @@ impl TranscriptionManager {
             error: None,
         });
 
-        let model_info = self
-            .model_manager
-            .get_model_info(model_id)
-            .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+        let model_info = match self.model_manager.get_model_info(model_id) {
+            Some(model_info) => model_info,
+            None => {
+                let error_msg = format!("Model not found: {}", model_id);
+                self.emit_model_state(ModelStateEvent {
+                    event_type: "loading_failed".to_string(),
+                    model_id: Some(model_id.to_string()),
+                    model_name: None,
+                    error: Some(error_msg.clone()),
+                });
+                return Err(anyhow::anyhow!(error_msg));
+            }
+        };
 
-        if !model_info.is_downloaded {
-            let error_msg = "Model not downloaded";
+        // Every failure after loading starts must emit a terminal event so the
+        // frontend can never remain in its loading state.
+        let emit_loading_failed = |error_msg: &str| {
             self.emit_model_state(ModelStateEvent {
                 event_type: "loading_failed".to_string(),
                 model_id: Some(model_id.to_string()),
                 model_name: Some(model_info.name.clone()),
                 error: Some(error_msg.to_string()),
             });
+        };
+
+        if !model_info.is_downloaded {
+            let error_msg = "Model not downloaded";
+            emit_loading_failed(error_msg);
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let model_path = self.model_manager.get_model_path(model_id)?;
+        let model_path = self
+            .model_manager
+            .get_model_path(model_id)
+            .inspect_err(|error| emit_loading_failed(&error.to_string()))?;
 
         // Drop the current engine BEFORE building the new one so transcribe-cpp
         // frees the previous native context first — avoids holding two models at
@@ -936,14 +996,6 @@ impl TranscriptionManager {
         }
 
         // Create appropriate engine based on model type
-        let emit_loading_failed = |error_msg: &str| {
-            self.emit_model_state(ModelStateEvent {
-                event_type: "loading_failed".to_string(),
-                model_id: Some(model_id.to_string()),
-                model_name: Some(model_info.name.clone()),
-                error: Some(error_msg.to_string()),
-            });
-        };
 
         let loaded_engine = match model_info.engine_type {
             EngineType::TranscribeCpp => {
@@ -1652,6 +1704,13 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
+        if self.wait_for_leased_engine() == EngineAvailability::Leased {
+            return Err(anyhow::anyhow!(
+                "Timed out waiting {:?} for live transcription to release the model",
+                STREAM_FINALIZE_REPLY_TIMEOUT
+            ));
+        }
+
         // Check if model is loaded, if not try to load it
         {
             // If the model is loading, wait for it to complete.
@@ -2108,10 +2167,6 @@ fn normalize_cjk_language(language: &str) -> &str {
     }
 }
 
-fn base_language_code(language: &str) -> &str {
-    language.split(&['-', '_'][..]).next().unwrap_or(language)
-}
-
 /// Resolve the persisted language intent into the language a specific model can
 /// use without writing the coerced value back to settings.
 fn effective_language_for_model(
@@ -2149,7 +2204,8 @@ fn resolve_output_language_evidence(
     if let Some(language) = applied_language_hint.filter(|lang| !lang.is_empty() && *lang != "auto")
     {
         if settings.selected_language != "auto"
-            && base_language_code(&settings.selected_language) == base_language_code(language)
+            && crate::managers::model::canonical_language_code(&settings.selected_language)
+                == crate::managers::model::canonical_language_code(language)
         {
             return OutputLanguageEvidence::UserSelected(language.to_string());
         }
@@ -2318,6 +2374,78 @@ fn cpp_translation_task(
 /// finalizes or cancels. Used when streaming can't actually run (model not
 /// loaded / not streaming-capable) so the finalize handshake still completes
 /// and the caller falls back to batch transcription.
+/// What batch transcription finds in the engine slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineAvailability {
+    Ready,
+    /// The slot is empty because a live-preview stream worker holds the
+    /// engine on lease and has not returned it yet.
+    Leased,
+    /// Empty with no lease: not loaded (or still loading).
+    Absent,
+}
+
+/// Re-probes while the engine is `Leased`, up to `limit`, and returns the
+/// last state seen. Any other state returns at once.
+fn wait_while_engine_leased(
+    mut probe: impl FnMut() -> EngineAvailability,
+    limit: Duration,
+    poll: Duration,
+) -> EngineAvailability {
+    let deadline = Instant::now() + limit;
+    loop {
+        let state = probe();
+        if state != EngineAvailability::Leased || Instant::now() >= deadline {
+            return state;
+        }
+        thread::sleep(poll);
+    }
+}
+
+impl TranscriptionManager {
+    fn engine_availability(&self) -> EngineAvailability {
+        if self.lock_engine().is_some() {
+            EngineAvailability::Ready
+        } else if self.active_engine_lease.load(Ordering::Acquire) != 0 {
+            EngineAvailability::Leased
+        } else {
+            EngineAvailability::Absent
+        }
+    }
+
+    /// Batch transcription runs after a stream's finalize, but a stream whose
+    /// finalize timed out keeps its worker, and that worker keeps the engine
+    /// until its own finalize completes. That happens on a cold GPU, where the
+    /// first stream compute can take far longer than the 30 s finalize wait.
+    /// The next recording then found the slot empty and failed with "Model is
+    /// not loaded". Wait for the worker to hand the engine back instead,
+    /// bounded like the finalize wait. The wait is entered only while the
+    /// engine is leased, so no other path is delayed.
+    fn wait_for_leased_engine(&self) -> EngineAvailability {
+        let initial = self.engine_availability();
+        if initial != EngineAvailability::Leased {
+            return initial;
+        }
+        info!(
+            "Live transcription still holds the model; waiting up to {:?} for it",
+            STREAM_FINALIZE_REPLY_TIMEOUT
+        );
+        let started = Instant::now();
+        let state = wait_while_engine_leased(
+            || self.engine_availability(),
+            STREAM_FINALIZE_REPLY_TIMEOUT,
+            Duration::from_millis(50),
+        );
+        if state != EngineAvailability::Leased {
+            info!(
+                "Live transcription released the model after {:?}",
+                started.elapsed()
+            );
+        }
+        state
+    }
+}
+
 fn drain_until_finalize(rx: mpsc::Receiver<StreamCmd>) {
     while let Ok(cmd) = rx.recv() {
         match cmd {
@@ -2602,6 +2730,13 @@ pub fn get_available_accelerators() -> AvailableAccelerators {
     }
 }
 
+impl TranscriptionManager {
+    /// Stops this manager's idle watcher now; see [`stop_idle_watchers`].
+    pub fn stop_idle_watcher(&self) {
+        stop_watcher_thread(&self.shutdown_signal, &self.watcher_handle);
+    }
+}
+
 impl Drop for TranscriptionManager {
     fn drop(&mut self) {
         // Skip shutdown unless this is the very last clone. TranscriptionManager
@@ -2640,6 +2775,99 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leased_engine_wait_returns_at_once_unless_leased() {
+        for state in [EngineAvailability::Ready, EngineAvailability::Absent] {
+            let mut probes = 0;
+            let result = wait_while_engine_leased(
+                || {
+                    probes += 1;
+                    state
+                },
+                Duration::from_secs(30),
+                Duration::from_millis(1),
+            );
+            assert_eq!(result, state);
+            assert_eq!(probes, 1, "{state:?} must not wait");
+        }
+    }
+
+    #[test]
+    fn leased_engine_wait_proceeds_once_the_worker_returns_the_engine() {
+        let mut probes = 0;
+        let result = wait_while_engine_leased(
+            || {
+                probes += 1;
+                if probes < 4 {
+                    EngineAvailability::Leased
+                } else {
+                    EngineAvailability::Ready
+                }
+            },
+            Duration::from_secs(30),
+            Duration::from_millis(1),
+        );
+        assert_eq!(result, EngineAvailability::Ready);
+        assert_eq!(probes, 4);
+    }
+
+    #[test]
+    fn leased_engine_wait_gives_up_at_its_bound() {
+        let started = Instant::now();
+        let result = wait_while_engine_leased(
+            || EngineAvailability::Leased,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+        );
+        assert_eq!(result, EngineAvailability::Leased);
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// A thread shaped like the idle watcher's loop: parks for 10 s between
+    /// ticks and exits once the signal is set.
+    fn spawn_parked_watcher(
+        shutdown_signal: Arc<AtomicBool>,
+        ticks: Arc<AtomicU64>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            while !shutdown_signal.load(Ordering::Relaxed) {
+                thread::park_timeout(Duration::from_secs(10));
+                if shutdown_signal.load(Ordering::Relaxed) {
+                    break;
+                }
+                ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    }
+
+    #[test]
+    fn stopping_the_idle_watcher_wakes_it_instead_of_waiting_out_its_sleep() {
+        let shutdown_signal = Arc::new(AtomicBool::new(false));
+        let ticks = Arc::new(AtomicU64::new(0));
+        let watcher_handle = Mutex::new(Some(spawn_parked_watcher(
+            Arc::clone(&shutdown_signal),
+            Arc::clone(&ticks),
+        )));
+        // Let it reach the park.
+        thread::sleep(Duration::from_millis(50));
+
+        let started = Instant::now();
+        stop_watcher_thread(&shutdown_signal, &watcher_handle);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "stop must not wait out the 10 s park (took {:?})",
+            started.elapsed()
+        );
+        assert!(watcher_handle.lock().unwrap().is_none());
+        // Joined: it can never tick (and so never read settings) again.
+        assert_eq!(ticks.load(Ordering::Relaxed), 0);
+
+        // Exit calls it, and Drop may follow: a second stop is a no-op.
+        stop_watcher_thread(&shutdown_signal, &watcher_handle);
+    }
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
@@ -2977,6 +3205,22 @@ mod tests {
             OutputLanguageEvidence::UserSelected("pt".to_string())
         );
         assert_eq!(result, "eu vi um carro");
+    }
+
+    #[test]
+    fn norwegian_alias_is_recorded_as_user_selected_evidence() {
+        let settings = AppSettings {
+            selected_language: "no".to_string(),
+            ..Default::default()
+        };
+
+        let evidence =
+            resolve_output_language_evidence(&settings, Some("nb"), &languages(&["nb"]), false);
+
+        assert_eq!(
+            evidence,
+            OutputLanguageEvidence::UserSelected("nb".to_string())
+        );
     }
 
     #[test]

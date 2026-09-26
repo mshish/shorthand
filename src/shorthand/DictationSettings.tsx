@@ -5,6 +5,7 @@ import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
 import { useSettings } from "@/hooks/useSettings";
 import { DictationToggleField } from "./dictation/DictationToggleField";
+import { ModeShortcutActivation } from "./ModeShortcutActivation";
 import { DictationEnableToggle } from "./dictation/DictationEnableToggle";
 import { DictationPasteMethod } from "./dictation/DictationPasteMethod";
 import { DictationClipboardHandling } from "./dictation/DictationClipboardHandling";
@@ -48,10 +49,8 @@ export const DictationSettings: React.FC = () => {
         {dictationEnabled && (
           <ShortcutInput shortcutId="dictate" grouped={true} />
         )}
-        <DictationToggleField
-          field="push_to_talk"
-          label={t("settings.general.pushToTalk.label")}
-          description={t("settings.general.pushToTalk.description")}
+        <ModeShortcutActivation
+          mode="dictation"
           grouped={true}
           disabled={!dictationEnabled}
         />

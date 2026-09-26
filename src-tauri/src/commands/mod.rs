@@ -3,7 +3,9 @@ pub mod history;
 pub mod models;
 pub mod transcription;
 
-use crate::settings::{get_settings, write_settings, AppSettings, LogLevel};
+use crate::settings::{
+    get_settings, update_checks_forced_disabled, write_settings, AppSettings, LogLevel,
+};
 use crate::shorthand::credentials::{CredentialSlot, CredentialStatus, CredentialStore};
 use crate::utils::cancel_current_operation;
 use std::collections::HashMap;
@@ -21,6 +23,12 @@ pub fn cancel_operation(app: AppHandle) {
 #[specta::specta]
 pub fn is_portable() -> bool {
     crate::portable::is_portable()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn is_update_checks_locked() -> bool {
+    update_checks_forced_disabled()
 }
 
 #[tauri::command]

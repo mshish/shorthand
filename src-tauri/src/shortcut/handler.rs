@@ -18,8 +18,8 @@ use crate::TranscriptionCoordinator;
 /// This function contains the shared logic for:
 /// - Looking up the action in ACTION_MAP
 /// - Handling the cancel binding (only fires when recording)
-/// - Handling push-to-talk mode (start on press, stop on release)
-/// - Handling toggle mode (toggle state on press only)
+/// - Routing transcribe bindings to the coordinator, which applies the
+///   configured activation mode (toggle / push-to-talk / hold-or-toggle)
 ///
 /// # Arguments
 /// * `app` - The Tauri app handle
@@ -37,9 +37,15 @@ pub fn handle_shortcut_event(
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
-            let push_to_talk =
-                crate::shorthand::dictation::resolve_push_to_talk(&settings, binding_id);
-            coordinator.send_input(binding_id, hotkey_string, is_pressed, push_to_talk);
+            let activation =
+                crate::shorthand::dictation::resolve_shortcut_activation(&settings, binding_id);
+            coordinator.send_input(
+                binding_id,
+                hotkey_string,
+                is_pressed,
+                activation,
+                std::time::Duration::from_millis(settings.hold_threshold_ms),
+            );
         } else {
             warn!("TranscriptionCoordinator is not initialized");
         }

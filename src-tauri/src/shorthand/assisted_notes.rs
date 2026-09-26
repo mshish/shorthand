@@ -4,12 +4,12 @@
 //! docs/superpowers/plans/2026-08-26-assisted-notes-mode.md.
 //!
 //! The per-mode *resolver* (`apply_mode`, `resolve_settings`,
-//! `resolve_push_to_talk`) deliberately stays in `dictation.rs` rather than
+//! `resolve_shortcut_activation`) deliberately stays in `dictation.rs` rather than
 //! moving to a neutrally-named module here: `crate::shorthand::dictation::resolve_settings`
 //! is called from seven sites in upstream-owned files, and renaming the
 //! module would touch every one of them for no behavioural gain.
 
-use crate::settings::{ClipboardHandling, OverlayStyle};
+use crate::settings::{ClipboardHandling, OverlayStyle, ShortcutActivation};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -20,7 +20,10 @@ use specta::Type;
 #[serde(default)]
 pub struct AssistedNotesSettings {
     pub enabled: bool,
-    pub push_to_talk: bool,
+    /// How this mode's shortcut starts and stops recording. Replaces the
+    /// per-mode `push_to_talk` bool; see
+    /// `dictation::migrate_per_mode_shortcut_activation`.
+    pub shortcut_activation: ShortcutActivation,
     pub clipboard_handling: ClipboardHandling,
     pub append_trailing_space: bool,
     pub overlay_style: OverlayStyle,
@@ -50,7 +53,7 @@ impl Default for AssistedNotesSettings {
             // A note-taking session runs as long as the thinking does, and
             // nobody holds a key for that. Meeting's reasoning applies
             // unchanged.
-            push_to_talk: false,
+            shortcut_activation: ShortcutActivation::Toggle,
             // Per-mode despite the mode never pasting: `clipboard::paste()`
             // runs its tail regardless of paste method, and the
             // `CopyToClipboard` branch writes the transcript to the clipboard

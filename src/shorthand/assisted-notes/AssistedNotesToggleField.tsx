@@ -20,7 +20,7 @@ interface AssistedNotesToggleFieldProps {
 
 /**
  * Fork-only sibling covering every boolean row in the Assisted Notes section
- * (enabled, push_to_talk, append_trailing_space, save_recordings,
+ * (enabled, append_trailing_space, save_recordings,
  * save_transcripts, post_process_enabled, follow_stream_enabled). Mirrors
  * `DictationToggleField` for the same reason that one exists:
  * useSettings's getSetting/updateSetting are `keyof Settings` only

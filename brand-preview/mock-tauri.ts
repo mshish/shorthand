@@ -133,7 +133,8 @@ const SETTINGS: AppSettings = {
       "ctrl+alt+shift+n",
     ),
   },
-  push_to_talk: false,
+  shortcut_activation: "toggle",
+  hold_threshold_ms: 300,
   audio_feedback: false,
   audio_feedback_volume: 1.0,
   sound_theme: "marimba",
@@ -296,7 +297,7 @@ const SETTINGS: AppSettings = {
   show_all_settings: false,
   dictation: {
     enabled: true,
-    push_to_talk: true,
+    shortcut_activation: "hold_or_toggle",
     paste_method: "ctrl_v",
     clipboard_handling: "dont_modify",
     auto_submit: false,
@@ -315,7 +316,7 @@ const SETTINGS: AppSettings = {
   },
   assisted_notes: {
     enabled: false,
-    push_to_talk: false,
+    shortcut_activation: "toggle",
     clipboard_handling: "dont_modify",
     append_trailing_space: false,
     overlay_style: "minimal",
@@ -432,8 +433,8 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     SETTINGS.assisted_notes = assistedNotes;
     return null;
   },
-  change_ptt_setting: ({ enabled }) => {
-    SETTINGS.push_to_talk = enabled;
+  change_shortcut_activation_setting: ({ activation }) => {
+    SETTINGS.shortcut_activation = activation;
     return null;
   },
   change_post_process_enabled_setting: ({ enabled }) => {

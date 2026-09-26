@@ -178,15 +178,15 @@ await shoot(settings, "settings-dependents");
 // Back off, so the shots below photograph the same mock state they always did.
 await cleanupToggle.click({ force: true });
 
-// --- Cancel, which only exists with dictation switched off -----------------
+// --- Meetings with dictation switched off -----------------------------------
 //
-// Cancel is hidden while *either* mode has push-to-talk on (`anyPushToTalk`
-// in `ModesSettings.tsx`), and dictation ships with push_to_talk true. The
-// mock deliberately keeps `dictation.enabled` true so the Dictation shot
-// above photographs live rows instead of a column of disabled ones — which
-// means that in every shot before this one, Cancel is suppressed by a mode a
-// default install has switched off. Without this shot the harness cannot
-// photograph the row at all.
+// The mock deliberately keeps `dictation.enabled` true so the Dictation shot
+// above photographs live rows instead of a column of disabled ones; this shot
+// photographs the default install instead, with dictation off. It used to be
+// the only shot that could show the Cancel row, which was hidden while any
+// mode had push-to-talk on. Since the Handy 0.9.7 merge Cancel shows whenever
+// Advanced is on (except on Linux), because a hold-or-toggle tap locks
+// recording on and a release no longer ends every recording.
 //
 // It runs last because clicking that toggle mutates the mock's SETTINGS, and
 // every shot above wants dictation on.

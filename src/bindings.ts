@@ -21,9 +21,17 @@ async resetBinding(id: string) : Promise<Result<BindingResponse, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async changePttSetting(enabled: boolean) : Promise<Result<null, string>> {
+async changeShortcutActivationSetting(activation: ShortcutActivation) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("change_ptt_setting", { enabled }) };
+    return { status: "ok", data: await TAURI_INVOKE("change_shortcut_activation_setting", { activation }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeHoldThresholdMsSetting(ms: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_hold_threshold_ms_setting", { ms }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -583,6 +591,9 @@ async cancelOperation() : Promise<void> {
 async isPortable() : Promise<boolean> {
     return await TAURI_INVOKE("is_portable");
 },
+async isUpdateChecksLocked() : Promise<boolean> {
+    return await TAURI_INVOKE("is_update_checks_locked");
+},
 async getAppDirPath() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_app_dir_path") };
@@ -1105,7 +1116,17 @@ settings_schema_version?: number;
  * Defaults to empty on partial stores; the load path merges in the
  * default bindings for any missing keys before the settings are used.
  */
-bindings?: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk?: boolean; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
+bindings?: Partial<{ [key in string]: ShortcutBinding }>; 
+/**
+ * Replaces the pre-0.10 `push_to_talk` bool; stores missing this key are
+ * migrated from it in `apply_settings_migrations`.
+ */
+shortcut_activation?: ShortcutActivation; 
+/**
+ * Hold-or-toggle only: a press held at least this long is push-to-talk,
+ * anything shorter is a tap that locks recording on.
+ */
+hold_threshold_ms?: number; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
 /**
  * Fork-only. Consent to send crash reports and usage counts; see
  * TELEMETRY.md. `None` means never asked: both a store that predates
@@ -1181,7 +1202,13 @@ assisted_notes?: AssistedNotesSettings }
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
  * shape of `dictation::DictationSettings`.
  */
-export type AssistedNotesSettings = { enabled: boolean; push_to_talk: boolean; clipboard_handling: ClipboardHandling; append_trailing_space: boolean; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+export type AssistedNotesSettings = { enabled: boolean; 
+/**
+ * How this mode's shortcut starts and stops recording. Replaces the
+ * per-mode `push_to_talk` bool; see
+ * `dictation::migrate_per_mode_shortcut_activation`.
+ */
+shortcut_activation: ShortcutActivation; clipboard_handling: ClipboardHandling; append_trailing_space: boolean; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
 /**
  * Whether this mode's transcript is published to `--follow-stream`
  * followers. The defining similarity to a meeting: a follower process
@@ -1211,7 +1238,12 @@ export type CustomSounds = { start: boolean; stop: boolean }
  * and shared settings" in the design doc for which fields live here versus
  * staying shared on `AppSettings`.
  */
-export type DictationSettings = { enabled: boolean; push_to_talk: boolean; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
+export type DictationSettings = { enabled: boolean; 
+/**
+ * How dictation's shortcut starts and stops recording. Replaces the
+ * per-mode `push_to_talk` bool; see [`migrate_per_mode_shortcut_activation`].
+ */
+shortcut_activation: ShortcutActivation; paste_method: PasteMethod; clipboard_handling: ClipboardHandling; auto_submit: boolean; auto_submit_key: AutoSubmitKey; append_trailing_space: boolean; typing_tool: TypingTool; overlay_style: OverlayStyle; save_recordings: boolean; save_transcripts: boolean; post_process_enabled: boolean; post_process_selected_prompt_id: string | null; 
 /**
  * Whether dictation also captures system audio. Meetings and dictation
  * want opposite answers often enough that one shared switch was wrong:
@@ -1360,6 +1392,24 @@ uncovered_bindings: string[];
  * warning banner appears and explains why recording refused.
  */
 recorder_blocked: boolean }
+/**
+ * How the transcribe shortcut's key events drive a recording.
+ */
+export type ShortcutActivation = 
+/**
+ * Press to start, press again to stop.
+ */
+"toggle" | 
+/**
+ * Hold to record, release to stop.
+ */
+"push_to_talk" | 
+/**
+ * Hold to record and release to stop, or tap to keep recording until the
+ * next press. Which one it was is decided by how long the key was held
+ * (`hold_threshold_ms`).
+ */
+"hold_or_toggle"
 export type ShortcutBinding = { id: string; name: string; description: string; default_binding: string; current_binding: string }
 export type SoundTheme = "marimba" | "pop" | "custom"
 /**

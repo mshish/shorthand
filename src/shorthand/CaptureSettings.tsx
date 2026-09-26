@@ -4,7 +4,7 @@ import { type } from "@tauri-apps/plugin-os";
 import { MicrophoneSelector } from "@/components/settings/MicrophoneSelector";
 import { ChannelSelector } from "@/components/settings/ChannelSelector";
 import { ShortcutInput } from "@/components/settings/ShortcutInput";
-import { PushToTalk } from "@/components/settings/PushToTalk";
+import { ShortcutActivationSetting } from "@/components/settings/ShortcutActivation";
 import { MuteWhileRecording } from "@/components/settings/MuteWhileRecording";
 import { VoiceActivityDetection } from "@/components/settings/VoiceActivityDetection";
 import { ShowOverlay } from "@/components/settings/ShowOverlay";
@@ -14,7 +14,6 @@ import { FollowStreamOutput } from "@/components/settings/advanced/FollowStreamO
 import { SaveRecordings } from "@/components/settings/SaveRecordings";
 import { SaveTranscripts } from "@/components/settings/SaveTranscripts";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
-import { useSettings } from "@/hooks/useSettings";
 
 /**
  * Fork-only "Capture" section: shortcuts and audio-input settings that drive
@@ -23,19 +22,15 @@ import { useSettings } from "@/hooks/useSettings";
  */
 export const CaptureSettings: React.FC = () => {
   const { t } = useTranslation();
-  const { getSetting } = useSettings();
-  const pushToTalk = getSetting("push_to_talk");
   const isLinux = type() === "linux";
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.shortcut.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
-        <PushToTalk descriptionMode="tooltip" grouped={true} />
-        {/* Cancel shortcut is hidden with push-to-talk (release key cancels) and on Linux (dynamic shortcut instability) */}
-        {!isLinux && !pushToTalk && (
-          <ShortcutInput shortcutId="cancel" grouped={true} />
-        )}
+        <ShortcutActivationSetting descriptionMode="tooltip" grouped={true} />
+        {/* Cancel shortcut remains hidden on Linux because of dynamic shortcut instability. */}
+        {!isLinux && <ShortcutInput shortcutId="cancel" grouped={true} />}
       </SettingsGroup>
       <SettingsGroup title={t("settings.sound.title")}>
         <MicrophoneSelector descriptionMode="tooltip" grouped={true} />

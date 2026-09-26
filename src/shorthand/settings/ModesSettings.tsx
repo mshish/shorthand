@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { type } from "@tauri-apps/plugin-os";
 import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import { ShortcutInput } from "@/components/settings/ShortcutInput";
-import { PushToTalk } from "@/components/settings/PushToTalk";
+import { ShortcutActivationSetting } from "@/components/settings/ShortcutActivation";
+import { ModeShortcutActivation } from "../ModeShortcutActivation";
 import { PasteMethodSetting } from "@/components/settings/PasteMethod";
 import { TypingToolSetting } from "@/components/settings/TypingTool";
 import { ClipboardHandlingSetting } from "@/components/settings/ClipboardHandling";
@@ -119,22 +120,11 @@ export const ModesSettings: React.FC = () => {
   const assistedPostProcessEnabled =
     assistedNotesEnabled && (assistedNotes?.post_process_enabled ?? false);
 
-  // Cancel's two existing predicates, carried over from GeneralSettings and
-  // CaptureSettings: hidden on Linux (dynamic-shortcut instability), and
-  // hidden while push-to-talk is on (releasing the key already cancels).
-  // Push-to-talk is per-mode now, so the row survives only while *no* mode
-  // has it — the strictly safer reading, since a visible-but-redundant
-  // shortcut beats a hidden one that still fires.
+  // Cancel is hidden on Linux (dynamic-shortcut instability), as upstream's
+  // GeneralSettings does. It is no longer hidden for push-to-talk: with
+  // hold-or-toggle a tap locks recording on, so releasing the key does not
+  // end every recording and Cancel is needed in every activation mode.
   const isLinux = type() === "linux";
-  // Each optional mode's push-to-talk only counts when that mode is actually
-  // on. Without the `enabled &&` guards, a disabled mode's default suppresses
-  // the row for everyone: dictation ships with push_to_talk true, so on a
-  // fresh install Cancel was hidden by a mode the user had never enabled —
-  // and it stayed hidden even after meetings' own default flipped to off.
-  const anyPushToTalk =
-    (getSetting("push_to_talk") ?? false) ||
-    (dictationEnabled && (dictation?.push_to_talk ?? false)) ||
-    (assistedNotesEnabled && (assistedNotes?.push_to_talk ?? false));
 
   // Gates the dedicated AI-cleanup hotkey in the Meetings tab, the same way
   // `postProcessEnabled` above gates the prompt picker in the Dictation one.
@@ -218,13 +208,16 @@ export const ModesSettings: React.FC = () => {
                 <SaveRecordings descriptionMode="inline" grouped={true} />
                 <SaveTranscripts descriptionMode="inline" grouped={true} />
                 <AdvancedOnly>
-                  {/* Push to talk is Advanced in both notetaking tabs. A meeting
-                      or a thinking session is minutes long, and holding a key
-                      for its whole length is not how anyone uses it; toggle is
-                      the shape of the mode. Dictation keeps its row in the
-                      default view because a dictation is seconds long and
-                      push-to-talk is its natural shape. */}
-                  <PushToTalk descriptionMode="tooltip" grouped={true} />
+                  {/* Shortcut behaviour is Advanced in both notetaking tabs. A
+                      meeting or a thinking session is minutes long, and holding
+                      a key for its whole length is not how anyone uses it;
+                      toggle is the shape of the mode. Dictation keeps its row in
+                      the default view because a dictation is seconds long and
+                      holding is its natural shape. */}
+                  <ShortcutActivationSetting
+                    descriptionMode="tooltip"
+                    grouped={true}
+                  />
                   {/* The AI-cleanup rows are Advanced in this tab and stay in the
                       default view on the Dictation tab. The asymmetry is
                       deliberate and was asked for: cleanup is a routine part of
@@ -327,12 +320,8 @@ export const ModesSettings: React.FC = () => {
                         because paste is always `PasteMethod::None`. */}
                     <AdvancedOnly>
                       {/* Advanced, matching Meetings; see the note there. */}
-                      <AssistedNotesToggleField
-                        field="push_to_talk"
-                        label={t("settings.general.pushToTalk.label")}
-                        description={t(
-                          "settings.general.pushToTalk.description",
-                        )}
+                      <ModeShortcutActivation
+                        mode="assisted_notes"
                         descriptionMode="tooltip"
                         grouped={true}
                       />
@@ -413,10 +402,8 @@ export const ModesSettings: React.FC = () => {
                   descriptionMode="inline"
                   grouped={true}
                 />
-                <DictationToggleField
-                  field="push_to_talk"
-                  label={t("settings.general.pushToTalk.label")}
-                  description={t("settings.general.pushToTalk.description")}
+                <ModeShortcutActivation
+                  mode="dictation"
                   descriptionMode="inline"
                   grouped={true}
                 />
@@ -523,12 +510,12 @@ export const ModesSettings: React.FC = () => {
       )}
 
       {/* The heading is inside the guard, not outside it. Cancel is the only
-          row here and it has three independent reasons to be absent — not
-          advanced, on Linux, or push-to-talk on (release already cancels).
+          row here and it has two independent reasons to be absent — not
+          advanced, or on Linux.
           Rendering the Sheet unconditionally left a heading and a description
           promising a setting with nothing beneath them, which is worse than
           saying nothing. */}
-      {advanced && !isLinux && !anyPushToTalk && (
+      {advanced && !isLinux && (
         // This group really is a peer of the whole tabbed block above, so it
         // asks for the full separation the container used to hand out
         // indiscriminately.
