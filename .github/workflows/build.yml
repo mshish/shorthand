@@ -399,6 +399,14 @@ jobs:
           ORT_DIR="$(pwd)/onnxruntime-osx-x86_64-${ORT_VERSION}"
           echo "ORT_LIB_LOCATION=$ORT_DIR/lib" >> $GITHUB_ENV
           echo "ORT_PREFER_DYNAMIC_LINK=1" >> $GITHUB_ENV
+          # Re-sign ad-hoc: the app is ad-hoc signed with hardened runtime on, so
+          # library validation requires every loaded dylib's Team ID to match the
+          # process's. The prebuilt ORT tarball carries its publisher's Developer ID,
+          # not our empty (ad-hoc) Team ID, so the bundled copy aborts the app at
+          # launch. If this fork ever gets a Developer ID, sign with that identity
+          # here instead — this isn't a stand-in for a missing certificate, it's what
+          # keeps nested code consistent with whatever identity signs the app.
+          codesign --force --sign - "$ORT_DIR/lib/libonnxruntime.${ORT_VERSION}.dylib"
           # Bundle the versioned dylib (matches the install name @rpath/libonnxruntime.1.24.2.dylib)
           jq --arg lib "$ORT_DIR/lib/libonnxruntime.${ORT_VERSION}.dylib" \
             '.bundle.macOS.frameworks = [$lib]' \
@@ -703,6 +711,35 @@ jobs:
               exit 1
             else
               echo "OK: $libname"
+            fi
+          done
+          echo "=== Checking Team ID consistency (hardened runtime + library validation requires this) ==="
+          # codesign writes -dv output to stderr, not stdout; swap the streams so the
+          # pipe sees it. For an ad-hoc signature the field reads "TeamIdentifier=not
+          # set" — both sides being "not set" is the passing case here.
+          get_team_id() {
+            codesign -dv --verbose=4 "$1" 2>&1 1>/dev/null | awk -F= '/^TeamIdentifier=/ { print $2; exit }'
+          }
+          BINARY="$APP/Contents/MacOS/$(basename "$APP" .app)"
+          BINARY_TEAM_ID="$(get_team_id "$BINARY")"
+          echo "Binary TeamIdentifier: $BINARY_TEAM_ID"
+          # An empty result means the TeamIdentifier line was absent entirely, which
+          # is not the same as "not set" (ad-hoc). Without this guard a parse failure
+          # would leave both sides empty and the comparison below would pass
+          # vacuously, turning this check into a no-op exactly when it is needed.
+          if [ -z "$BINARY_TEAM_ID" ]; then
+            echo "ERROR: no TeamIdentifier line in codesign output for $BINARY; cannot verify Team IDs" >&2
+            codesign -dv --verbose=4 "$BINARY" || true
+            exit 1
+          fi
+          for dylib in "$APP/Contents/Frameworks/"*; do
+            [ -f "$dylib" ] || continue
+            DYLIB_TEAM_ID="$(get_team_id "$dylib")"
+            if [ "$DYLIB_TEAM_ID" != "$BINARY_TEAM_ID" ]; then
+              echo "MISMATCH: $(basename "$dylib") TeamIdentifier ($DYLIB_TEAM_ID) != binary TeamIdentifier ($BINARY_TEAM_ID)"
+              exit 1
+            else
+              echo "OK: $(basename "$dylib") TeamIdentifier matches ($DYLIB_TEAM_ID)"
             fi
           done
 
