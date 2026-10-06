@@ -12,8 +12,14 @@ import type {
 } from "@/bindings";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
+import { overlayErrorKeys } from "@/shorthand/overlayError";
 
-type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
+type OverlayState =
+  | "recording"
+  | "streaming"
+  | "transcribing"
+  | "processing"
+  | "error";
 
 // Number of reactive bars in the waveform (the simple, smoothed style shared by
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
@@ -29,6 +35,7 @@ const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const [state, setState] = useState<OverlayState>("recording");
+  const [errorLines, setErrorLines] = useState<string[]>([]);
   // `Stream::play()` returning does not mean hardware callbacks are flowing.
   // Stay visually in an arming state until the backend processes the first
   // actual microphone sample chunk.
@@ -136,6 +143,15 @@ const RecordingOverlay: React.FC = () => {
         if (payload.kind) setWorkKind(payload.kind);
       });
 
+      const unlistenError = await listen<{ kind: string; saved: boolean }>(
+        "overlay-error",
+        (event) => {
+          setErrorLines(
+            overlayErrorKeys(event.payload.kind, event.payload.saved),
+          );
+        },
+      );
+
       return () => {
         unlistenShow();
         unlistenHide();
@@ -143,6 +159,7 @@ const RecordingOverlay: React.FC = () => {
         unlistenLevel();
         unlistenStream();
         unlistenPhase();
+        unlistenError();
       };
     };
 
@@ -332,6 +349,28 @@ const RecordingOverlay: React.FC = () => {
                 true,
               )
             : listeningRow(open, true)}
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Error: what failed and what to do. The backend hides it after a delay.
+  if (state === "error") {
+    const [message, ...details] = errorLines;
+    return (
+      <div dir={direction} className={`ov-stage ${position} ov-fade show`}>
+        <div className="scard overlay-error" role="alert">
+          <span className="overlay-error-dot" />
+          <div className="overlay-error-lines">
+            {message && (
+              <span className="overlay-error-message">{t(message)}</span>
+            )}
+            {details.map((key) => (
+              <span key={key} className="overlay-error-detail">
+                {t(key)}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
     );

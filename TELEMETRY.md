@@ -16,11 +16,14 @@ against each other.
 **Crash and error reports**
 
 - A Rust panic: the panic message and stack frames.
-- One of four named failures, with a short kind and, where the text cannot
+- One of six named failures, with a short kind and, where the text cannot
   contain a path, a fixed detail: `model_load` (kind only), `transcription`
   (a fixed reason code: engine error, engine panic, finalize timeout,
   engine busy, model not loaded, or other), `follow_stream_listen` and `request_socket_listen` (the I/O error
-  kind only).
+  kind only), `mic_open` (a fixed reason: microphone permission denied, no
+  input device, or unknown), and `native_crash` (sent at the next launch when
+  Shorthand stopped inside model loading: the stage and whether a GPU was
+  pinned, CPU, or automatic; no memory or crash dump).
 - With every report: Shorthand version, operating system name and version,
   CPU architecture, Rust version, and the time.
 

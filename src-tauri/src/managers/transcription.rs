@@ -1042,22 +1042,45 @@ impl TranscriptionManager {
                 // STATUS_STACK_BUFFER_OVERRUN (0xC0000409); serializing them is
                 // clean 6/6. Loading is a startup-latency cost, not a steady-state
                 // one, and concurrent *streaming* on already-loaded models is
-                // unaffected — that path stays fully parallel.
-                let model = {
+                // unaffected — that path stays fully parallel. `session()` is
+                // serialized with the load too: the crash marker is a single
+                // file, so one load's `end` must not clear another's `begin`.
+                let marker_dir = self.app_handle.path().app_data_dir().ok();
+                let accel = if model_options.device.is_some() {
+                    "pinned_device"
+                } else if matches!(model_options.backend, Backend::Cpu) {
+                    "cpu"
+                } else {
+                    "auto"
+                };
+                let loaded = {
                     let _load_guard = native_model_load_lock()
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    Model::load_with(&model_path, &model_options)
+                    if let Some(dir) = &marker_dir {
+                        crate::shorthand::native_marker::begin(dir, "model_load", accel);
+                    }
+                    // `session()` creates native compute state on the same
+                    // device, so the marker stays open until it returns.
+                    let loaded = Model::load_with(&model_path, &model_options).map(|model| {
+                        let session = model.session();
+                        (model, session)
+                    });
+                    if let Some(dir) = &marker_dir {
+                        crate::shorthand::native_marker::end(dir);
+                    }
+                    loaded
                 }
                 .map_err(|e| {
                     let error_msg = format!("Failed to load whisper model {}: {}", model_id, e);
                     emit_loading_failed(&error_msg);
                     anyhow::anyhow!(error_msg)
                 })?;
+                let (model, session) = loaded;
                 // The bound backend may differ from the request (e.g. CPU
                 // fallback under Auto); log what actually loaded.
                 let bound_backend = model.backend();
-                let session = model.session().map_err(|e| {
+                let session = session.map_err(|e| {
                     let error_msg = format!(
                         "Failed to create session for whisper model {}: {}",
                         model_id, e

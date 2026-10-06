@@ -868,7 +868,6 @@ impl ShortcutAction for TranscribeAction {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
             cancel_active_streams(app);
-            utils::hide_recording_overlay(app);
             set_tray_state(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
                 let error_type = match start_failure_code(&err) {
@@ -876,6 +875,13 @@ impl ShortcutAction for TranscribeAction {
                     StartFailureCode::NoInputDevice => "no_input_device",
                     StartFailureCode::AudioCaptureFailed => "unknown",
                 };
+                crate::overlay::show_error_overlay(
+                    app,
+                    crate::shorthand::overlay_error::for_start_failure(error_type),
+                    false,
+                );
+                // The fixed error_type only; `err` can name the device.
+                crate::shorthand::telemetry::report_error("mic_open", Some(error_type));
                 let _ = app.emit(
                     "recording-error",
                     RecordingErrorEvent {
@@ -1311,18 +1317,30 @@ impl ShortcutAction for TranscribeAction {
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", error_message);
                             // Save entry with empty text so user can retry
+                            let mut in_history = false;
                             if wav_saved || save_transcripts {
-                                if let Err(save_err) = hm.save_entry(
+                                match hm.save_entry(
                                     history_file_name,
                                     String::new(),
                                     post_process,
                                     None,
                                     None,
                                 ) {
-                                    error!("Failed to save failed history entry: {}", save_err);
+                                    Ok(_) => in_history = true,
+                                    Err(save_err) => {
+                                        error!("Failed to save failed history entry: {}", save_err);
+                                    }
                                 }
                             }
-                            utils::hide_recording_overlay(&ah);
+                            crate::overlay::show_error_overlay(
+                                &ah,
+                                crate::shorthand::overlay_error::for_transcription_reason(
+                                    crate::shorthand::telemetry::transcription_reason(
+                                        &err.to_string(),
+                                    ),
+                                ),
+                                wav_saved && in_history,
+                            );
                             set_tray_state(&ah, TrayIconState::Idle);
                         }
                     }

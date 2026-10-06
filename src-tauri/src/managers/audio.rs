@@ -871,6 +871,27 @@ impl AudioRecordingManager {
             requested_system_audio.enabled,
             requested_system_audio.device_name.as_deref(),
         );
+        // Windows: opening cpal's *default* handle goes through
+        // `ActivateAudioInterfaceAsync`, which stayed broken after default-device
+        // changes on 2026-10-05 until restart. Opening the same endpoint by id
+        // uses `IMMDevice::Activate` instead. The default handle is still tried
+        // first on every open, so it keeps following default-device changes
+        // mid-recording whenever it works; the by-id retry covers one recording.
+        #[cfg(windows)]
+        let mic_is_default = resolution.device.is_none();
+        #[cfg(windows)]
+        let system_audio_is_default =
+            requested_system_audio.enabled && requested_system_audio.device_name.is_none();
+        #[cfg(windows)]
+        let by_id_output = |current: Option<SystemAudioCapture>| {
+            crate::audio_toolkit::audio::pinned_default_output()
+                .map(|device| SystemAudioCapture { device })
+                .or(current)
+        };
+        #[cfg(windows)]
+        let mut system_audio = system_audio;
+        #[cfg(windows)]
+        let mut opened_by_id = false;
         let resolve_elapsed = resolve_started.elapsed();
 
         // Ensure VAD is loaded if it wasn't for whatever reason
@@ -881,22 +902,88 @@ impl AudioRecordingManager {
         let open_started = Instant::now();
         let mut recorder_opt = self.recorder.lock().unwrap();
         if let Some(rec) = recorder_opt.as_mut() {
-            let system_audio_active =
-                match rec.open(resolution.device.clone(), system_audio.clone()) {
-                    Ok(system_audio_active) => system_audio_active,
-                    Err(first_err) => {
-                        // A cached device or config may have gone stale (unplugged,
-                        // rate/format changed). Re-resolve from a fresh enumeration and
-                        // retry once before surfacing the error.
-                        warn!(
+            // Debug builds only: SHORTHAND_DEBUG_FAIL_DEFAULT_MIC=<any value but
+            // `all`> fails every first default-mic open, to exercise the by-id retry without
+            // reproducing the WASAPI fault. The value `all` also fails the by-id
+            // retry, so the whole open errors.
+            #[cfg(all(windows, debug_assertions))]
+            let forced_failure =
+                mic_is_default && std::env::var_os("SHORTHAND_DEBUG_FAIL_DEFAULT_MIC").is_some();
+            #[cfg(not(all(windows, debug_assertions)))]
+            let forced_failure = false;
+            let first = if forced_failure {
+                Err("forced default-mic open failure (SHORTHAND_DEBUG_FAIL_DEFAULT_MIC)".into())
+            } else {
+                rec.open(resolution.device.clone(), system_audio.clone())
+            };
+            let system_audio_active = match first {
+                Ok(system_audio_active) => system_audio_active,
+                Err(first_err) => {
+                    // A cached device or config may have gone stale (unplugged,
+                    // rate/format changed). Re-resolve from a fresh enumeration and
+                    // retry once before surfacing the error.
+                    warn!(
                         "Recorder open failed ({first_err}); re-resolving device and retrying once"
                     );
-                        self.invalidate_device_cache();
-                        resolution = self.resolve_microphone_device(&settings);
-                        rec.open(resolution.device.clone(), system_audio)
+                    self.invalidate_device_cache();
+                    resolution = self.resolve_microphone_device(&settings);
+                    #[cfg(windows)]
+                    // Only when the re-resolve still found no named microphone; a
+                    // device it found on the retry must not be replaced.
+                    if mic_is_default && resolution.device.is_none() {
+                        resolution.device = crate::audio_toolkit::audio::pinned_default_input();
+                        if resolution.device.is_some() {
+                            opened_by_id = true;
+                            warn!("Retrying this recording with the default devices opened by id");
+                        } else {
+                            warn!("No default input endpoint to open by id; retrying with the default handle");
+                        }
+                        if system_audio_is_default {
+                            system_audio = by_id_output(system_audio);
+                        }
+                        #[cfg(debug_assertions)]
+                        if std::env::var_os("SHORTHAND_DEBUG_FAIL_DEFAULT_MIC")
+                            .is_some_and(|v| v == "all")
+                        {
+                            return Err(anyhow::anyhow!(
+                                    "Failed to open recorder: forced by-id open failure (SHORTHAND_DEBUG_FAIL_DEFAULT_MIC=all)"
+                                ));
+                        }
+                    }
+                    rec.open(resolution.device.clone(), system_audio)
+                        .map_err(|e| anyhow::anyhow!("Failed to open recorder: {}", e))?
+                }
+            };
+            #[cfg(windows)]
+            let by_id_output_retry = if system_audio_is_default
+                && !system_audio_active
+                && !opened_by_id
+                && matches!(
+                    rec.loopback_open_outcome(),
+                    LoopbackOpenOutcome::Unavailable { .. }
+                ) {
+                by_id_output(None)
+            } else {
+                None
+            };
+            // The microphone is already running; a failed by-id reopen must not
+            // turn that into a failed press, so fall back to microphone-only.
+            #[cfg(windows)]
+            let system_audio_active = if let Some(output) = by_id_output_retry {
+                warn!("System audio failed on the default output; reopening this recording with it opened by id");
+                rec.close()
+                    .map_err(|e| anyhow::anyhow!("Failed to close recorder: {}", e))?;
+                match rec.open(resolution.device.clone(), Some(output)) {
+                    Ok(active) => active,
+                    Err(e) => {
+                        warn!("Reopen with the output opened by id failed ({e}); continuing microphone-only");
+                        rec.open(resolution.device.clone(), None)
                             .map_err(|e| anyhow::anyhow!("Failed to open recorder: {}", e))?
                     }
-                };
+                }
+            } else {
+                system_audio_active
+            };
             self.system_audio_active
                 .store(system_audio_active, Ordering::Release);
             *self.loopback_open_outcome.lock().unwrap() = rec.loopback_open_outcome().clone();
