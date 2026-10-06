@@ -10,10 +10,12 @@ import { SettingContainer } from "@/components/ui/SettingContainer";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
 import { Sheet } from "@/shorthand/ui/Sheet";
 
-/** Shorthand's own pay-what-you-want support checkout. Upstream's row points
- * at handy.computer. Not a donate-type Stripe link: support is payment for
- * the software, and Stripe restricts donation solicitation. */
-const SUPPORT_URL = "https://buy.stripe.com/bJe28r91b87UemkahifEk02";
+/** The site's license page, which says what a license is and links to the
+ * pay-what-you-want checkout. Upstream's row points at handy.computer. The
+ * row sells a license rather than asking for support: Stripe paused the
+ * account when the checkout read as fundraising for development, which its
+ * restricted-business list covers. */
+const LICENSE_URL = "https://shorthand.ing/license";
 const SOURCE_URL = "https://github.com/mshish/shorthand";
 const HANDY_URL = "https://github.com/cjpais/Handy";
 
@@ -51,11 +53,11 @@ export const AboutSettings: React.FC = () => {
     fetchVersion();
   }, []);
 
-  const handleSupportClick = async () => {
+  const handleLicenseClick = async () => {
     try {
-      await openUrl(SUPPORT_URL);
+      await openUrl(LICENSE_URL);
     } catch (error) {
-      console.error("Failed to open support link:", error);
+      console.error("Failed to open license link:", error);
     }
   };
 
@@ -97,13 +99,13 @@ export const AboutSettings: React.FC = () => {
         </SettingContainer>
 
         <SettingContainer
-          title={t("settings.about.support.title")}
-          description={t("settings.about.support.description")}
+          title={t("settings.about.license.title")}
+          description={t("settings.about.license.description")}
           descriptionMode="inline"
           grouped={true}
         >
-          <Button variant="primary" size="md" onClick={handleSupportClick}>
-            {t("settings.about.support.button")}
+          <Button variant="primary" size="md" onClick={handleLicenseClick}>
+            {t("settings.about.license.button")}
           </Button>
         </SettingContainer>
 
