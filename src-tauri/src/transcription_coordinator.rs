@@ -181,12 +181,14 @@ struct InputEvent {
     /// They fire on every edge by design and must never be debounced —
     /// dropping one desyncs toggle parity and wedges recording on.
     external: bool,
-    /// When the key event reached the app, stamped by `send` on the shortcut
-    /// thread. Hold-vs-tap is measured from this rather than from when this
-    /// thread dequeues the event: a start effect runs on this thread and can
-    /// block it for hundreds of milliseconds (a cold microphone open), which
-    /// turned taps into holds.
-    at: Instant,
+    /// When the sender observed the edge, not when the coordinator thread
+    /// dequeues it. The coordinator executes `Effect::Start` inline, and the
+    /// first activation after startup spends hundreds of milliseconds
+    /// initializing the microphone; a release queued behind that block must
+    /// still be measured from the real key-up, or a short tap classifies as
+    /// a hold and the just-started recording stops with zero samples
+    /// (#2089). The loop passes this as the `now` of `on_input`.
+    received_at: Instant,
 }
 
 impl InputEvent {
@@ -1161,7 +1163,7 @@ impl TranscriptionCoordinator {
                 mode,
                 hold_threshold,
                 external,
-                at: Instant::now(),
+                received_at: Instant::now(),
             }))
             .is_err()
         {
@@ -1289,8 +1291,8 @@ pub fn suppress_publication(app: &AppHandle, mode: FollowMode) {
 }
 
 fn dispatch_input(state: &mut CoordinatorState, input: InputEvent) -> Option<Effect> {
-    let at = input.at;
-    state.on_input(input, at)
+    let now = input.received_at;
+    state.on_input(input, now)
 }
 
 fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
@@ -1665,7 +1667,7 @@ mod tests {
             mode: ShortcutActivation::PushToTalk,
             hold_threshold: Duration::ZERO,
             external: false,
-            at: Instant::now(),
+            received_at: Instant::now(),
         }
     }
 
@@ -1804,7 +1806,7 @@ mod tests {
                     mode: ShortcutActivation::Toggle,
                     hold_threshold: Duration::ZERO,
                     external: true,
-                    at: Instant::now(),
+                    received_at: Instant::now(),
                 },
                 at,
             )
@@ -1867,7 +1869,7 @@ mod tests {
             mode: ShortcutActivation::Toggle,
             hold_threshold: Duration::ZERO,
             external,
-            at: Instant::now(),
+            received_at: Instant::now(),
         }
     }
 
@@ -2816,7 +2818,7 @@ mod tests {
             mode: ShortcutActivation::PushToTalk,
             hold_threshold: Duration::ZERO,
             external: false,
-            at: Instant::now(),
+            received_at: Instant::now(),
         };
         assert!(matches!(
             state.on_input(held(true), t0),
@@ -3032,7 +3034,7 @@ mod tests {
             mode,
             hold_threshold: HOLD_THRESHOLD,
             external: false,
-            at: Instant::now(),
+            received_at: Instant::now(),
         }
     }
 
@@ -3435,14 +3437,14 @@ mod tests {
         let mut state = CoordinatorState::new();
         let pressed = Instant::now();
         let mut press = input(ShortcutActivation::HoldOrToggle, true);
-        press.at = pressed;
+        press.received_at = pressed;
         assert!(matches!(
             dispatch_input(&mut state, press),
             Some(Effect::Start { .. })
         ));
 
         let mut release = input(ShortcutActivation::HoldOrToggle, false);
-        release.at = pressed + ms(100);
+        release.received_at = pressed + ms(100);
         // The coordinator reaches the release only after a slow start effect.
         std::thread::sleep(ms(400));
         assert!(dispatch_input(&mut state, release).is_none());
