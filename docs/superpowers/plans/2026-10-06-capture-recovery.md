@@ -5,6 +5,7 @@
 **Goal:** Dictation recovers from a broken default audio device instead of failing until restart. A quick tap is no longer misread as a hold when the start path is slow. Capture failures and native crashes become visible, both in the overlay and in Sentry.
 
 **Architecture:** Four independent fixes on `fix/capture-recovery` (worktree `.worktrees/capture-recovery`, based on `origin/main` = shipped 0.6.0), plus an upstream PR draft:
+
 1. The coordinator measures hold-vs-tap from when the key event arrived, not from when its thread dequeued it.
 2. On Windows, when opening the default mic or system-audio device fails, that one open is retried with the same endpoint opened by its id. Every open still tries the default handle first, so normal behaviour (following default-device changes mid-recording) is unchanged.
 3. A crash marker written around the native model load turns a native abort into a `native_crash` Sentry event on the next launch. Mic open failures are reported as `mic_open`.
@@ -22,10 +23,10 @@ Log: `%LOCALAPPDATA%\com.mshish.shorthand\logs\handy.log`. Log times are UTC.
 - **Mic (2026-10-05, 22:07 onwards):** a meeting session ran 21:14–22:03 on the default mic and default output.
   - cpal reported a device change at the start (`Microphone backend reported a stream error`) and again at the end (`System audio capture failed`).
   - From then on, every mic open failed with `Cannot change thread mode after it is set. (os error -2147417850)` (`RPC_E_CHANGED_MODE`) until the app was restarted.
-  - Activation of cpal's *default* handle goes through `ActivateAudioInterfaceAsync` (`cpal-0.18.2/src/host/wasapi/device.rs:351-406`), which does its work on OS-owned threads.
+  - Activation of cpal's _default_ handle goes through `ActivateAudioInterfaceAsync` (`cpal-0.18.2/src/host/wasapi/device.rs:351-406`), which does its work on OS-owned threads.
   - cpal's default-device monitor runs `CoInitializeEx(COINIT_APARTMENTTHREADED)` on MMDevAPI's notification threads (`stream.rs:153,172` → `device.rs:1168` → `com.rs:16`).
   - Hypothesis, unconfirmed: that leaves a pooled OS thread STA, so later default activations fail.
-  - A *specific* device (`DeviceHandle::Specific`) uses `IMMDevice::Activate` on our own worker thread and registers no monitor (`device.rs:553,589`). It avoids both.
+  - A _specific_ device (`DeviceHandle::Specific`) uses `IMMDevice::Activate` on our own worker thread and registers no monitor (`device.rs:553,589`). It avoids both.
   - The user chose not to fork cpal, and not to stay pinned after a failure. Keep default streams, and recover per open.
 - **0-sample stop (2026-10-06 10:17:37):**
   - The press started recording, and the start effect blocked the coordinator thread for 416 ms (cold VAD load plus mic open).
@@ -47,7 +48,7 @@ Log: `%LOCALAPPDATA%\com.mshish.shorthand\logs\handy.log`. Log times are UTC.
 - **Copy:** it speaks as a note taker; plain and short.
 - **UI:** screenshot every new overlay state before merge.
 - **Default branch is `main`.** Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Comments:** comments explaining a Windows-only gate state the *actual* reason, cpal's default-device activation path, not "COM is flaky".
+- **Comments:** comments explaining a Windows-only gate state the _actual_ reason, cpal's default-device activation path, not "COM is flaky".
 - **Keep the upstream diff small (`AGENTS.md` § "Keep the diff mergeable"):**
   - Tasks 1, 2 and 4 edit upstream files; do not reformat or tidy around the edits.
   - Task 1 is a genuine upstream bug (`upstream/main` `transcription_coordinator.rs:570` has the same `Instant::now()`) and is a candidate to offer to Handy afterwards.
@@ -58,6 +59,7 @@ Log: `%LOCALAPPDATA%\com.mshish.shorthand\logs\handy.log`. Log times are UTC.
 ### Task 1: Measure hold-vs-tap from the key event's arrival time
 
 **Files:**
+
 - Modify: `src-tauri/src/transcription_coordinator.rs`
   - `InputEvent` struct (~:173)
   - the coordinator loop (~:1002-1006)
@@ -65,6 +67,7 @@ Log: `%LOCALAPPDATA%\com.mshish.shorthand\logs\handy.log`. Log times are UTC.
   - the tests module (helper `input` ~:3011, plus every other `InputEvent { … }` literal; there are 12 in the file)
 
 **Interfaces:**
+
 - Produces: `InputEvent.at: Instant`, and `fn dispatch_input(state: &mut CoordinatorState, input: InputEvent) -> Option<Effect>`, which the loop uses.
 
 - [ ] **Step 1: Write the failing test** (append to the `tests` module)
@@ -154,14 +157,17 @@ git commit -m "fix: time hold-vs-tap from the key event, not from when the coord
 ### Task 2: Reopen the default device by id when a default open fails (Windows)
 
 **Files:**
+
 - Modify: `src-tauri/src/audio_toolkit/audio/device.rs` (add two resolvers)
 - Modify: the `audio_toolkit::audio` re-exports (the module that already re-exports `list_output_devices`; add the two new names next to it)
 - Modify: `src-tauri/src/managers/audio.rs`, `start_microphone_stream` (:798, open block :882-910)
 
 **Interfaces:**
+
 - Produces: `pub fn pinned_default_input() -> Option<cpal::Device>` and `pub fn pinned_default_output() -> Option<cpal::Device>` in `audio_toolkit::audio`.
 
 **Behaviour:**
+
 - Every open tries cpal's default handle first, exactly as today.
 - Only when that open fails is it retried with the endpoint opened by id, and only for that recording. Nothing is remembered.
 - The next press tries the default handle again, so mid-recording default-device following is unchanged whenever the default handle works.
@@ -314,6 +320,7 @@ git commit -m "fix: retry a failed default mic or output open with the device op
 ### Task 3: Report mic-open failures and native crashes to Sentry
 
 **Files:**
+
 - Create: `src-tauri/src/shorthand/native_marker.rs`
 - Modify: `src-tauri/src/shorthand/mod.rs` (`pub mod native_marker;`)
 - Modify: `src-tauri/src/managers/transcription.rs:1045-1050` (wrap `Model::load_with`)
@@ -322,6 +329,7 @@ git commit -m "fix: retry a failed default mic or output open with the device op
 - Modify: `TELEMETRY.md` (the "named failures" bullet, lines 19-23)
 
 **Interfaces:**
+
 - Produces: `native_marker::begin(dir: &Path, stage: &'static str, accel: &'static str)`, `native_marker::end(dir: &Path)`, and `native_marker::take_previous(dir: &Path) -> Option<String>` (returns `"<stage>:<accel>"`).
 - Consumes: `telemetry::report_error(kind: &'static str, detail: Option<&str>)`.
 
@@ -480,6 +488,7 @@ git commit -m "feat: report mic-open failures and native crashes during model lo
 ### Task 4: Show capture failures in the overlay
 
 **Files:**
+
 - Create: `src-tauri/src/shorthand/overlay_error.rs` (fork-only: maps failures to fixed kinds), and add `pub mod overlay_error;` to `src-tauri/src/shorthand/mod.rs`
 - Modify: `src-tauri/src/overlay.rs`
   - `overlay_dimensions` (:57)
@@ -492,6 +501,7 @@ git commit -m "feat: report mic-open failures and native crashes during model lo
 - Modify: `src/shorthand/locales/en.json`
 
 **Interfaces:**
+
 - Produces (Rust): `overlay_error::for_start_failure(error_type: &str) -> &'static str` and `overlay_error::for_transcription_reason(reason: &str) -> &'static str`.
 - Produces (Rust): `overlay::show_error_overlay(app_handle: &AppHandle, kind: &'static str, saved: bool)`. It emits `overlay-error` with `{ kind, saved }`, shows state `"error"`, and hides after 3 s unless the overlay was shown or hidden again meanwhile.
 - Produces (TS): `overlayErrorKeys(kind: string, saved: boolean): string[]`, the copy keys in display order.
@@ -499,17 +509,17 @@ git commit -m "feat: report mic-open failures and native crashes during model lo
 
 **Copy.** This was agreed with the user on 2026-10-06. Do not reword it without asking. Name the app only when telling the user to restart it.
 
-| kind | first line | second line |
-|---|---|---|
-| `mic_permission_windows` | Can't use your microphone. | Turn it on in Windows Settings → Privacy → Microphone. |
-| `mic_permission_macos` | Can't use your microphone. | Turn it on in System Settings → Privacy & Security → Microphone. |
-| `mic_permission` | Can't use your microphone. | Turn on microphone access in your system settings. |
-| `mic_missing` | No microphone found. | — |
-| `mic_failed` | Your microphone wouldn't start. | Restart Shorthand to fix it. |
-| `not_ready` | Couldn't get ready to transcribe. | Restart Shorthand and try again. |
-| `busy` | Still finishing your last note. | — |
-| `transcribe_failed` | Couldn't transcribe that recording. | — |
-| unknown kind | Something went wrong with that recording. | — |
+| kind                     | first line                                | second line                                                      |
+| ------------------------ | ----------------------------------------- | ---------------------------------------------------------------- |
+| `mic_permission_windows` | Can't use your microphone.                | Turn it on in Windows Settings → Privacy → Microphone.           |
+| `mic_permission_macos`   | Can't use your microphone.                | Turn it on in System Settings → Privacy & Security → Microphone. |
+| `mic_permission`         | Can't use your microphone.                | Turn on microphone access in your system settings.               |
+| `mic_missing`            | No microphone found.                      | —                                                                |
+| `mic_failed`             | Your microphone wouldn't start.           | Restart Shorthand to fix it.                                     |
+| `not_ready`              | Couldn't get ready to transcribe.         | Restart Shorthand and try again.                                 |
+| `busy`                   | Still finishing your last note.           | —                                                                |
+| `transcribe_failed`      | Couldn't transcribe that recording.       | —                                                                |
+| unknown kind             | Something went wrong with that recording. | —                                                                |
 
 When `saved` is true, "Your recording is in History." is added as the last line. That is only true when the WAV was saved, so it follows `wav_saved`.
 
@@ -718,6 +728,7 @@ pub fn show_error_overlay(app_handle: &AppHandle, kind: &'static str, saved: boo
 The duration is 4 s rather than 3 s because the copy runs to two or three lines.
 
 In `actions.rs`:
+
 - **Start-failure branch:** compute `error_type` before the overlay call, then replace `utils::hide_recording_overlay(app);` with `crate::overlay::show_error_overlay(app, crate::shorthand::overlay_error::for_start_failure(error_type), false);`. Keep the rest of the branch.
 - **Transcription failure:** next to `let _ = ah.emit("transcription-error", error_message);` add:
 
@@ -736,22 +747,24 @@ Check that nothing after it in that branch hides the overlay immediately. If som
 - [ ] **Step 6: Frontend: render the state**
 
 In `RecordingOverlay.tsx`:
+
 - Change the state type to `"recording" | "streaming" | "transcribing" | "processing" | "error"`.
 - Add `const [errorLines, setErrorLines] = useState<string[]>([]);`.
 - Inside `setupEventListeners`, add:
 
 ```tsx
-      const unlistenError = await listen<{ kind: string; saved: boolean }>(
-        "overlay-error",
-        (event) => {
-          setErrorLines(overlayErrorKeys(event.payload.kind, event.payload.saved));
-        },
-      );
+const unlistenError = await listen<{ kind: string; saved: boolean }>(
+  "overlay-error",
+  (event) => {
+    setErrorLines(overlayErrorKeys(event.payload.kind, event.payload.saved));
+  },
+);
 ```
 
 - Call `unlistenError()` in the cleanup alongside the others. The backend hides the overlay; add no timer here.
 
 In the render, `state === "error"` shows a rounded panel (the pill's radius and padding) with no spinner or waveform:
+
 - The first line uses the pill's label style.
 - The remaining lines use a smaller, muted style.
 - Each line is `t(key)`. Add an `overlay-error` class and style it in `RecordingOverlay.css` with the existing brand tokens from `src/shorthand/brand/theme.css` for text and a warning accent. Add no new colours.
@@ -809,6 +822,7 @@ No code. This step confirms the fixes against the real failures, not only the de
 The same bug is on `upstream/main` (`transcription_coordinator.rs:570`: `state.on_input(input, Instant::now())`). Upstream's coordinator differs from the fork's by about 1,800 lines, so the fix is redone against upstream rather than cherry-picked.
 
 **Rules (`AGENTS.md` § "GitHub workflow for AI coding assistants"):**
+
 - Read `.github/PULL_REQUEST_TEMPLATE.md` and fill in every section.
 - Leave "Human Written Description" as a clearly marked TODO for the user.
 - Do not open the PR. Handy's template says AI-opened PRs are closed; the user submits it through the GitHub website.
@@ -835,6 +849,7 @@ git worktree add ../.worktrees/upstream-tap-timing -b fix/tap-timed-from-key-eve
 - [ ] **Step 3: Port Task 1** to upstream's `transcription_coordinator.rs`
 
 Apply the same three changes:
+
 - the `at: Instant` field on upstream's `InputEvent`;
 - the stamp in its `send`;
 - `dispatch_input` used by its loop.
@@ -849,7 +864,8 @@ From `src-tauri`, with the Global Constraints env vars: `cargo test --lib transc
 
 Commit with a conventional message (`fix: time hold-vs-tap from the key event, not from when the coordinator reaches it`).
 
-Write the body to `docs/upstream-pr-tap-timing.md` in the *fork* worktree, not on the upstream branch. Fill in the template:
+Write the body to `docs/upstream-pr-tap-timing.md` in the _fork_ worktree, not on the upstream branch. Fill in the template:
+
 - what happened: a slow start, such as a cold mic open, blocks the coordinator thread, so a tap's release is timed late and reads as a hold;
 - the fix;
 - the test;
