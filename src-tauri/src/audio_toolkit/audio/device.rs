@@ -18,6 +18,25 @@ pub fn device_display_name(device: &cpal::Device) -> Option<String> {
         .map(|description| description.name().to_string())
 }
 
+/// The current default endpoint, opened by its id rather than as cpal's
+/// default-device handle. On Windows the default handle activates through
+/// `ActivateAudioInterfaceAsync` and registers a default-device monitor; a
+/// device obtained by id activates with `IMMDevice::Activate` on the calling
+/// thread and registers no monitor. Used to recover when the default handle
+/// stops opening.
+pub fn pinned_default_input() -> Option<cpal::Device> {
+    let host = crate::audio_toolkit::get_cpal_host();
+    let id = host.default_input_device()?.id().ok()?;
+    host.device_by_id(&id)
+}
+
+/// Output counterpart of [`pinned_default_input`], for the system-audio lane.
+pub fn pinned_default_output() -> Option<cpal::Device> {
+    let host = crate::audio_toolkit::get_cpal_host();
+    let id = host.default_output_device()?.id().ok()?;
+    host.device_by_id(&id)
+}
+
 #[derive(Clone)]
 pub struct SystemAudioDeviceInfo {
     /// Opaque persisted identifier. On Linux this is CPAL's documented

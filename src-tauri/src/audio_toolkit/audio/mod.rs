@@ -9,7 +9,7 @@ mod visualizer;
 pub use device::resolve_linux_system_audio_device;
 pub use device::{
     device_display_name, list_input_devices, list_output_devices, list_system_audio_devices,
-    CpalDeviceInfo, SystemAudioDeviceInfo,
+    pinned_default_input, pinned_default_output, CpalDeviceInfo, SystemAudioDeviceInfo,
 };
 pub use recorder::SystemAudioCapture;
 pub use recorder::{
