@@ -1059,8 +1059,10 @@ impl TranscriptionManager {
                         crate::shorthand::native_marker::begin(dir, "model_load", accel);
                     }
                     let loaded = Model::load_with(&model_path, &model_options);
-                    if let Some(dir) = &marker_dir {
-                        crate::shorthand::native_marker::end(dir);
+                    if loaded.is_err() {
+                        if let Some(dir) = &marker_dir {
+                            crate::shorthand::native_marker::end(dir);
+                        }
                     }
                     loaded
                 }
@@ -1072,7 +1074,13 @@ impl TranscriptionManager {
                 // The bound backend may differ from the request (e.g. CPU
                 // fallback under Auto); log what actually loaded.
                 let bound_backend = model.backend();
-                let session = model.session().map_err(|e| {
+                // `session()` creates native compute state on the same device, so
+                // the marker stays open until it returns (end on Ok and Err).
+                let session = model.session();
+                if let Some(dir) = &marker_dir {
+                    crate::shorthand::native_marker::end(dir);
+                }
+                let session = session.map_err(|e| {
                     let error_msg = format!(
                         "Failed to create session for whisper model {}: {}",
                         model_id, e

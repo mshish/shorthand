@@ -1806,7 +1806,7 @@ mod tests {
                     mode: ShortcutActivation::Toggle,
                     hold_threshold: Duration::ZERO,
                     external: true,
-                    received_at: Instant::now(),
+                    received_at: at,
                 },
                 at,
             )

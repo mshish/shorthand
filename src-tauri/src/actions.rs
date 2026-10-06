@@ -1316,6 +1316,22 @@ impl ShortcutAction for TranscribeAction {
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", error_message);
+                            // Save entry with empty text so user can retry
+                            let mut in_history = false;
+                            if wav_saved || save_transcripts {
+                                match hm.save_entry(
+                                    history_file_name,
+                                    String::new(),
+                                    post_process,
+                                    None,
+                                    None,
+                                ) {
+                                    Ok(_) => in_history = true,
+                                    Err(save_err) => {
+                                        error!("Failed to save failed history entry: {}", save_err);
+                                    }
+                                }
+                            }
                             crate::overlay::show_error_overlay(
                                 &ah,
                                 crate::shorthand::overlay_error::for_transcription_reason(
@@ -1323,20 +1339,8 @@ impl ShortcutAction for TranscribeAction {
                                         &err.to_string(),
                                     ),
                                 ),
-                                wav_saved,
+                                wav_saved && in_history,
                             );
-                            // Save entry with empty text so user can retry
-                            if wav_saved || save_transcripts {
-                                if let Err(save_err) = hm.save_entry(
-                                    history_file_name,
-                                    String::new(),
-                                    post_process,
-                                    None,
-                                    None,
-                                ) {
-                                    error!("Failed to save failed history entry: {}", save_err);
-                                }
-                            }
                             set_tray_state(&ah, TrayIconState::Idle);
                         }
                     }

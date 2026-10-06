@@ -933,6 +933,7 @@ impl AudioRecordingManager {
                     if mic_is_default && resolution.device.is_none() {
                         resolution.device = crate::audio_toolkit::audio::pinned_default_input();
                         if resolution.device.is_some() {
+                            opened_by_id = true;
                             warn!("Retrying this recording with the default devices opened by id");
                         } else {
                             warn!("No default input endpoint to open by id; retrying with the default handle");
@@ -940,7 +941,6 @@ impl AudioRecordingManager {
                         if system_audio_is_default {
                             system_audio = by_id_output(system_audio);
                         }
-                        opened_by_id = true;
                         #[cfg(debug_assertions)]
                         if std::env::var_os("SHORTHAND_DEBUG_FAIL_DEFAULT_MIC")
                             .is_some_and(|v| v == "all")
