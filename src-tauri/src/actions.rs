@@ -868,7 +868,6 @@ impl ShortcutAction for TranscribeAction {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
             cancel_active_streams(app);
-            utils::hide_recording_overlay(app);
             set_tray_state(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
                 let error_type = match start_failure_code(&err) {
@@ -876,6 +875,11 @@ impl ShortcutAction for TranscribeAction {
                     StartFailureCode::NoInputDevice => "no_input_device",
                     StartFailureCode::AudioCaptureFailed => "unknown",
                 };
+                crate::overlay::show_error_overlay(
+                    app,
+                    crate::shorthand::overlay_error::for_start_failure(error_type),
+                    false,
+                );
                 // The fixed error_type only; `err` can name the device.
                 crate::shorthand::telemetry::report_error("mic_open", Some(error_type));
                 let _ = app.emit(
@@ -1312,6 +1316,15 @@ impl ShortcutAction for TranscribeAction {
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", error_message);
+                            crate::overlay::show_error_overlay(
+                                &ah,
+                                crate::shorthand::overlay_error::for_transcription_reason(
+                                    crate::shorthand::telemetry::transcription_reason(
+                                        &err.to_string(),
+                                    ),
+                                ),
+                                wav_saved,
+                            );
                             // Save entry with empty text so user can retry
                             if wav_saved || save_transcripts {
                                 if let Err(save_err) = hm.save_entry(
@@ -1324,7 +1337,6 @@ impl ShortcutAction for TranscribeAction {
                                     error!("Failed to save failed history entry: {}", save_err);
                                 }
                             }
-                            utils::hide_recording_overlay(&ah);
                             set_tray_state(&ah, TrayIconState::Idle);
                         }
                     }

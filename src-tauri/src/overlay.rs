@@ -53,10 +53,17 @@ const OVERLAY_HEIGHT: f64 = 50.0;
 const OVERLAY_STREAM_WIDTH: f64 = 400.0;
 const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
 
+// Up to three short lines (message, action, "in History").
+const OVERLAY_ERROR_WIDTH: f64 = 360.0;
+const OVERLAY_ERROR_HEIGHT: f64 = 88.0;
+const ERROR_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_millis(4000);
+
 /// Overlay window size (logical) for a given UI state.
 fn overlay_dimensions(state: &str) -> (f64, f64) {
     if state == "streaming" {
         (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
+    } else if state == "error" {
+        (OVERLAY_ERROR_WIDTH, OVERLAY_ERROR_HEIGHT)
     } else {
         (OVERLAY_WIDTH, OVERLAY_HEIGHT)
     }
@@ -668,6 +675,31 @@ pub fn show_transcribing_overlay(app_handle: &AppHandle) {
 /// Shows the processing overlay window
 pub fn show_processing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "processing");
+}
+
+/// Shows a short error in the overlay. `kind` is a fixed code from
+/// `shorthand::overlay_error`; `saved` adds the "in History" line. Hides after
+/// `ERROR_OVERLAY_DURATION` unless the overlay was shown or hidden again first.
+pub fn show_error_overlay(app_handle: &AppHandle, kind: &'static str, saved: bool) {
+    #[derive(Clone, serde::Serialize)]
+    struct OverlayError {
+        kind: &'static str,
+        saved: bool,
+    }
+    let _ = app_handle.emit_to(
+        "recording_overlay",
+        "overlay-error",
+        OverlayError { kind, saved },
+    );
+    show_overlay_state(app_handle, "error");
+    let shown = OVERLAY_VISIBILITY_EPOCH.load(Ordering::Relaxed);
+    let app = app_handle.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(ERROR_OVERLAY_DURATION);
+        if OVERLAY_VISIBILITY_EPOCH.load(Ordering::Relaxed) == shown {
+            hide_recording_overlay(&app);
+        }
+    });
 }
 
 /// Updates the overlay window position based on current settings

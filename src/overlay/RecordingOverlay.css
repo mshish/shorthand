@@ -504,3 +504,39 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Fork-only: error state — what failed and what to do, on up to three lines
+   that wrap within the native window (OVERLAY_ERROR_WIDTH in overlay.rs) rather
+   than truncate. Pill radius and surface; the dot sits where the pill's
+   recording dot does, in the reserved warning amber. `.ov-stage` outranks the
+   top placement's column-reverse, which would stack the dot under the text. */
+.ov-stage .scard.overlay-error {
+  width: auto;
+  animation: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 10px 15px;
+}
+.overlay-error-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--color-warning);
+}
+.overlay-error-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.35;
+}
+.overlay-error-message {
+  font-size: 12px;
+  color: var(--color-text);
+}
+.overlay-error-detail {
+  font-size: 11px;
+  color: var(--s-muted);
+}
