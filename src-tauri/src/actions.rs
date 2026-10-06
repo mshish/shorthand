@@ -876,6 +876,8 @@ impl ShortcutAction for TranscribeAction {
                     StartFailureCode::NoInputDevice => "no_input_device",
                     StartFailureCode::AudioCaptureFailed => "unknown",
                 };
+                // The fixed error_type only; `err` can name the device.
+                crate::shorthand::telemetry::report_error("mic_open", Some(error_type));
                 let _ = app.emit(
                     "recording-error",
                     RecordingErrorEvent {

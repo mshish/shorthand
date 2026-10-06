@@ -1043,11 +1043,26 @@ impl TranscriptionManager {
                 // clean 6/6. Loading is a startup-latency cost, not a steady-state
                 // one, and concurrent *streaming* on already-loaded models is
                 // unaffected — that path stays fully parallel.
+                let marker_dir = self.app_handle.path().app_data_dir().ok();
+                let accel = if model_options.device.is_some() {
+                    "pinned_device"
+                } else if matches!(model_options.backend, Backend::Cpu) {
+                    "cpu"
+                } else {
+                    "auto"
+                };
                 let model = {
                     let _load_guard = native_model_load_lock()
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    Model::load_with(&model_path, &model_options)
+                    if let Some(dir) = &marker_dir {
+                        crate::shorthand::native_marker::begin(dir, "model_load", accel);
+                    }
+                    let loaded = Model::load_with(&model_path, &model_options);
+                    if let Some(dir) = &marker_dir {
+                        crate::shorthand::native_marker::end(dir);
+                    }
+                    loaded
                 }
                 .map_err(|e| {
                     let error_msg = format!("Failed to load whisper model {}: {}", model_id, e);

@@ -7,6 +7,7 @@ pub mod capture_command;
 pub mod credentials;
 pub mod dictation;
 pub mod mode;
+pub mod native_marker;
 pub mod obsidian;
 pub mod request_socket;
 pub mod telemetry;

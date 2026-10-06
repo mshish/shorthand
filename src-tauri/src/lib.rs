@@ -271,6 +271,12 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // stale snapshot here would silently revert it by writing back the
     // pre-fallback value alongside the install id.
     shorthand::telemetry::apply_stored(app_handle);
+    if let Ok(dir) = app_handle.path().app_data_dir() {
+        if let Some(code) = shorthand::native_marker::take_previous(&dir) {
+            log::error!("The previous run ended inside a native call ({code})");
+            shorthand::telemetry::report_error("native_crash", Some(&code));
+        }
+    }
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can
     // select it at hotkey time; model loading remains lazy inside
