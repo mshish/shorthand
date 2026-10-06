@@ -181,6 +181,12 @@ struct InputEvent {
     /// They fire on every edge by design and must never be debounced —
     /// dropping one desyncs toggle parity and wedges recording on.
     external: bool,
+    /// When the key event reached the app, stamped by `send` on the shortcut
+    /// thread. Hold-vs-tap is measured from this rather than from when this
+    /// thread dequeues the event: a start effect runs on this thread and can
+    /// block it for hundreds of milliseconds (a cold microphone open), which
+    /// turned taps into holds.
+    at: Instant,
 }
 
 impl InputEvent {
@@ -1000,7 +1006,7 @@ impl TranscriptionCoordinator {
 
                     match cmd {
                         Command::Input(input) => {
-                            if let Some(effect) = state.on_input(input, Instant::now()) {
+                            if let Some(effect) = dispatch_input(&mut state, input) {
                                 run_effect(&app, &mut state, effect);
                             }
                         }
@@ -1155,6 +1161,7 @@ impl TranscriptionCoordinator {
                 mode,
                 hold_threshold,
                 external,
+                at: Instant::now(),
             }))
             .is_err()
         {
@@ -1279,6 +1286,11 @@ pub fn suppress_publication(app: &AppHandle, mode: FollowMode) {
     if let Some(hub) = crate::follow_stream::hub(app) {
         hub.suppress_if_active(mode);
     }
+}
+
+fn dispatch_input(state: &mut CoordinatorState, input: InputEvent) -> Option<Effect> {
+    let at = input.at;
+    state.on_input(input, at)
 }
 
 fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
@@ -1653,6 +1665,7 @@ mod tests {
             mode: ShortcutActivation::PushToTalk,
             hold_threshold: Duration::ZERO,
             external: false,
+            at: Instant::now(),
         }
     }
 
@@ -1791,6 +1804,7 @@ mod tests {
                     mode: ShortcutActivation::Toggle,
                     hold_threshold: Duration::ZERO,
                     external: true,
+                    at: Instant::now(),
                 },
                 at,
             )
@@ -1853,6 +1867,7 @@ mod tests {
             mode: ShortcutActivation::Toggle,
             hold_threshold: Duration::ZERO,
             external,
+            at: Instant::now(),
         }
     }
 
@@ -2801,6 +2816,7 @@ mod tests {
             mode: ShortcutActivation::PushToTalk,
             hold_threshold: Duration::ZERO,
             external: false,
+            at: Instant::now(),
         };
         assert!(matches!(
             state.on_input(held(true), t0),
@@ -3016,6 +3032,7 @@ mod tests {
             mode,
             hold_threshold: HOLD_THRESHOLD,
             external: false,
+            at: Instant::now(),
         }
     }
 
@@ -3408,5 +3425,32 @@ mod tests {
             "held 400ms since the real key-down: must stop, not lock"
         );
         assert_eq!(state.stage, processing_stage(BINDING));
+    }
+
+    /// 2026-10-06: a cold start blocked the coordinator thread for 416ms, so
+    /// a 100ms tap's release was only dequeued ~400ms after the press. Timed
+    /// from the dequeue it read as a hold and stopped a 0-sample recording.
+    #[test]
+    fn a_tap_stays_a_tap_when_its_release_is_dequeued_late() {
+        let mut state = CoordinatorState::new();
+        let pressed = Instant::now();
+        let mut press = input(ShortcutActivation::HoldOrToggle, true);
+        press.at = pressed;
+        assert!(matches!(
+            dispatch_input(&mut state, press),
+            Some(Effect::Start { .. })
+        ));
+
+        let mut release = input(ShortcutActivation::HoldOrToggle, false);
+        release.at = pressed + ms(100);
+        // The coordinator reaches the release only after a slow start effect.
+        std::thread::sleep(ms(400));
+        assert!(dispatch_input(&mut state, release).is_none());
+
+        assert!(
+            state.on_grace_expired().is_none(),
+            "a 100ms tap must lock the session on, not stop it"
+        );
+        assert!(state.is_locked());
     }
 }
