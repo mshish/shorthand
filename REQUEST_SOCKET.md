@@ -15,7 +15,7 @@ Socket location (discovery file, written by the app on listen, removed on clean 
 {"protocol":1,"path":"/Users/me/Library/Application Support/Shorthand/request.sock"}
 ```
 
-Windows: named pipe `shorthand.request.<SID>` with the same protected DACL as follow-stream. Unix: filesystem socket `<config dir>/request.sock`, mode 0600, peer euid checked on accept.
+Windows: named pipe `shorthand.request.<SID>` with the same protected DACL as follow-stream. Unix: filesystem socket `<config dir>/request.sock`, mode 0600 (except on macOS, where the file takes the umask), peer euid checked on accept.
 
 Messages:
 
@@ -82,7 +82,7 @@ Plain `http` is accepted for any host. The app does not decide whether a secret 
 
 ## Local transport and security
 
-The request socket trusts the same-user boundary, not process identity. On Windows the listener is a named pipe created with the same protected DACL as follow-stream, granting access only to the current user's SID. On Unix the socket file is created mode `0600` inside the config directory and each peer's effective user ID is checked against the app's own on accept. Any process running as the same user can therefore connect, read the credential status, and make authenticated requests through the proxy; no process, including the app's own clients, can read a stored secret back out. The listener is process-wide and unconditional: it starts at startup and stays up for the life of the process. The discovery file is written after the listener is up and removed on a clean stop; a stale discovery file from an unclean shutdown points at a path nothing is listening on, and a client should treat a refused connection as "app not running".
+The request socket trusts the same-user boundary, not process identity. On Windows the listener is a named pipe created with the same protected DACL as follow-stream, granting access only to the current user's SID. On Unix the socket file is created inside the config directory, mode `0600` where the platform supports setting it (macOS does not, so there the euid check is the gate), and each peer's effective user ID is checked against the app's own on accept. Any process running as the same user can therefore connect, read the credential status, and make authenticated requests through the proxy; no process, including the app's own clients, can read a stored secret back out. The listener is process-wide and unconditional: it starts at startup and stays up for the life of the process. The discovery file is written after the listener is up and removed on a clean stop; a stale discovery file from an unclean shutdown points at a path nothing is listening on, and a client should treat a refused connection as "app not running".
 
 ## Limits
 

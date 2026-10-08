@@ -309,7 +309,24 @@ pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
 pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
 
-    ListenerOptions::new().name(name).mode(0o600).create_tokio()
+    match ListenerOptions::new()
+        .name(name.clone())
+        .mode(0o600)
+        .create_tokio()
+    {
+        // macOS rejects fchmod() on an unbound socket, which interprocess
+        // reports as Unsupported; refusing to listen there left both sockets
+        // dead on every Mac launch. The mode is a second layer: every accepted
+        // connection is still rejected unless its euid matches ours
+        // (`peer_is_current_user`), which works on macOS via LOCAL_PEERCRED.
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+            log::debug!(
+                "Socket file mode unsupported on this platform; relying on peer-euid check"
+            );
+            ListenerOptions::new().name(name).create_tokio()
+        }
+        result => result,
+    }
 }
 
 #[cfg(test)]
