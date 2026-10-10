@@ -680,6 +680,9 @@ impl ShortcutAction for TranscribeAction {
             crate::shorthand::dictation::resolve_settings(app).follow_stream_enabled
         });
         let recording_start_time = Instant::now();
+        // Fork-only: the missing model is already reported as `model_load`;
+        // it must not also be counted as a microphone failure below.
+        let model_missing = no_model_error.is_some();
         let start_result = match no_model_error {
             Some(e) => Err(e),
             None => rm.try_start_recording(&binding_id, vad_policy),
@@ -823,7 +826,9 @@ impl ShortcutAction for TranscribeAction {
                     false,
                 );
                 // The fixed error_type only; `err` can name the device.
-                crate::shorthand::telemetry::report_error("mic_open", Some(error_type));
+                if !model_missing {
+                    crate::shorthand::telemetry::report_error("mic_open", Some(error_type));
+                }
                 let _ = app.emit(
                     "recording-error",
                     RecordingErrorEvent {
