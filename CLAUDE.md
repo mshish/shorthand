@@ -21,3 +21,5 @@ The rest is deliberately not imported — open it only when the work calls for i
   is the user-facing promise of what is and is not sent; a change that makes
   it untrue is a privacy bug, not a docs bug.
 - `docs/FRONTEND_TESTING.md` — before adding or changing frontend tests.
+- `docs/review/test-coverage.md` — before reviewing whether a change is tested.
+- `docs/review/llm-evals.md` — before reviewing a change to LLM post-processing.
