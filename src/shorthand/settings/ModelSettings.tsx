@@ -4,6 +4,7 @@ import { ModelsSettings } from "@/components/settings/models/ModelsSettings";
 import { ModelSettingsCard } from "@/components/settings/general/ModelSettingsCard";
 import { CustomWords } from "@/components/settings/CustomWords";
 import { FillerWordRemoval } from "@/components/settings/FillerWordRemoval";
+import { ChineseScriptSetting } from "@/components/settings/ChineseScript";
 import { ModelUnloadTimeoutSetting } from "@/components/settings/ModelUnloadTimeout";
 import { AccelerationSelector } from "@/components/settings/AccelerationSelector";
 import { VadBackendSelector } from "@/components/settings/VadBackendSelector";
@@ -16,9 +17,10 @@ import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
  *
  * These rows are grouped because they all change the text that comes back.
  * Choosing a model, telling it which language to expect, teaching it names it
- * would otherwise mangle and stripping filler words are one decision made in
- * four places — the quality of the transcript. How the audio got there is
- * Audio; what happens to the text afterwards is AI cleanup.
+ * would otherwise mangle, stripping filler words and choosing Simplified or
+ * Traditional Chinese characters are one decision made in five places — the
+ * quality of the transcript. How the audio got there is Audio; what happens to
+ * the text afterwards is AI cleanup.
  *
  * Replaces `src/shorthand/TranscriptionSettings.tsx`. See Part 2 of
  * `docs/superpowers/specs/2026-08-23-shorthand-brand-ux-redesign.md` for the
@@ -40,6 +42,7 @@ export const ModelSettings: React.FC = () => {
       <Sheet title={t("settings.model.groups.output")}>
         <CustomWords descriptionMode="inline" grouped={true} />
         <FillerWordRemoval descriptionMode="inline" grouped={true} />
+        <ChineseScriptSetting descriptionMode="inline" grouped={true} />
         <AdvancedOnly>
           <ModelUnloadTimeoutSetting descriptionMode="tooltip" grouped={true} />
           <AccelerationSelector descriptionMode="tooltip" grouped={true} />
