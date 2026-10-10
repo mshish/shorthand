@@ -156,6 +156,49 @@ for (const site of RUST_BRAND_SITES) {
   }
 }
 
+// 5. The app's identity. Upstream's values are Handy, com.pais.handy and
+//    handy. An upstream merge that takes its side of either file would make
+//    the build install over, or alongside, a real Handy install and read
+//    Handy's settings and history instead of this app's.
+const IDENTITY: ReadonlyArray<{
+  where: string;
+  actual: string | undefined;
+  expected: string;
+}> = (() => {
+  const tauriDir = path.join(SRC_TAURI, "..");
+  const conf = JSON.parse(
+    fs.readFileSync(path.join(tauriDir, "tauri.conf.json"), "utf8"),
+  );
+  const cargo = fs.readFileSync(path.join(tauriDir, "Cargo.toml"), "utf8");
+  const pkg = /^\[package\]$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(cargo)?.[1];
+  return [
+    {
+      where: "src-tauri/tauri.conf.json productName",
+      actual: conf.productName,
+      expected: "Shorthand",
+    },
+    {
+      where: "src-tauri/tauri.conf.json identifier",
+      actual: conf.identifier,
+      expected: "com.mshish.shorthand",
+    },
+    {
+      where: "src-tauri/Cargo.toml [package] name",
+      actual: pkg && /^name\s*=\s*"([^"]*)"/m.exec(pkg)?.[1],
+      expected: "shorthand",
+    },
+  ];
+})();
+
+for (const id of IDENTITY) {
+  if (id.actual !== id.expected) {
+    failures.push({
+      where: id.where,
+      detail: `is ${JSON.stringify(id.actual)}, expected ${JSON.stringify(id.expected)}\n    An upstream merge may have restored Handy's identity.`,
+    });
+  }
+}
+
 if (warnings.length > 0) {
   console.log(
     colorize(`\n${warnings.length} string(s) need a human look:`, "yellow"),
@@ -179,7 +222,7 @@ if (failures.length > 0) {
 
 console.log(
   colorize(
-    `\n✓ Branding is consistent across ${locales.length} locales and ${RUST_BRAND_SITES.length} out-of-band sites.`,
+    `\n✓ Branding is consistent across ${locales.length} locales, ${RUST_BRAND_SITES.length} out-of-band sites and ${IDENTITY.length} identity values.`,
     "green",
   ),
 );
