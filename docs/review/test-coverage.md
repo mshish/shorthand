@@ -139,11 +139,14 @@ Anthropic's Claude Code guidance: have the agent "show evidence rather than
 asserting success: the test output, the command it ran and what it returned".
 The reviewer checks for that evidence. CI supplies it only partly:
 
-- `test.yml` runs `cargo test` only when `src-tauri/**` changes;
+- `test.yml` runs `cargo test`, and the `shorthand-coverage` job, only when
+  `src-tauri/**` or the workflow itself changes;
 - `playwright.yml` runs only when `src/**`, `tests/**`, `package.json`,
   `bun.lock` or `playwright.config.*` change;
-- no workflow runs `bun run test:unit`, so its result must come from the PR
-  description.
+- `code-quality.yml` runs `bun run test:unit` only when its path filters match
+  (among them `src/**`, `scripts/**` and `package.json`).
+
+Outside those paths, the result must come from the PR description.
 
 ### 7. Tests generalise
 
@@ -171,11 +174,12 @@ our code coverage standards"). The reason here is that a percentage does not
 answer Check 1, and the post's own point that uncovered code is the meaningful
 signal is served by a report.
 
-The job that produces the report is added by a separate CI pull request; until
-it is on `main` there is no report. Once it is, the report shows which lines of
-`src-tauri/src/shorthand/` no test reaches, and reviewers use it to find
-candidates for Check 1. Either way, Check 1 is answered by reading the diff and
-the tests.
+The `shorthand-coverage` job in `.github/workflows/test.yml` produces it: an
+lcov artifact named `shorthand-coverage-lcov` and a line in the job summary. The
+report shows which lines of `src-tauri/src/shorthand/` no test reaches, and
+reviewers use it to find candidates for Check 1. Check 1 is still answered by
+reading the diff and the tests. The percentage includes inline `#[cfg(test)]`
+modules in those files.
 
 ## How the reviewer reports
 
