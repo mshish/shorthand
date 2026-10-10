@@ -34,7 +34,7 @@ The stream is UTF-8, with exactly one JSON object per newline. Every object has 
 
 `capture_state` always follows `hello` — see "Connection state: `capture_state` and `begin`" below. `refused` and `start_failed` are two more connection-level records described in "Explicit start/stop commands" below. None carries `session_elapsed_ms`, because none is a session event; `capture_state.session`, when present, identifies the active publication but does not change the record's connection-snapshot semantics.
 
-In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript.
+In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript. `partial` text is the model's raw output; `final.text` has the app's text processing applied, so it can differ from the last `partial`s in more than punctuation and casing. In particular, when the Chinese script setting converts to Simplified or Traditional characters, only `final` is converted, so a follower that shows `partial`s and then replaces them with the `final` will see the characters change script.
 
 A dual-speaker session can therefore look like this:
 
