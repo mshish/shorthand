@@ -1,6 +1,7 @@
 # Review rubric: test coverage
 
-> **DRAFT — to be refined with Mike.** The only existing steering on testing is
+> **DRAFT — to be refined with Mike.** The open decisions were made on
+> 2026-10-10 and are recorded below; the wording is still a draft. The only existing steering on testing is
 > [docs/FRONTEND_TESTING.md](../FRONTEND_TESTING.md), which covers the frontend.
 > This rubric extends it to the whole repo and is seeded from four sources: the
 > repo's own code and history, current primary-source practice on test coverage,
@@ -64,8 +65,8 @@ own test module shows the stub technique.
 
 When the code under test is reachable only from inside an upstream file, the
 reviewer records it as a **known gap** and does not recommend editing that file to
-close it. Closing it is a design decision for Mike, made deliberately as
-AGENTS.md asks.
+close it. Widening an upstream item's visibility to reach it counts as editing
+the file.
 
 Existing drift, which new work does not copy:
 
@@ -91,8 +92,15 @@ from a fork-owned test today. They live in private functions of `actions.rs`
 module outside `actions.rs` can call. Even with access, the fork changed
 `post_process_transcription` to take an `AppHandle` and read the key from the
 credential store, and the `tauri` dependency is not built with its `test`
-feature, so there is no mock `AppHandle`. Reviewers flag changes to this code as
-untested until Mike decides how to close the gap.
+feature, so there is no mock `AppHandle`.
+
+Decided (2026-10-10): the gap is **accepted in the fork**. No visibility is
+widened and no code is added inside the upstream files to close it. The fix is a
+testable seam in upstream's code, offered to upstream later; opening that
+upstream PR is Mike's call alone, and reviewers and agents do not open one.
+Until it lands, reviewers flag changes to this code as untested and ask the PR
+description to say how the `${output}` handling, parsing and fallbacks were
+exercised by hand.
 
 ### 4. Structured-output schemas stay strict
 
@@ -145,16 +153,17 @@ heavily on making tests pass" and asks for solutions that work "for all valid
 inputs, not just the test cases". Reviewers flag hard-coded values or special
 cases that exist only to satisfy a test.
 
-## Line coverage: proposal only
+## Line coverage: a CI report, not a gate
 
-The repo has no line-coverage tooling, and this rubric does not add any. The
-proposal, for Mike to decide separately:
+Decided (2026-10-10): [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov)
+is adopted as a CI-only report, scoped to the fork's own Rust code in
+`src-tauri/src/shorthand/`:
 
-- run [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) in CI only,
-  installed with `taiki-e/install-action@cargo-llvm-cov`;
-- publish the result as a report — for example
-  `cargo llvm-cov --lcov --output-path lcov.info` uploaded as an artifact — and
-  not as a gate (no `--fail-under-lines`).
+- installed in CI only, with `taiki-e/install-action@cargo-llvm-cov`; no
+  `Cargo.toml` change;
+- published as an lcov artifact and a job summary, never as a gate (no
+  `--fail-under-lines`). A failing test still fails the job; a low percentage
+  does not.
 
 "Report, not gate" is Mike's decision for this repo, not Google's: the Google
 post above does recommend gating ("We should gate deployments that do not meet
@@ -162,7 +171,11 @@ our code coverage standards"). The reason here is that a percentage does not
 answer Check 1, and the post's own point that uncovered code is the meaningful
 signal is served by a report.
 
-Until then, reviewers answer Check 1 by reading the diff and the tests.
+The job that produces the report is added by a separate CI pull request; until
+it is on `main` there is no report. Once it is, the report shows which lines of
+`src-tauri/src/shorthand/` no test reaches, and reviewers use it to find
+candidates for Check 1. Either way, Check 1 is answered by reading the diff and
+the tests.
 
 ## How the reviewer reports
 
