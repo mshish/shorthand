@@ -398,6 +398,15 @@
       "fillerWordRemoval": {
         "title": "移除语气词",
         "description": "从转录中移除常见的语气词。关闭此选项即可保留这些词。"
+      },
+      "chineseScript": {
+        "title": "简繁转换",
+        "description": "将普通话和粤语转录输出为简体或繁体中文。其他语言不受影响。",
+        "options": {
+          "asTranscribed": "保持原样",
+          "simplified": "简体",
+          "traditional": "繁体"
+        }
       }
     },
     "postProcessing": {
@@ -460,6 +469,7 @@
       "loading": "加载历史记录中...",
       "empty": "还没有转录记录。开始录制以建立您的历史记录！",
       "copyToClipboard": "复制转录到剪贴板",
+      "copyError": "无法将转录复制到剪贴板。",
       "save": "保存转录",
       "unsave": "从已保存中移除",
       "delete": "删除条目",

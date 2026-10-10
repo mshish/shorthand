@@ -149,7 +149,7 @@ A command can be accepted (the CLI flag exits 0, and the running instance receiv
 
 - `microphone-permission-denied` — the existing recorder classifier recognised an access-denied, permission-denied, or Windows `0x80070005` microphone error.
 - `no-input-device` — the existing recorder classifier recognised no default input device, including CoreAudio's equivalent preferred-config failure.
-- `audio-capture-failed` — another error from VAD loading, device resolution/configuration/opening, recorder availability, or recorder worker start. Those layers currently return strings rather than a stronger typed cause, so this is deliberately one catch-all.
+- `audio-capture-failed` — another error from VAD loading, device resolution/configuration/opening, recorder availability, recorder worker start, or no transcription model being available. Those layers currently return strings rather than a stronger typed cause, so this is deliberately one catch-all.
 
 The `start-failed-code` capability tells a follower the field is present. As with `refused.reason`, the values are an open set for parsing: a follower that sees an unrecognised code must still accept `start_failed` and treat it as an unexplained failure, preserving `message` for display or logs, rather than reject the record. The capability advertises the field, not a closed promise that these are the only values a future binary can send.
 
