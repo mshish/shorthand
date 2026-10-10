@@ -160,6 +160,9 @@ for (const site of RUST_BRAND_SITES) {
 //    handy. An upstream merge that takes its side of either file would make
 //    the build install over, or alongside, a real Handy install and read
 //    Handy's settings and history instead of this app's.
+//    Verified to actually fail (2026-10-10): setting the identifier to
+//    com.pais.handy, productName to Handy, or the package name to handy each
+//    produced a failure naming that value; reverting them passed again.
 const IDENTITY: ReadonlyArray<{
   where: string;
   actual: string | undefined;
