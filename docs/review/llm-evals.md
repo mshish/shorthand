@@ -1,6 +1,7 @@
 # Review rubric: LLM evals
 
-> **DRAFT — to be refined with Mike.** No steering doc covered this lens, so
+> **DRAFT — to be refined with Mike.** The open decision was made on
+> 2026-10-10 and is recorded below; the wording is still a draft. No steering doc covered this lens, so
 > this rubric is seeded from four sources: the repo's own code and history, current
 > primary-source practice, agentic engineering practice, and the docs for the model
 > the reviewers run on. Each check cites its basis; see [Sources](#sources).
@@ -62,8 +63,13 @@ production path runs through the local Claude Code and Codex agents. The app's
 production path is `llm_client` calling a user-configured HTTP provider with a
 key from the credential store. An app eval must either call real providers with
 real keys (production path, costs money) or substitute a local agent
-(key-free, but not the path users run). Which to give up is open for Mike; a
-proposed eval states which it chose.
+(key-free, but not the path users run).
+
+Decided (2026-10-10): app evals take the **key-free local-agent** approach,
+matching `shorthand-core/evals`. They run the production prompt, in both prompt
+shapes (Check 1), through the local Claude Code and Codex agents, and are
+**local-only**: they stay out of GitHub CI for now. Their results say which
+agent and model produced them, since that is not the provider path users run.
 
 ## Checks
 
