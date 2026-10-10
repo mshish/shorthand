@@ -12,6 +12,8 @@
 //! 2. Add translations to other locale files
 //! 3. Use the matching generated translation accessor below.
 
+use crate::chinese_script::chinese_script_for_locale;
+use crate::settings::ChineseScript;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use tauri::AppHandle;
@@ -64,23 +66,15 @@ fn resolve_translations<T: Clone>(
         .unwrap_or("en")
         .to_lowercase()
         .replace('_', "-");
-    let subtags: Vec<_> = normalized.split('-').collect();
-    let language = subtags.first().copied().unwrap_or("en");
-    let is_hant = subtags.contains(&"hant");
-    let is_hans = subtags.contains(&"hans");
-    let is_traditional_region = ["tw", "hk", "mo"]
-        .iter()
-        .any(|region| subtags.contains(region));
+    let language = normalized.split('-').next().unwrap_or("en");
 
     let exact_match = translations
         .iter()
         .find_map(|(code, strings)| code.eq_ignore_ascii_case(&normalized).then_some(strings));
-    let fallback = match language {
-        "zh" if is_hant || (!is_hans && is_traditional_region) => "zh-TW",
-        // Cantonese uses Traditional Chinese unless explicitly tagged as Hans.
-        "yue" if is_hans => "zh",
-        "yue" => "zh-TW",
-        _ => language,
+    let fallback = match chinese_script_for_locale(&normalized) {
+        Some(ChineseScript::Traditional) => "zh-TW",
+        Some(_) => "zh",
+        None => language,
     };
 
     exact_match

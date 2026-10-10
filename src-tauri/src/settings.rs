@@ -186,6 +186,18 @@ pub enum ClipboardHandling {
     CopyToClipboard,
 }
 
+/// Script applied to Mandarin and Cantonese output. Other languages are never
+/// converted.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChineseScript {
+    /// Keep whatever script the model produced.
+    #[default]
+    AsTranscribed,
+    Simplified,
+    Traditional,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoSubmitKey {
@@ -513,6 +525,10 @@ pub struct AppSettings {
     pub filler_word_removal_enabled: bool,
     #[serde(default)]
     pub custom_filler_words: Option<Vec<String>>,
+    /// Fresh installs default from the OS locale; existing stores are migrated
+    /// in `apply_settings_migrations`.
+    #[serde(default)]
+    pub chinese_script: ChineseScript,
     #[serde(default)]
     pub transcribe_accelerator: TranscribeAcceleratorSetting,
     #[serde(default)]
@@ -636,6 +652,12 @@ fn default_vad_enabled() -> bool {
 
 fn default_filler_word_removal_enabled() -> bool {
     true
+}
+
+fn default_chinese_script() -> ChineseScript {
+    tauri_plugin_os::locale()
+        .and_then(|locale| crate::chinese_script::chinese_script_for_locale(&locale))
+        .unwrap_or_default()
 }
 
 fn default_debug_mode() -> bool {
@@ -1115,6 +1137,7 @@ pub fn get_default_settings() -> AppSettings {
         external_script_path: None,
         filler_word_removal_enabled: default_filler_word_removal_enabled(),
         custom_filler_words: None,
+        chinese_script: default_chinese_script(),
         transcribe_accelerator: TranscribeAcceleratorSetting::default(),
         ort_accelerator: OrtAcceleratorSetting::default(),
         transcribe_gpu_device: default_transcribe_gpu_device(),
@@ -1313,6 +1336,22 @@ fn apply_settings_migrations(
     updated |=
         crate::shorthand::dictation::migrate_per_mode_shortcut_activation(settings, settings_value);
 
+    // One-time Chinese script migration: the script used to be chosen through
+    // `zh-Hans`/`zh-Hant` language intents. Split those into the recognition
+    // language and the script setting; every other upgrading user keeps the
+    // unconverted output they had. Only fresh installs get the locale default.
+    if settings_value.get("chinese_script").is_none() {
+        settings.chinese_script = match settings.selected_language.as_str() {
+            "zh-Hans" => ChineseScript::Simplified,
+            "zh-Hant" => ChineseScript::Traditional,
+            _ => ChineseScript::AsTranscribed,
+        };
+        if settings.chinese_script != ChineseScript::AsTranscribed {
+            settings.selected_language = "zh".to_string();
+        }
+        updated = true;
+    }
+
     let stored_schema_version = stored_schema_version(settings_value);
     if stored_schema_version < 1 {
         // Before schema 1 this was a UI ordinal. Preserve the original safety
@@ -1443,12 +1482,12 @@ pub fn get_bindings(app: &AppHandle) -> HashMap<String, ShortcutBinding> {
     settings.bindings
 }
 
-pub fn get_stored_binding(app: &AppHandle, id: &str) -> ShortcutBinding {
-    let bindings = get_bindings(app);
-
-    let binding = bindings.get(id).unwrap().clone();
-
-    binding
+pub fn get_stored_binding(settings: &AppSettings, id: &str) -> Result<ShortcutBinding, String> {
+    settings
+        .bindings
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("Binding with id '{}' not found", id))
 }
 
 pub fn get_history_limit(app: &AppHandle) -> usize {
@@ -1464,6 +1503,24 @@ pub fn get_recording_retention_period(app: &AppHandle) -> RecordingRetentionPeri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_binding_returns_the_requested_binding() {
+        let settings = get_default_settings();
+
+        let result = get_stored_binding(&settings, "transcribe");
+
+        assert_eq!(result.unwrap().id, "transcribe");
+    }
+
+    #[test]
+    fn unknown_stored_binding_returns_an_error() {
+        let settings = get_default_settings();
+
+        let result = get_stored_binding(&settings, "unknown");
+
+        assert_eq!(result.unwrap_err(), "Binding with id 'unknown' not found");
+    }
 
     fn default_settings_json() -> serde_json::Value {
         serde_json::to_value(get_default_settings()).unwrap()
@@ -1921,6 +1978,24 @@ mod tests {
     }
 
     #[test]
+    fn chinese_script_migration_only_carries_over_legacy_intents() {
+        for (intent, language, script) in [
+            ("zh-Hans", "zh", ChineseScript::Simplified),
+            ("zh-Hant", "zh", ChineseScript::Traditional),
+            ("auto", "auto", ChineseScript::AsTranscribed),
+        ] {
+            let mut settings = get_default_settings();
+            settings.selected_language = intent.to_string();
+            settings.chinese_script = ChineseScript::Traditional;
+            let raw = serde_json::json!({ "selected_language": intent });
+
+            assert!(apply_settings_migrations(&mut settings, &raw));
+            assert_eq!(settings.selected_language, language);
+            assert_eq!(settings.chinese_script, script);
+        }
+    }
+
+    #[test]
     fn shortcut_activation_migration_maps_push_to_talk_true() {
         let mut settings = get_default_settings();
         let raw = serde_json::json!({
@@ -2040,6 +2115,7 @@ mod tests {
             "onboarding_completed": false,
             "whats_new_last_seen_version": default_whats_new_last_seen_version(),
             "overlay_style": "live",
+            "chinese_script": "as_transcribed",
             "transcribe_accelerator": "gpu",
             "transcribe_gpu_device": settings.transcribe_gpu_device
         });
@@ -2084,6 +2160,7 @@ mod tests {
             "onboarding_completed": false,
             "whats_new_last_seen_version": default_whats_new_last_seen_version(),
             "overlay_style": "live",
+            "chinese_script": "as_transcribed",
             "paste_method": "ctrl_v"
         });
 

@@ -27,6 +27,7 @@ import { FillerWordRemoval } from "../FillerWordRemoval";
 import { SystemAudioCapture } from "./SystemAudioCapture";
 import { SystemAudioDeviceSelector } from "./SystemAudioDeviceSelector";
 import { FollowStreamOutput } from "./FollowStreamOutput";
+import { ChineseScriptSetting } from "../ChineseScript";
 import { VadBackendSelector } from "../VadBackendSelector";
 
 export const AdvancedSettings: React.FC = () => {
@@ -58,6 +59,7 @@ export const AdvancedSettings: React.FC = () => {
         <SystemAudioCapture descriptionMode="tooltip" grouped={true} />
         <SystemAudioDeviceSelector descriptionMode="tooltip" grouped={true} />
         <FillerWordRemoval descriptionMode="tooltip" grouped={true} />
+        <ChineseScriptSetting descriptionMode="tooltip" grouped={true} />
         <CustomWords descriptionMode="tooltip" grouped />
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>

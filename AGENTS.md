@@ -15,6 +15,9 @@ Branch roles:
   it in to take upstream, and cut topic branches from it (`git checkout -b topic upstream/main`)
   when you need a base with no fork commits. There is deliberately no local mirror branch: one
   only went stale, and the remote-tracking ref already does both jobs.
+- **Upstream syncs** merge the latest upstream `v*` tag, not `upstream/main`, so the fork only
+  takes released upstream code. The maintainer runs them with the `shorthand-upstream-sync-merge`
+  agent workflow, which lives outside this repo (it is not a GitHub Actions workflow).
 
 **We add features here.** The upstream feature freeze governs what
 [cjpais/Handy](https://github.com/cjpais/Handy) accepts; it does not govern this fork.

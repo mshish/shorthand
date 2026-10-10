@@ -2,10 +2,11 @@ use crate::audio_toolkit::{
     apply_custom_words, detect_output_language, normalize_transcription_output,
     remove_filler_words, OutputLanguageEvidence,
 };
+use crate::chinese_script::{convert_chinese_script, ChineseVariety};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
 use crate::settings::{
-    get_settings, AppSettings, ModelUnloadTimeout, OrtAcceleratorSetting,
+    get_settings, AppSettings, ChineseScript, ModelUnloadTimeout, OrtAcceleratorSetting,
     TranscribeAcceleratorSetting,
 };
 use anyhow::Result;
@@ -1432,6 +1433,7 @@ impl TranscriptionManager {
         // (and thus the engine) for its lifetime, so the feed/finalize loop
         // lives in a labeled block — when it exits, the borrow is released and
         // the engine can be moved into return_engine().
+        let mut preview_script = PreviewScript::new(settings.chinese_script, &output_language);
         let mut finalize_reply: Option<mpsc::Sender<Option<FinalizedStreamText>>> = None;
         let mut finalize_result: Option<Option<FinalizedStreamText>> = None;
         let stream_started = 'stream: {
@@ -1481,11 +1483,12 @@ impl TranscriptionManager {
                                 if update.committed_changed || update.tentative_changed {
                                     let text = stream.text();
                                     perf.record_emit();
-                                    self.emit_stream_text(
+                                    let frame = preview_script.frame(
                                         &text.committed,
                                         &text.tentative,
-                                        update.committed_changed,
+                                        &languages,
                                     );
+                                    self.emit_stream_text(&frame, update.committed_changed);
                                 }
                                 perf.maybe_log();
                             }
@@ -1512,11 +1515,12 @@ impl TranscriptionManager {
                                 // Emit and record it before replying so the merge
                                 // cannot lose the tail of either lane.
                                 let final_text = stream.text();
-                                self.emit_stream_text(
+                                let frame = preview_script.frame(
                                     &final_text.committed,
                                     &final_text.tentative,
-                                    true,
+                                    &languages,
                                 );
+                                self.emit_stream_text(&frame, true);
                                 // In auto mode the model's own LID is the best
                                 // remaining evidence; the snapshot is only
                                 // materialized when it can change the outcome.
@@ -1684,23 +1688,25 @@ impl TranscriptionManager {
         .emit(&self.app_handle);
     }
 
-    fn emit_stream_text(&self, committed: &str, tentative: &str, committed_changed: bool) {
+    /// The merger and follow-stream receive the model's raw text; only the
+    /// overlay event carries the Chinese script preview. See [`StreamTextFrame`].
+    fn emit_stream_text(&self, frame: &StreamTextFrame<'_>, committed_changed: bool) {
         if committed_changed {
             if let Some(merger) = self.app_handle.try_state::<StreamTranscriptMerger>() {
-                merger.observe_committed(self.source, committed);
+                merger.observe_committed(self.source, frame.committed);
             }
         }
         // A timed-out or cancelled stream is marked inactive before its worker can
         // emit a stale tail. Normal feed and finalize emissions occur while active.
         if self.stream_active.load(Ordering::Acquire) {
             if let Some(hub) = crate::follow_stream::hub(&self.app_handle) {
-                hub.partial(self.source, committed, tentative);
+                hub.partial(self.source, frame.committed, frame.tentative);
             }
         }
         let _ = StreamTextEvent {
             source: self.source,
-            committed: committed.to_string(),
-            tentative: tentative.to_string(),
+            committed: frame.preview_committed.clone(),
+            tentative: frame.preview_tentative.clone(),
         }
         .emit(&self.app_handle);
     }
@@ -1910,7 +1916,7 @@ impl TranscriptionManager {
                             anyhow::anyhow!("Moonshine streaming transcription failed: {}", e)
                         }),
                     LoadedEngine::SenseVoice(sense_voice_engine) => {
-                        let language = match normalize_cjk_language(&validated_language) {
+                        let language = match validated_language.as_str() {
                             "zh" => Some("zh".to_string()),
                             "en" => Some("en".to_string()),
                             "ja" => Some("ja".to_string()),
@@ -1954,7 +1960,7 @@ impl TranscriptionManager {
                         let lang = if validated_language == "auto" {
                             None
                         } else {
-                            Some(normalize_cjk_language(&validated_language).to_string())
+                            Some(validated_language.clone())
                         };
                         applied_language_hint = lang.clone();
                         let options = TranscribeOptions {
@@ -2183,13 +2189,6 @@ fn real_time_factor(audio_secs: f64, compute_secs: f64) -> f64 {
     }
 }
 
-fn normalize_cjk_language(language: &str) -> &str {
-    match language {
-        "zh-Hans" | "zh-Hant" => "zh",
-        other => other,
-    }
-}
-
 /// Resolve the persisted language intent into the language a specific model can
 /// use without writing the coerced value back to settings.
 fn effective_language_for_model(
@@ -2280,7 +2279,7 @@ fn transcribe_cpp_run_plan(
 ) -> TranscribeCppRunPlan {
     let requested_language = match effective_language {
         "auto" => None,
-        other => Some(normalize_cjk_language(other).to_string()),
+        other => Some(other.to_string()),
     };
     // Only pass a language the loaded model actually advertises (per
     // capabilities().languages); otherwise auto-detect rather than failing with
@@ -2307,26 +2306,19 @@ fn post_process_transcription_text(
     output_language: &OutputLanguageEvidence,
     supported_languages: &[String],
 ) -> String {
+    let converts_script = settings.chinese_script != ChineseScript::AsTranscribed;
     fail_open_text_transform(raw, |raw| {
-        let corrected = if !settings.custom_words.is_empty() && !custom_words_already_prompted {
-            apply_custom_words(
-                &raw,
-                &settings.custom_words,
-                settings.word_correction_threshold,
-            )
-        } else {
-            raw
-        };
-
         // Last-resort language evidence: confidence-gated detection from the
         // transcribed text itself, constrained to the model's languages. Only
-        // consulted when it can change the outcome (built-in gated fillers).
+        // consulted when it can change the outcome (built-in gated fillers or
+        // Chinese script conversion).
         let output_language = match output_language {
             OutputLanguageEvidence::Unknown
-                if settings.filler_word_removal_enabled
-                    && settings.custom_filler_words.is_none() =>
+                if converts_script
+                    || (settings.filler_word_removal_enabled
+                        && settings.custom_filler_words.is_none()) =>
             {
-                match detect_output_language(&corrected, supported_languages) {
+                match detect_output_language(&raw, supported_languages) {
                     Some(language) => {
                         debug!("Text-based language detection resolved '{}'", language);
                         OutputLanguageEvidence::TextDetected(language)
@@ -2335,6 +2327,29 @@ fn post_process_transcription_text(
                 }
             }
             other => other.clone(),
+        };
+
+        // Convert the script before custom words so they match in the script
+        // the user writes in. Only output known to be Chinese is touched, so
+        // e.g. Japanese kanji are never rewritten.
+        let variety = output_language
+            .language()
+            .and_then(ChineseVariety::from_language);
+        let raw = match variety {
+            Some(variety) if converts_script => {
+                convert_chinese_script(&raw, variety, settings.chinese_script)
+            }
+            _ => raw,
+        };
+
+        let corrected = if !settings.custom_words.is_empty() && !custom_words_already_prompted {
+            apply_custom_words(
+                &raw,
+                &settings.custom_words,
+                settings.word_correction_threshold,
+            )
+        } else {
+            raw
         };
 
         let without_fillers = remove_filler_words(
@@ -2346,6 +2361,98 @@ fn post_process_transcription_text(
 
         normalize_transcription_output(&without_fillers)
     })
+}
+
+/// Characters to wait for before detecting the preview's language. A lone
+/// Chinese character reads as Mandarin, but Japanese often opens with kanji
+/// before any kana; waiting a few characters keeps those from locking in.
+const PREVIEW_DETECTION_MIN_CHARS: usize = 6;
+
+/// Converts live-preview text into the configured Chinese script as it streams.
+///
+/// The preview is cosmetic: the final paste re-resolves the language and
+/// converts on its own, so this only has to look right while speaking.
+struct PreviewScript {
+    script: ChineseScript,
+    variety: Option<ChineseVariety>,
+    /// The language wasn't known when the stream started (auto-detect), so it
+    /// is detected from the streamed text until it turns out to be Chinese.
+    detect: bool,
+}
+
+impl PreviewScript {
+    fn new(script: ChineseScript, output_language: &OutputLanguageEvidence) -> Self {
+        let enabled = script != ChineseScript::AsTranscribed;
+        Self {
+            script,
+            variety: output_language
+                .language()
+                .and_then(ChineseVariety::from_language)
+                .filter(|_| enabled),
+            detect: enabled && *output_language == OutputLanguageEvidence::Unknown,
+        }
+    }
+
+    /// Converts the model's raw committed/tentative text. Always fed the raw
+    /// text, never a previous conversion, so it stays consistent with the
+    /// final conversion. Once Chinese is detected it sticks for the rest of
+    /// the stream so the preview doesn't flip back and forth.
+    fn convert(
+        &mut self,
+        committed: &str,
+        tentative: &str,
+        supported_languages: &[String],
+    ) -> (String, String) {
+        if self.variety.is_none() && self.detect {
+            let text = format!("{committed}{tentative}");
+            if text.chars().count() >= PREVIEW_DETECTION_MIN_CHARS {
+                self.variety = detect_output_language(&text, supported_languages)
+                    .as_deref()
+                    .and_then(ChineseVariety::from_language);
+            }
+        }
+
+        match self.variety {
+            Some(variety) => (
+                convert_chinese_script(committed, variety, self.script),
+                convert_chinese_script(tentative, variety, self.script),
+            ),
+            None => (committed.to_string(), tentative.to_string()),
+        }
+    }
+}
+
+/// One streamed update, split by destination. `committed`/`tentative` are the
+/// model's raw text: they feed the transcript merger, whose committed text
+/// becomes the pasted result, and the `--follow-stream` protocol. The preview
+/// fields are what the overlay shows. Script conversion is confined to the
+/// preview because the final text is converted once, in
+/// `post_process_transcription_text`; converting committed text here as well
+/// would convert it twice and hand protocol consumers text the model never
+/// produced.
+struct StreamTextFrame<'a> {
+    committed: &'a str,
+    tentative: &'a str,
+    preview_committed: String,
+    preview_tentative: String,
+}
+
+impl PreviewScript {
+    fn frame<'a>(
+        &mut self,
+        committed: &'a str,
+        tentative: &'a str,
+        supported_languages: &[String],
+    ) -> StreamTextFrame<'a> {
+        let (preview_committed, preview_tentative) =
+            self.convert(committed, tentative, supported_languages);
+        StreamTextFrame {
+            committed,
+            tentative,
+            preview_committed,
+            preview_tentative,
+        }
+    }
 }
 
 /// Optional text cleanup must never discard a successful model result. The
@@ -2497,19 +2604,29 @@ pub fn init_transcribe_backend() {
                      disabling transcribe.cpp GPU acceleration and using CPU"
                 );
             }
-            let devices = transcribe_compute_devices();
-            info!(
-                "transcribe-cpp initialized with {} compute device(s): [{}]",
-                devices.len(),
-                devices
-                    .iter()
-                    .map(|d| format!("{} ({})", d.name, d.kind))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
         }
         Err(e) => warn!("Failed to initialize transcribe-cpp backends: {}", e),
     }
+}
+
+/// Log the compute devices [`init_transcribe_backend`] registered.
+///
+/// Listing devices is what first opens the GPU. On macOS that loads ggml's
+/// Metal library, which is compiled from source whenever the system's shader
+/// cache does not hold it yet (the first launch after an install or update),
+/// so the app calls this from a background thread instead of its startup
+/// path. A model load that comes first waits on the same one-time compile.
+pub fn report_compute_devices() {
+    let devices = transcribe_compute_devices();
+    info!(
+        "transcribe-cpp initialized with {} compute device(s): [{}]",
+        devices.len(),
+        devices
+            .iter()
+            .map(|d| format!("{} ({})", d.name, d.kind))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 /// Human-readable list of the transcribe-cpp compute devices registered at
@@ -3206,6 +3323,61 @@ mod tests {
     }
 
     #[test]
+    fn stream_preview_converts_script_but_committed_text_stays_raw() {
+        let mut preview = PreviewScript::new(
+            ChineseScript::Traditional,
+            &OutputLanguageEvidence::UserSelected("zh".to_string()),
+        );
+        let frame = preview.frame("我们去学校", "图书馆", &languages(&["zh", "en"]));
+
+        assert_eq!(frame.committed, "我们去学校");
+        assert_eq!(frame.tentative, "图书馆");
+        assert_eq!(frame.preview_committed, "我們去學校");
+        assert_eq!(frame.preview_tentative, "圖書館");
+    }
+
+    #[test]
+    fn non_chinese_output_is_never_converted() {
+        let settings = AppSettings {
+            chinese_script: ChineseScript::Traditional,
+            ..Default::default()
+        };
+        for evidence in [
+            OutputLanguageEvidence::ModelDetected("ja".to_string()),
+            OutputLanguageEvidence::UserSelected("en".to_string()),
+            OutputLanguageEvidence::TranslatedToEnglish,
+        ] {
+            let result = post_process_transcription_text(
+                "学校に行きます".to_string(),
+                &settings,
+                false,
+                &evidence,
+                &languages(&["zh", "ja", "en"]),
+            );
+
+            assert_eq!(result, "学校に行きます", "{evidence:?}");
+        }
+    }
+
+    #[test]
+    fn auto_detected_chinese_text_is_converted() {
+        let settings = AppSettings {
+            chinese_script: ChineseScript::Simplified,
+            filler_word_removal_enabled: false,
+            ..Default::default()
+        };
+        let result = post_process_transcription_text(
+            "我們今天下午一起去學校圖書館看書，然後再去吃晚飯。".to_string(),
+            &settings,
+            false,
+            &OutputLanguageEvidence::Unknown,
+            &languages(&["zh", "en", "ja"]),
+        );
+
+        assert_eq!(result, "我们今天下午一起去学校图书馆看书，然后再去吃晚饭。");
+    }
+
+    #[test]
     fn portuguese_transcription_does_not_use_english_ui_filler_words() {
         let settings = AppSettings {
             app_language: "en".to_string(),
@@ -3430,15 +3602,6 @@ mod tests {
         );
 
         assert_eq!(evidence, OutputLanguageEvidence::TranslatedToEnglish);
-    }
-
-    #[test]
-    fn transcribe_cpp_run_plan_maps_chinese_variants() {
-        let plan = transcribe_cpp_run_plan(false, "zh-Hant", &languages(&["zh"]), true);
-
-        assert!(matches!(plan.task, Task::Transcribe));
-        assert_eq!(plan.language.as_deref(), Some("zh"));
-        assert_eq!(plan.target_language, None);
     }
 
     #[test]

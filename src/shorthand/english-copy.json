@@ -6,6 +6,8 @@
   "settings.advanced.acceleration.ort.title": "ONNX acceleration",
   "settings.advanced.autoSubmit.title": "Auto submit",
   "settings.advanced.autostart.label": "Launch on startup",
+  "settings.advanced.chineseScript.options.asTranscribed": "As transcribed",
+  "settings.advanced.chineseScript.title": "Chinese script",
   "settings.advanced.clipboardHandling.title": "Clipboard handling",
   "settings.advanced.customWords.title": "Custom words",
   "settings.advanced.experimentalToggle.label": "Experimental features",

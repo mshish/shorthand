@@ -34,7 +34,7 @@ The stream is UTF-8, with exactly one JSON object per newline. Every object has 
 
 `capture_state` always follows `hello` — see "Connection state: `capture_state` and `begin`" below. `refused` and `start_failed` are two more connection-level records described in "Explicit start/stop commands" below. None carries `session_elapsed_ms`, because none is a session event; `capture_state.session`, when present, identifies the active publication but does not change the record's connection-snapshot semantics.
 
-In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript.
+In `partial` events, `committed` is the stable, append-only prefix and `tentative` is the volatile suffix. The `speaker` value is `"me"` for microphone audio and `"them"` for system audio. A single-lane `final` includes that speaker; `final.speaker` is omitted when the final text is a merged, speaker-labelled dual-speaker transcript. `partial` text is the model's raw output; `final.text` has the app's text processing applied, so it can differ from the last `partial`s in more than punctuation and casing. In particular, when the Chinese script setting converts to Simplified or Traditional characters, only `final` is converted, so a follower that shows `partial`s and then replaces them with the `final` will see the characters change script.
 
 A dual-speaker session can therefore look like this:
 
@@ -149,7 +149,7 @@ A command can be accepted (the CLI flag exits 0, and the running instance receiv
 
 - `microphone-permission-denied` — the existing recorder classifier recognised an access-denied, permission-denied, or Windows `0x80070005` microphone error.
 - `no-input-device` — the existing recorder classifier recognised no default input device, including CoreAudio's equivalent preferred-config failure.
-- `audio-capture-failed` — another error from VAD loading, device resolution/configuration/opening, recorder availability, or recorder worker start. Those layers currently return strings rather than a stronger typed cause, so this is deliberately one catch-all.
+- `audio-capture-failed` — another error from VAD loading, device resolution/configuration/opening, recorder availability, recorder worker start, or no transcription model being available. Those layers currently return strings rather than a stronger typed cause, so this is deliberately one catch-all.
 
 The `start-failed-code` capability tells a follower the field is present. As with `refused.reason`, the values are an open set for parsing: a follower that sees an unrecognised code must still accept `start_failed` and treat it as an unexplained failure, preserving `message` for display or logs, rather than reject the record. The capability advertises the field, not a closed promise that these are the only values a future binary can send.
 
