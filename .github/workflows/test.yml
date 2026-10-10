@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - "src-tauri/**"
+      - ".github/workflows/test.yml"
   pull_request:
     paths:
       - "src-tauri/**"
+      - ".github/workflows/test.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -40,3 +42,49 @@ jobs:
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
+
+  # Fork-only: line coverage of src-tauri/src/shorthand/, published as a report
+  # and never as a gate (docs/review/test-coverage.md). A failing test fails
+  # this job as it fails rust-tests; a low percentage does not.
+  shorthand-coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          # Same set as rust-tests above.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libssl-dev libgtk-layer-shell-dev \
+            libpipewire-0.3-dev libvulkan-dev glslc spirv-headers
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run Rust tests with coverage
+        working-directory: src-tauri
+        run: cargo llvm-cov --lcov --output-path lcov-all.info
+
+      # cargo-llvm-cov can exclude paths but not include them, so keep only the
+      # lcov records for src-tauri/src/shorthand/ and total their lines.
+      - name: Report src-tauri/src/shorthand/ coverage
+        working-directory: src-tauri
+        run: |
+          awk '/^SF:/ { keep = index($0, "/src-tauri/src/shorthand/") > 0 } keep' lcov-all.info > lcov-shorthand.info
+          awk -F: '/^SF:/ { files++ } /^LF:/ { found += $2 } /^LH:/ { hit += $2 }
+            END {
+              print "### src-tauri/src/shorthand/ line coverage\n"
+              if (found == 0) { print "No lines measured."; exit }
+              printf "%.1f%% (%d of %d lines, %d files). Report only, not a gate.\n", 100 * hit / found, hit, found, files
+            }' lcov-shorthand.info | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shorthand-coverage-lcov
+          path: src-tauri/lcov-shorthand.info
