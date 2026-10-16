@@ -52,6 +52,19 @@ const OVERLAY_HEIGHT: f64 = 50.0;
 // Actual is 394x118, just a little extra
 const OVERLAY_STREAM_WIDTH: f64 = 400.0;
 const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
+// Shorthand: a Meeting's two-lane Live panel. Its text region is capped at
+// 104 (`--ov-dual-cap-max-h`) rather than 64, so the card is 40 + 104 + 12
+// padding + 2 border = 158; a little extra, as above.
+const OVERLAY_DUAL_STREAM_HEIGHT: f64 = 164.0;
+
+/// Whether the Live panel about to show streams a second (system-audio) lane.
+/// Set when a recording starts its lanes, read when the overlay is sized. The
+/// window is not click-through, so it is only this tall while it needs to be.
+static DUAL_LANE_OVERLAY: AtomicBool = AtomicBool::new(false);
+
+pub fn set_dual_lane_overlay(dual_lane: bool) {
+    DUAL_LANE_OVERLAY.store(dual_lane, Ordering::Relaxed);
+}
 
 // Up to three short lines (message, action, "in History").
 const OVERLAY_ERROR_WIDTH: f64 = 360.0;
@@ -60,7 +73,9 @@ const ERROR_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_mi
 
 /// Overlay window size (logical) for a given UI state.
 fn overlay_dimensions(state: &str) -> (f64, f64) {
-    if state == "streaming" {
+    if state == "streaming" && DUAL_LANE_OVERLAY.load(Ordering::Relaxed) {
+        (OVERLAY_STREAM_WIDTH, OVERLAY_DUAL_STREAM_HEIGHT)
+    } else if state == "streaming" {
         (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
     } else if state == "error" {
         (OVERLAY_ERROR_WIDTH, OVERLAY_ERROR_HEIGHT)

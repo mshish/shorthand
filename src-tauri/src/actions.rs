@@ -606,8 +606,14 @@ impl ShortcutAction for TranscribeAction {
             streaming: model_supports_streaming,
             long_form: false,
         };
-        if live_decode(expected_model, settings.long_form_chunking) != LiveDecode::None {
-            let managers = transcription_managers(app);
+        let live = live_decode(expected_model, settings.long_form_chunking) != LiveDecode::None;
+        let managers = if live {
+            transcription_managers(app)
+        } else {
+            Vec::new()
+        };
+        crate::overlay::set_dual_lane_overlay(managers.len() > 1);
+        if live {
             if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
                 merger.begin_session(managers.len() > 1);
             }
