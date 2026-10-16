@@ -103,13 +103,20 @@ pub fn cancel_current_operation(app: &AppHandle) {
         hub.cancel_active();
     }
     cancel_active_streams(app);
+    // And stop a transcription already in progress, on every lane.
+    let managers = transcription_managers(app);
+    for manager in &managers {
+        manager.cancel_transcription();
+    }
 
     // Update tray icon and hide overlay
     set_tray_state(app, crate::tray::TrayIconState::Idle);
     hide_recording_overlay(app);
 
-    // Unload model if immediate unload is enabled
-    for manager in transcription_managers(app) {
+    // Unload model if immediate unload is enabled. Done before notifying the
+    // coordinator, so a recording started next always loads afresh; it
+    // doesn't wait for the cancelled work, so it never blocks this thread.
+    for manager in &managers {
         manager.maybe_unload_immediately("cancellation");
     }
 

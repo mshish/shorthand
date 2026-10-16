@@ -29,10 +29,6 @@ incremental = true # Compile your binary in smaller steps.
 name = "shorthand_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# [[bin]]
-# name = "cli"
-# path = "src/audio_toolkit/bin/cli.rs"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 serde_json = "1"
@@ -58,13 +54,15 @@ tauri-plugin-fs = "2.4.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
-# Linux system-audio capture needs CPAL's sound-server backends in addition to
-# ALSA microphone capture. The optional dependencies are target-gated inside
-# CPAL, so enabling them here does not add Linux libraries to Windows/macOS.
+# Fork-only: the system-audio lane opens render endpoints (Windows, macOS) or
+# monitor sources (Linux) through CPAL; microphones are handy-recorder's. Linux
+# needs CPAL's sound-server backends for that. The optional dependencies are
+# target-gated inside CPAL, so enabling them adds nothing to Windows/macOS.
 cpal = { version = "=0.18.2", features = ["pipewire", "pulseaudio"] }
-rtrb = "0.4.0"
-anyhow = "1.0.95"
+# Resamples the system-audio lane to 16 kHz. handy-recorder resamples the
+# microphone itself, but it captures input devices only.
 rubato = "0.16.2"
+anyhow = "1.0.95"
 hound = "3.5.1"
 log = "0.4.25"
 env_filter = "0.1.0"
@@ -76,10 +74,11 @@ interprocess = { version = "2.4.3", features = ["tokio"] }
 keyring-core = "1"
 base64 = "0.22"
 url = "2"
-vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
 earshot = "1.2.2"
 enigo = "0.6.1"
-rodio = { git = "https://github.com/mshish/rodio.git", rev = "11a327a5e0b571bbd5e018508645abedc20adb2c" }
+# Feedback sounds. No `recording`: microphone capture is handy-recorder's.
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "wav", "flac", "mp3", "vorbis"] }
+handy-recorder = "0.1"
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "brotli", "deflate"] }
 futures-util = "0.3"
 # Fork-only: the ws.* relay (src/shorthand/request_socket/ws_relay.rs) speaks
@@ -98,14 +97,14 @@ whatlang = "0.16"
 isolang = "2"
 chrono = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
-tar = "0.4.44"
-flate2 = "1.0"
 sha2 = "0.10"
-# Whisper-family models run through transcribe-cpp (GGUF/ggml, native backends);
-# transcribe-rs is now ONNX-only (Parakeet, Moonshine, SenseVoice, GigaAM,
-# Canary, Cohere). Per-platform backend features are added in the target tables.
-transcribe-rs = { version = "0.3.8", features = ["onnx"] }
-transcribe-cpp = { version = "0.2.4", default-features = false }
+libc = "0.2"
+# Every model runs through transcribe-cpp (GGUF/ggml, native backends).
+# Per-platform backend features are added in the target tables (Cargo unifies
+# features, so `serde` here applies to every platform).
+transcribe-cpp = { version = "0.4.0", default-features = false, features = [
+  "serde",
+] }
 handy-keys = "0.3.4"
 ferrous-opencc = "0.2.3"
 clap = { version = "4", features = ["derive"] }
@@ -144,14 +143,6 @@ tauri-plugin-updater = "2.10.1"
 # (disabling browser accelerator keys in the main window). Must match the
 # version wry links against so the COM types are identical.
 webview2-com = "0.38"
-# ONNX Runtime on Windows is CPU-only (no ort-directml), matching macOS/Linux.
-# The DirectML EP was experimental and, more importantly, pulled in pyke's
-# prebuilt ONNX Runtime which is compiled with a global /arch:AVX2 baseline that
-# executes BMI2/AVX in a static initializer and crashes at process startup on any
-# pre-Haswell CPU (Sandy/Ivy Bridge, older AMD). Dropping the feature means we
-# link a baseline ONNX Runtime (dynamically, via ORT_LIB_LOCATION in build.yml)
-# with proper runtime CPU dispatch. Base `transcribe-rs` (features = ["onnx"])
-# is inherited here, so Parakeet/Moonshine/etc. still run on CPU.
 windows = { version = "0.61.3", features = [
   "Win32_Security",
   "Win32_Security_Authorization",
@@ -189,17 +180,17 @@ windows-native-keyring-store = "1.1"
 # signtool verify entirely. CI pins -DGGML_NATIVE=OFF (see build.yml) so the
 # static build targets a portable ARM baseline, not the build runner's CPU.
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
-transcribe-cpp = { version = "0.2.4", default-features = false, features = [
+transcribe-cpp = { version = "0.4.0", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }
 
 [target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
-transcribe-cpp = { version = "0.2.4", default-features = false }
+transcribe-cpp = { version = "0.4.0", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
-transcribe-cpp = { version = "0.2.4", default-features = false, features = ["metal"] }
+transcribe-cpp = { version = "0.4.0", default-features = false, features = ["metal"] }
 # Used by the receipt-sequenced ("reliable") paste path for lazy NSPasteboard
 # promises. Versions track what Tauri already pulls in.
 objc2 = "0.6"
@@ -220,7 +211,7 @@ gtk = "0.18"
 pulseaudio = "0.3.1"
 futures = "0.3"
 libc = "0.2"
-transcribe-cpp = { version = "0.2.4", default-features = false, features = [
+transcribe-cpp = { version = "0.4.0", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }

@@ -5,7 +5,7 @@ Thank you for helping translate Handy! This guide explains how to add or improve
 ## Quick Start
 
 1. Fork the repository
-2. Copy the English translation file to your language folder
+2. Check the [currently supported languages](#currently-supported-languages). For an existing language, edit its translation file; for a new language, copy the English translation file to a new language folder
 3. Translate the values (not the keys!)
 4. Submit a pull request
 
@@ -160,10 +160,13 @@ Some languages have complex plural rules. For now, use a general form that works
 
 ## Currently Supported Languages
 
-26 locales, listed in `src/i18n/languages.ts`. `bun run check:translations`
-enforces key parity across all of them for upstream's catalogues, and
+See [language metadata](src/i18n/languages.ts) for the current language names and codes, and [locale folders](src/i18n/locales) for their translation files. The app discovers supported languages from these folders.
+
+[English](src/i18n/locales/en/translation.json) is the source language. Existing translations may still need corrections or updates.
+
+`bun run check:translations` enforces key parity across upstream's catalogues, and
 `bun run check:fork-translations` does the same for the fork-only catalogues
-above — so "supported" means both files, not just this one.
+above, so a supported language needs both.
 
 | Language            | Code    | Status                                                                                                                                                                                                                                                          |
 | ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -194,10 +197,7 @@ above — so "supported" means both files, not just this one.
 | Catalan             | `ca`    | Complete                                                                                                                                                                                                                                                        |
 | Indonesian          | `id`    | Complete                                                                                                                                                                                                                                                        |
 
-This table used to list 7 languages as complete and ask for help with Korean
-and Portuguese — both had already shipped by the time anyone re-read it.
-Treat `src/i18n/languages.ts` as the source of truth for what's supported and
-this table as a rendering of it, not the other way round.
+We welcome additional languages that are not yet in the [locale folders](src/i18n/locales), as well as [improvements to existing translations](#improving-existing-translations).
 
 ---
 

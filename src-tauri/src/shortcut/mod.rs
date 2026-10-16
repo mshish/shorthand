@@ -1146,6 +1146,30 @@ pub fn change_post_process_base_url_setting(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_api_format_setting(
+    app: AppHandle,
+    provider_id: String,
+    api_format: settings::PostProcessApiFormat,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let provider = settings
+        .post_process_provider_mut(&provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found", provider_id))?;
+
+    if provider.id != "custom" {
+        return Err(format!(
+            "Provider '{}' does not allow changing the API format",
+            provider.label
+        ));
+    }
+
+    provider.api_format = api_format;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
 /// Generic helper to validate provider exists
 fn validate_provider_exists(
     settings: &settings::AppSettings,
@@ -1379,6 +1403,15 @@ pub fn change_lazy_stream_close_setting(app: AppHandle, enabled: bool) -> Result
 pub fn change_vad_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.vad_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_long_form_chunking_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.long_form_chunking = enabled;
     settings::write_settings(&app, settings);
     Ok(())
 }
@@ -1783,18 +1816,8 @@ pub fn change_transcribe_accelerator_setting(
     let mut s = settings::get_settings(&app);
     s.transcribe_accelerator = accelerator;
     save_accelerator_and_reload_next_use(&app, s);
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn change_ort_accelerator_setting(
-    app: AppHandle,
-    accelerator: settings::OrtAcceleratorSetting,
-) -> Result<(), String> {
-    let mut s = settings::get_settings(&app);
-    s.ort_accelerator = accelerator;
-    save_accelerator_and_reload_next_use(&app, s);
+    app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>()
+        .retry_transcribe_gpu("the transcribe.cpp accelerator setting changed");
     Ok(())
 }
 
@@ -1804,6 +1827,8 @@ pub fn change_transcribe_gpu_device(app: AppHandle, device: Option<String>) -> R
     let mut s = settings::get_settings(&app);
     s.transcribe_gpu_device = device;
     save_accelerator_and_reload_next_use(&app, s);
+    app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>()
+        .retry_transcribe_gpu("the transcribe.cpp GPU device setting changed");
     Ok(())
 }
 
@@ -1815,10 +1840,16 @@ pub fn change_transcribe_gpu_device(app: AppHandle, device: Option<String>) -> R
 /// stays responsive — see also the startup pre-warm in `lib.rs`.
 #[tauri::command]
 #[specta::specta]
-pub async fn get_available_accelerators() -> crate::managers::transcription::AvailableAccelerators {
-    tauri::async_runtime::spawn_blocking(crate::managers::transcription::get_available_accelerators)
-        .await
-        .expect("get_available_accelerators panicked")
+pub async fn get_available_accelerators(
+    app: AppHandle,
+) -> crate::managers::transcription::AvailableAccelerators {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tm =
+            app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
+        crate::managers::transcription::get_available_accelerators(&tm)
+    })
+    .await
+    .expect("get_available_accelerators panicked")
 }
 
 #[cfg(test)]
