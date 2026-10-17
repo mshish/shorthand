@@ -2,6 +2,7 @@ use crate::managers::transcription::{transcription_managers, TranscriptionManage
 use crate::settings::{get_settings, write_settings, ModelUnloadTimeout};
 use serde::Serialize;
 use specta::Type;
+use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 #[derive(Serialize, Type)]
@@ -21,7 +22,7 @@ pub fn set_model_unload_timeout(app: AppHandle, timeout: ModelUnloadTimeout) {
 #[tauri::command]
 #[specta::specta]
 pub fn get_model_load_status(
-    transcription_manager: State<TranscriptionManager>,
+    transcription_manager: State<Arc<TranscriptionManager>>,
 ) -> Result<ModelLoadStatus, String> {
     Ok(ModelLoadStatus {
         is_loaded: transcription_manager.is_model_loaded(),
@@ -33,9 +34,7 @@ pub fn get_model_load_status(
 #[specta::specta]
 pub fn unload_model_manually(app: tauri::AppHandle) -> Result<(), String> {
     for manager in transcription_managers(&app) {
-        manager
-            .unload_model()
-            .map_err(|e| format!("Failed to unload model: {}", e))?;
+        manager.request_unload();
     }
     Ok(())
 }

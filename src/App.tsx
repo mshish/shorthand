@@ -18,7 +18,10 @@ import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import SecureInputWarning from "./components/SecureInputWarning";
 import Footer from "./components/footer";
-import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
+import Onboarding, {
+  AccessibilityOnboarding,
+  ModelMigration,
+} from "./components/onboarding";
 import TelemetryOnboarding from "@/shorthand/telemetry/TelemetryOnboarding";
 import {
   DebugSettings,
@@ -30,10 +33,16 @@ import { WhatsNewGate } from "./components/whats-new";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
+import { deleteRetiredModel } from "@/components/onboarding/retiredModels";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 import { useVisibleSection } from "@/shorthand/useVisibleSection";
 
-type OnboardingStep = "accessibility" | "telemetry" | "model" | "done";
+type OnboardingStep =
+  | "accessibility"
+  | "migration"
+  | "telemetry"
+  | "model"
+  | "done";
 
 // Stable identity so preview effects do not re-run due to callback changes.
 const NOOP = () => {};
@@ -48,6 +57,9 @@ function App() {
   // Track if this is a returning user who just needs to grant permissions
   // (vs a new user who needs full onboarding including model selection)
   const [isReturningUser, setIsReturningUser] = useState(false);
+  // Set when a returning user's selected model is a retired (ONNX) model that
+  // is still on disk: they must update it before the app can transcribe.
+  const [migrationModelId, setMigrationModelId] = useState<string | null>(null);
   const { settings, updateSetting } = useSettings();
   const { currentSection, setCurrentSection, ActiveComponent } =
     useVisibleSection(settings);
@@ -70,6 +82,7 @@ function App() {
   const isShowingOnboarding =
     onboardingPreview !== null ||
     onboardingStep === "accessibility" ||
+    onboardingStep === "migration" ||
     onboardingStep === "telemetry" ||
     onboardingStep === "model";
 
@@ -227,6 +240,24 @@ function App() {
     }
   };
 
+  const getMigrationModelId = async (
+    selectedModel: string,
+  ): Promise<string | null> => {
+    const retired = await commands.getRetiredModels();
+    return retired.some((m) => m.id === selectedModel) ? selectedModel : null;
+  };
+
+  // Returning users land in the app unless their model needs updating. The
+  // window may start hidden, so bring it forward for the update screen.
+  const finishReturningUser = async (retiredModelId: string | null) => {
+    if (retiredModelId) {
+      await revealMainWindowForPermissions();
+      setOnboardingStep("migration");
+    } else {
+      setOnboardingStep("done");
+    }
+  };
+
   const checkOnboardingStatus = async () => {
     try {
       const settingsResult = await commands.getAppSettings();
@@ -238,6 +269,10 @@ function App() {
       if (hasCompletedOnboarding) {
         // Returning user - check if they need to grant permissions first
         setIsReturningUser(true);
+        const retiredModelId = await getMigrationModelId(
+          settingsResult.data.selected_model ?? "",
+        );
+        setMigrationModelId(retiredModelId);
 
         if (currentPlatform === "macos") {
           try {
@@ -274,7 +309,7 @@ function App() {
           }
         }
 
-        setOnboardingStep("done");
+        await finishReturningUser(retiredModelId);
       } else {
         // New user - start full onboarding
         setIsReturningUser(false);
@@ -287,12 +322,26 @@ function App() {
   };
 
   const handleAccessibilityComplete = () => {
-    // Returning users already have models, skip to main app
-    // New users need to select a model
-    setOnboardingStep(isReturningUser ? "done" : "model");
+    // Returning users already have models, skip to main app (unless their
+    // model needs updating). New users need to select a model.
+    if (isReturningUser) {
+      finishReturningUser(migrationModelId);
+    } else {
+      setOnboardingStep("model");
+    }
   };
 
-  const handleModelSelected = () => {
+  const handleModelSelected = async () => {
+    // Coming from the model update: the user picked a different model instead
+    // of updating, so the retired models left on disk can't run anymore. A
+    // returning user has been through the rest of onboarding already.
+    if (migrationModelId) {
+      for (const model of await commands.getRetiredModels()) {
+        await deleteRetiredModel(model.id);
+      }
+      setOnboardingStep("done");
+      return;
+    }
     // User has started a download - ask about telemetry last
     setOnboardingStep("telemetry");
   };
@@ -356,10 +405,25 @@ function App() {
     content = (
       <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />
     );
+  } else if (onboardingStep === "migration" && migrationModelId) {
+    content = (
+      <ModelMigration
+        inUseModelId={migrationModelId}
+        onComplete={() => setOnboardingStep("done")}
+        onChooseAnother={() => setOnboardingStep("model")}
+      />
+    );
   } else if (onboardingStep === "telemetry") {
     content = <TelemetryOnboarding onComplete={handleTelemetryComplete} />;
   } else if (onboardingStep === "model") {
-    content = <Onboarding onModelSelected={handleModelSelected} />;
+    content = (
+      <Onboarding
+        onModelSelected={handleModelSelected}
+        onBack={
+          migrationModelId ? () => setOnboardingStep("migration") : undefined
+        }
+      />
+    );
   } else {
     content = (
       <div

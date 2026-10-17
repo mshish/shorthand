@@ -82,10 +82,10 @@ export const SystemAudioDeviceSelector: React.FC<
             : t("settings.sound.outputDevice.placeholder")
         }
         // Deliberately not disabled on an empty list: opening the dropdown is
-        // what calls onRefresh, so disabling it while empty would leave the
+        // what calls onOpen, so disabling it while empty would leave the
         // list with no way to fill itself.
         disabled={disabled || isUpdating("system_audio_device") || isLoading}
-        onRefresh={refreshSystemAudioDevices}
+        onOpen={refreshSystemAudioDevices}
       />
     </SettingContainer>
   );

@@ -73,6 +73,8 @@
   --ov-open-w: 392px; /* Live panel, expanded */
   --ov-base-h: 40px; /* control-row height (.sbase) */
   --ov-cap-max-h: 64px; /* max height of the single-lane live-text region */
+  --ov-dual-cap-max-h: 104px; /* two-lane (Meeting) live-text region; the
+     window grows to fit it (OVERLAY_DUAL_STREAM_HEIGHT in overlay.rs) */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -275,7 +277,13 @@
   -ms-overflow-style: none; /* legacy Edge */
 }
 .stext-cap.dual-lane {
-  max-height: 104px;
+  /* The same window clamp as the single lane: a cap the window can't hold
+     clips the card's bottom edge (its last line and padding) instead of
+     scrolling. */
+  max-height: min(
+    var(--ov-dual-cap-max-h),
+    calc(100vh - var(--ov-base-h) - 20px)
+  );
 }
 /* Hide the scrollbar (WebKit/Chromium) — scroll-back is signalled by the fade. */
 .stext-cap::-webkit-scrollbar {
@@ -308,6 +316,9 @@
 }
 .stext-cap .tentative {
   color: inherit;
+}
+.stext-cap .sloading {
+  color: var(--s-muted);
 }
 .scaret {
   display: inline-block;

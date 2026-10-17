@@ -12,6 +12,7 @@ import {
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
+import RetiredModelsNotice from "./RetiredModelsNotice";
 import {
   getLanguageLabel,
   MODEL_CAPABILITY_LANGUAGES,
@@ -29,7 +30,7 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return supportsLanguageCode(model.supported_languages, langCode);
 };
 
-// Legacy models are the blob (Url-sourced) .bin/ONNX downloads, superseded by
+// Legacy models are the blob (Url-sourced) .bin downloads, superseded by
 // the catalog GGUFs. They stay runnable when already on disk, but we no longer
 // advertise the download.
 const isLegacyModel = (model: ModelInfo): boolean =>
@@ -61,7 +62,6 @@ export const ModelsSettings: React.FC = () => {
     downloadProgress,
     downloadStats,
     verifyingModels,
-    extractingModels,
     loading,
     isRescanning,
     downloadModel,
@@ -115,9 +115,6 @@ export const ModelsSettings: React.FC = () => {
   }, [languageFilter, t]);
 
   const getModelStatus = (modelId: string): ModelCardStatus => {
-    if (modelId in extractingModels) {
-      return "extracting";
-    }
     if (modelId in verifyingModels) {
       return "verifying";
     }
@@ -198,7 +195,7 @@ export const ModelsSettings: React.FC = () => {
   const filteredModels = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return models.filter((model: ModelInfo) => {
-      // Hide deprecated legacy (.bin/ONNX) downloads unless already on disk.
+      // Hide deprecated legacy (.bin) downloads unless already on disk.
       if (isLegacyModel(model) && !model.is_downloaded) return false;
       if (languageFilter !== "all") {
         if (!modelSupportsLanguage(model, languageFilter)) return false;
@@ -235,8 +232,7 @@ export const ModelsSettings: React.FC = () => {
       if (
         model.is_custom ||
         model.is_downloaded ||
-        model.id in downloadingModels ||
-        model.id in extractingModels
+        model.id in downloadingModels
       ) {
         downloaded.push(model);
       } else {
@@ -256,7 +252,7 @@ export const ModelsSettings: React.FC = () => {
       downloadedModels: downloaded,
       availableModels: available,
     };
-  }, [filteredModels, downloadingModels, extractingModels, currentModel]);
+  }, [filteredModels, downloadingModels, currentModel]);
 
   if (loading) {
     return (
@@ -278,6 +274,8 @@ export const ModelsSettings: React.FC = () => {
           {t("settings.models.description")}
         </p>
       </div>
+
+      <RetiredModelsNotice />
 
       {/* Search bar — filter the catalog by name or description */}
       <div className="relative">

@@ -4,9 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AppSettings as Settings,
   AudioDevice,
+  PostProcessApiFormat,
   ChineseScript,
   TranscribeAcceleratorSetting,
-  OrtAcceleratorSetting,
   DictationSettings,
   AssistedNotesSettings,
   SystemAudioAvailability,
@@ -77,6 +77,10 @@ interface SettingsStore {
   updatePostProcessBaseUrl: (
     providerId: string,
     baseUrl: string,
+  ) => Promise<void>;
+  updatePostProcessApiFormat: (
+    providerId: string,
+    apiFormat: PostProcessApiFormat,
   ) => Promise<void>;
   updatePostProcessApiKey: (
     providerId: string,
@@ -241,6 +245,8 @@ const settingUpdaters: {
     commands.changeLazyStreamCloseSetting(value as boolean),
   overlay_style: (value) => commands.changeOverlayStyleSetting(value as string),
   vad_enabled: (value) => commands.changeVadEnabledSetting(value as boolean),
+  long_form_chunking: (value) =>
+    commands.changeLongFormChunkingSetting(value as boolean),
   vad_backend: async (value) => {
     const result = await commands.changeVadBackendSetting(value as VadBackend);
     if (result.status === "error") {
@@ -262,8 +268,6 @@ const settingUpdaters: {
     commands.changeTranscribeAcceleratorSetting(
       value as TranscribeAcceleratorSetting,
     ),
-  ort_accelerator: (value) =>
-    commands.changeOrtAcceleratorSetting(value as OrtAcceleratorSetting),
   transcribe_gpu_device: (value) =>
     commands.changeTranscribeGpuDevice(value as string | null),
   extra_recording_buffer_ms: (value) =>
@@ -732,6 +736,37 @@ export const useSettingsStore = create<SettingsStore>()(
         await refreshSettings();
       } catch (error) {
         console.error("Failed to update post-process base URL:", error);
+      } finally {
+        setUpdating(updateKey, false);
+      }
+    },
+
+    updatePostProcessApiFormat: async (providerId, apiFormat) => {
+      const { setUpdating, refreshSettings } = get();
+      const updateKey = `post_process_api_format:${providerId}`;
+
+      // The format decides the auth headers, so models listed under the old
+      // format may not reflect this one - user should click refresh after
+      set((state) => ({
+        postProcessModelOptions: {
+          ...state.postProcessModelOptions,
+          [providerId]: [],
+        },
+      }));
+      setUpdating(updateKey, true);
+
+      try {
+        const result = await commands.changePostProcessApiFormatSetting(
+          providerId,
+          apiFormat,
+        );
+        if (result.status === "error") {
+          console.error("Failed to update API format:", result.error);
+          return;
+        }
+        await refreshSettings();
+      } catch (error) {
+        console.error("Failed to update post-process API format:", error);
       } finally {
         setUpdating(updateKey, false);
       }

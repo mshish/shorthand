@@ -1,5 +1,47 @@
-use cpal::traits::DeviceTrait;
-use cpal::traits::HostTrait;
+use rodio::cpal::{
+    self,
+    traits::{DeviceTrait, HostTrait},
+};
+
+/// An output device for feedback sounds. Microphones are listed by
+/// `handy_recorder::list_input_devices`.
+pub struct OutputDeviceInfo {
+    pub index: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// The name feedback sounds match `selected_output_device` against.
+pub fn output_device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+pub fn list_output_devices() -> Result<Vec<OutputDeviceInfo>, Box<dyn std::error::Error>> {
+    let host = crate::audio_toolkit::get_cpal_host();
+    let default_name = host
+        .default_output_device()
+        .and_then(|d| output_device_name(&d));
+
+    let mut out = Vec::<OutputDeviceInfo>::new();
+
+    for (index, device) in host.output_devices()?.enumerate() {
+        let name = output_device_name(&device).unwrap_or_else(|| "Unknown".into());
+
+        let is_default = Some(name.clone()) == default_name;
+
+        out.push(OutputDeviceInfo {
+            index: index.to_string(),
+            name,
+            is_default,
+        });
+    }
+
+    Ok(out)
+}
+
+// ---- Shorthand: system-audio (loopback) devices --------------------------- //
+// Microphones are handy-recorder's. These are the render endpoints (or, on
+// Linux, monitor sources) the fork's system-audio lane opens through cpal.
 
 /// The device name CPAL's `Display` impl writes, without its panic.
 ///
@@ -18,19 +60,12 @@ pub fn device_display_name(device: &cpal::Device) -> Option<String> {
         .map(|description| description.name().to_string())
 }
 
-/// The current default endpoint, opened by its id rather than as cpal's
-/// default-device handle. On Windows the default handle activates through
-/// `ActivateAudioInterfaceAsync` and registers a default-device monitor; a
-/// device obtained by id activates with `IMMDevice::Activate` on the calling
-/// thread and registers no monitor. Used to recover when the default handle
-/// stops opening.
-pub fn pinned_default_input() -> Option<cpal::Device> {
-    let host = crate::audio_toolkit::get_cpal_host();
-    let id = host.default_input_device()?.id().ok()?;
-    host.device_by_id(&id)
-}
-
-/// Output counterpart of [`pinned_default_input`], for the system-audio lane.
+/// The current default output endpoint, opened by its id rather than as
+/// cpal's default-device handle. On Windows the default handle activates
+/// through `ActivateAudioInterfaceAsync` and registers a default-device
+/// monitor; a device obtained by id activates with `IMMDevice::Activate` on
+/// the calling thread and registers no monitor. Used to recover the
+/// system-audio lane when the default handle stops opening.
 pub fn pinned_default_output() -> Option<cpal::Device> {
     let host = crate::audio_toolkit::get_cpal_host();
     let id = host.default_output_device()?.id().ok()?;
@@ -45,61 +80,6 @@ pub struct SystemAudioDeviceInfo {
     pub label: String,
     pub is_default: bool,
     pub device: cpal::Device,
-}
-
-pub struct CpalDeviceInfo {
-    pub index: String,
-    pub name: String,
-    pub is_default: bool,
-    pub device: cpal::Device,
-}
-
-pub fn list_input_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
-    let host = crate::audio_toolkit::get_cpal_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device_display_name(&device));
-
-    let mut out = Vec::<CpalDeviceInfo>::new();
-
-    for (index, device) in host.input_devices()?.enumerate() {
-        let name = device_display_name(&device).unwrap_or_else(|| "Unknown".to_string());
-
-        let is_default = Some(name.clone()) == default_name;
-
-        out.push(CpalDeviceInfo {
-            index: index.to_string(),
-            name,
-            is_default,
-            device,
-        });
-    }
-
-    Ok(out)
-}
-
-pub fn list_output_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
-    let host = crate::audio_toolkit::get_cpal_host();
-    let default_name = host
-        .default_output_device()
-        .and_then(|device| device_display_name(&device));
-
-    let mut out = Vec::<CpalDeviceInfo>::new();
-
-    for (index, device) in host.output_devices()?.enumerate() {
-        let name = device_display_name(&device).unwrap_or_else(|| "Unknown".to_string());
-
-        let is_default = Some(name.clone()) == default_name;
-
-        out.push(CpalDeviceInfo {
-            index: index.to_string(),
-            name,
-            is_default,
-            device,
-        });
-    }
-
-    Ok(out)
 }
 
 /// Lists endpoints that can actually be opened for system-audio capture.
@@ -117,13 +97,20 @@ pub fn list_system_audio_devices() -> Result<Vec<SystemAudioDeviceInfo>, Box<dyn
     {
         // Keep Windows's stored output-device names compatible. macOS uses the
         // same display rows until its ProcessTap-specific selector lands.
-        return Ok(list_output_devices()?
-            .into_iter()
-            .map(|device| SystemAudioDeviceInfo {
-                id: device.name.clone(),
-                label: device.name,
-                is_default: device.is_default,
-                device: device.device,
+        let host = crate::audio_toolkit::get_cpal_host();
+        let default_name = host
+            .default_output_device()
+            .and_then(|device| device_display_name(&device));
+        return Ok(host
+            .output_devices()?
+            .map(|device| {
+                let name = device_display_name(&device).unwrap_or_else(|| "Unknown".to_string());
+                SystemAudioDeviceInfo {
+                    id: name.clone(),
+                    is_default: Some(&name) == default_name.as_ref(),
+                    label: name,
+                    device,
+                }
             })
             .collect());
     }

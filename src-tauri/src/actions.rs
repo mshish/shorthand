@@ -1,11 +1,12 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
+use crate::audio_toolkit::VadPolicy;
 use crate::follow_stream::{Speaker, StartFailureCode};
-use crate::managers::audio::AudioRecordingManager;
+use crate::managers::audio::{recording_error_type, AudioRecordingManager};
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
+use crate::managers::transcription::policy::{live_decode, LiveDecode, ModelTraits};
 use crate::managers::transcription::{
     cancel_active_streams, has_dual_speaker_output, transcription_managers, ActiveStreamManagers,
     StreamTranscriptMerger, StreamWorkKind, TranscriptionManager,
@@ -35,18 +36,15 @@ struct RecordingErrorEvent {
     detail: Option<String>,
 }
 
-/// Classifies the concrete errors `try_start_recording` can return without
-/// making consumers match their platform-specific messages. The two typed
-/// distinctions are the same ones the existing UI already recognizes; every
-/// other recorder/VAD/device-open failure remains one honest catch-all until
-/// the audio layer exposes a stronger error type.
-fn start_failure_code(error: &str) -> StartFailureCode {
-    if is_microphone_access_denied(error) {
-        StartFailureCode::MicrophonePermissionDenied
-    } else if is_no_input_device_error(error) {
-        StartFailureCode::NoInputDevice
-    } else {
-        StartFailureCode::AudioCaptureFailed
+/// Classifies the errors `try_start_recording` can return for
+/// `--follow-stream`, from the recorder's own error kind. The two typed
+/// distinctions are the same ones the UI recognizes; every other
+/// recorder/VAD/device-open failure is one honest catch-all.
+fn start_failure_code(error: &anyhow::Error) -> StartFailureCode {
+    match recording_error_type(error) {
+        "microphone_permission_denied" => StartFailureCode::MicrophonePermissionDenied,
+        "no_input_device" => StartFailureCode::NoInputDevice,
+        _ => StartFailureCode::AudioCaptureFailed,
     }
 }
 
@@ -601,8 +599,21 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        if model_supports_streaming {
-            let managers = transcription_managers(app);
+        // Before the model loads, whether it keeps its accuracy on long audio
+        // is unknown, so assume not: the worker decides again with the loaded
+        // model, and a wrong guess costs only an idle worker.
+        let expected_model = ModelTraits {
+            streaming: model_supports_streaming,
+            long_form: false,
+        };
+        let live = live_decode(expected_model, settings.long_form_chunking) != LiveDecode::None;
+        let managers = if live {
+            transcription_managers(app)
+        } else {
+            Vec::new()
+        };
+        crate::overlay::set_dual_lane_overlay(managers.len() > 1);
+        if live {
             if let Some(merger) = app.try_state::<StreamTranscriptMerger>() {
                 merger.begin_session(managers.len() > 1);
             }
@@ -638,7 +649,7 @@ impl ShortcutAction for TranscribeAction {
         );
         debug!("Microphone mode - always_on: {}", is_always_on);
 
-        let mut recording_error: Option<String> = None;
+        let mut recording_error: Option<anyhow::Error> = None;
         // Becomes this call's return value. The coordinator carries whatever
         // ends up here onto `Stage::Recording` (see
         // `CoordinatorState::on_start_result`) and passes it explicitly into
@@ -684,7 +695,7 @@ impl ShortcutAction for TranscribeAction {
         // it must not also be counted as a microphone failure below.
         let model_missing = no_model_error.is_some();
         let start_result = match no_model_error {
-            Some(e) => Err(e),
+            Some(e) => Err(anyhow::anyhow!(e)),
             None => rm.try_start_recording(&binding_id, vad_policy),
         };
         match start_result {
@@ -795,7 +806,7 @@ impl ShortcutAction for TranscribeAction {
                         hub.start_failed(
                             crate::shorthand::mode::active(app).into(),
                             start_failure_code(&e),
-                            &e,
+                            &format!("{e:#}"),
                         );
                     }
                 }
@@ -815,11 +826,7 @@ impl ShortcutAction for TranscribeAction {
             cancel_active_streams(app);
             set_tray_state(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
-                let error_type = match start_failure_code(&err) {
-                    StartFailureCode::MicrophonePermissionDenied => "microphone_permission_denied",
-                    StartFailureCode::NoInputDevice => "no_input_device",
-                    StartFailureCode::AudioCaptureFailed => "unknown",
-                };
+                let error_type = recording_error_type(&err);
                 crate::overlay::show_error_overlay(
                     app,
                     crate::shorthand::overlay_error::for_start_failure(error_type),
@@ -833,7 +840,7 @@ impl ShortcutAction for TranscribeAction {
                     "recording-error",
                     RecordingErrorEvent {
                         error_type: error_type.to_string(),
-                        detail: Some(err),
+                        detail: Some(format!("{err:#}")),
                     },
                 );
             }
@@ -918,6 +925,7 @@ impl ShortcutAction for TranscribeAction {
 
             let stop_recording_time = Instant::now();
             if let Some(recorded_audio) = rm.stop_recording(&binding_id, cancel_generation) {
+                let system_samples = recorded_audio.system.len();
                 let samples = recorded_audio.microphone;
                 debug!(
                     "Recording stopped and samples retrieved in {:?}, mic samples: {}, system samples: {}",
@@ -980,9 +988,10 @@ impl ShortcutAction for TranscribeAction {
                         None
                     };
 
-                    // Transcribe concurrently with WAV save. If a live stream was
-                    // running, finalize it and use its text (all audio was already
-                    // fed to the stream); otherwise batch-transcribe the samples.
+                    // Transcribe concurrently with WAV save: the live decode's
+                    // result when it has one (all audio was already fed to it),
+                    // otherwise a batch run of the samples. A cancel is surfaced
+                    // as an error, so it never starts a batch run.
                     let transcription_time = Instant::now();
                     // Finalize mic first because it owns the paste/batch fallback
                     // path. Then independently finalize the optional loopback
@@ -994,8 +1003,8 @@ impl ShortcutAction for TranscribeAction {
                     // if settings or the managed optional slot change meanwhile.
                     let system_pending = system_manager
                         .as_ref()
-                        .and_then(|manager| manager.begin_finalize_stream());
-                    let mic_stream_result = tm.finalize_stream_detailed();
+                        .and_then(|manager| manager.begin_finalize_stream(system_samples));
+                    let mic_stream_result = tm.finalize_stream_detailed(samples.len());
                     let system_stream_result = match (system_manager, system_pending) {
                         (Some(manager), Some(pending)) => manager.finish_finalize_stream(pending),
                         _ => Ok(None),
@@ -1003,16 +1012,17 @@ impl ShortcutAction for TranscribeAction {
                     let (mic_stream_result, system_stream) =
                         combine_finalize_results(mic_stream_result, system_stream_result);
                     let transcription_result = match mic_stream_result {
-                        // A finalized stream with usable text wins. An empty result
-                        // (no active stream, produced nothing, or a finalize error
-                        // after the engine was returned) falls back to a full batch
-                        // transcription of the same audio. A finalize timeout is
-                        // surfaced instead — the worker may still hold the engine,
-                        // so a batch fallback would contend with it.
+                        // A live result with usable text wins. An empty result
+                        // (no live decode, it produced nothing, or its worker
+                        // failed) falls back to a batch run of the same audio. A
+                        // cancel is surfaced instead, so it never starts a batch
+                        // run.
                         Ok(Some(result)) if !result.filtered.trim().is_empty() => {
                             Ok((result.filtered.clone(), Some(result)))
                         }
-                        Ok(_) => tm.transcribe(samples).map(|text| (text, None)),
+                        // The live decode is already finalized above, so this
+                        // is upstream's batch run of the whole recording.
+                        Ok(_) => tm.transcribe_recording(samples).map(|text| (text, None)),
                         Err(err) => Err(err),
                     }
                     .map(|(mic_text, mic_stream)| {
@@ -1448,17 +1458,25 @@ mod tests {
     }
 
     #[test]
-    fn recording_start_failures_map_existing_error_classifiers_to_wire_codes() {
+    fn recording_start_failures_without_a_microphone_kind_are_capture_failures() {
+        // A recorder error the wire has no code for: the request is rejected
+        // before any device opens. Permission and missing-device kinds map
+        // through `recording_error_type`, which is tested beside it.
+        let config = handy_recorder::RecorderConfig {
+            sample_rate: Some(0),
+            ..handy_recorder::RecorderConfig::speech()
+        };
+        let recorder_error =
+            match handy_recorder::Recorder::<handy_recorder::CollectingSink>::open(config) {
+                Err(error) => anyhow::Error::new(error).context("Failed to start recorder"),
+                Ok(_) => panic!("a 0 Hz output rate should be rejected"),
+            };
         assert_eq!(
-            start_failure_code("permission denied"),
-            StartFailureCode::MicrophonePermissionDenied
+            start_failure_code(&recorder_error),
+            StartFailureCode::AudioCaptureFailed
         );
         assert_eq!(
-            start_failure_code("No input device found"),
-            StartFailureCode::NoInputDevice
-        );
-        assert_eq!(
-            start_failure_code("Failed to start recorder: worker unavailable"),
+            start_failure_code(&anyhow::anyhow!("No model can transcribe the recording")),
             StartFailureCode::AudioCaptureFailed
         );
     }

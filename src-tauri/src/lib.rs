@@ -9,6 +9,7 @@ mod chinese_script;
 pub mod cli;
 mod clipboard;
 mod commands;
+pub mod engine_supervisor;
 pub mod follow_stream;
 mod helpers;
 mod input;
@@ -272,12 +273,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // stale snapshot here would silently revert it by writing back the
     // pre-fallback value alongside the install id.
     shorthand::telemetry::apply_stored(app_handle);
-    if let Ok(dir) = app_handle.path().app_data_dir() {
-        if let Some(code) = shorthand::native_marker::take_previous(&dir) {
-            log::error!("The previous run ended inside a native call ({code})");
-            shorthand::telemetry::report_error("native_crash", Some(&code));
-        }
-    }
     // Meetings and Dictation each own a system-audio preference over one
     // shared lane. Construct it when either wants it, so the active mode can
     // select it at hotkey time; model loading remains lazy inside
@@ -318,13 +313,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     if let Err(err) = history_manager.cleanup_old_entries() {
         log::error!("Failed to run startup history cleanup: {}", err);
     }
-
-    // Initialize the transcribe-cpp native backend (logging + backend module
-    // registration) once, before any whisper model is loaded.
-    managers::transcription::init_transcribe_backend();
-
-    // Apply accelerator preferences before any model loads
-    managers::transcription::apply_accelerator_settings(app_handle);
 
     // Add managers to Tauri's managed state
     app_handle.manage(recording_manager.clone());
@@ -479,10 +467,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                     return;
                 }
                 for manager in managers {
-                    if let Err(e) = manager.unload_model() {
-                        log::error!("Failed to unload model via tray: {}", e);
-                        return;
-                    }
+                    manager.request_unload();
                 }
                 log::info!("Model unloaded via tray.");
             }
@@ -595,7 +580,14 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     // --list-devices: print registered compute devices (with indices) and exit.
     // Useful on multi-GPU machines to discover the index for --device-index.
     if args.list_devices {
-        let devices = crate::managers::transcription::describe_compute_devices();
+        let tm = app.state::<Arc<TranscriptionManager>>();
+        let devices = match crate::managers::transcription::describe_compute_devices(&tm) {
+            Ok(devices) => devices,
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return 1;
+            }
+        };
         if devices.is_empty() {
             println!("No transcribe-cpp compute devices registered.");
         } else {
@@ -840,6 +832,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_post_process_enabled_setting,
             shortcut::change_experimental_enabled_setting,
             shortcut::change_post_process_base_url_setting,
+            shortcut::change_post_process_api_format_setting,
             shortcut::change_post_process_api_key_setting,
             commands::get_post_process_api_key_status,
             shortcut::change_post_process_model_setting,
@@ -856,6 +849,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_append_trailing_space_setting,
             shortcut::change_lazy_stream_close_setting,
             shortcut::change_vad_enabled_setting,
+            shortcut::change_long_form_chunking_setting,
             shortcut::change_vad_backend_setting,
             shortcut::change_filler_word_removal_enabled_setting,
             shortcut::change_chinese_script_setting,
@@ -872,7 +866,6 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_dictation_settings,
             shortcut::change_assisted_notes_settings,
             shortcut::change_transcribe_accelerator_setting,
-            shortcut::change_ort_accelerator_setting,
             shortcut::change_transcribe_gpu_device,
             shortcut::get_available_accelerators,
             shortcut::handy_keys::start_handy_keys_recording,
@@ -903,6 +896,8 @@ pub fn run(cli_args: CliArgs) {
             commands::models::get_model_info,
             commands::models::download_model,
             commands::models::delete_model,
+            commands::models::get_retired_models,
+            commands::models::delete_retired_model,
             commands::models::cancel_download,
             commands::models::set_active_model,
             commands::models::get_current_model,
@@ -1134,21 +1129,18 @@ pub fn run(cli_args: CliArgs) {
                     )
                     .expect("Failed to initialize transcription manager"),
                 );
+                managers::transcription::report_compute_devices(&transcription_manager);
                 app_handle.manage(model_manager);
                 app_handle.manage(StreamTranscriptMerger::default());
                 app_handle.manage(ActiveStreamManagers::default());
                 app_handle.manage(transcription_manager);
-                managers::transcription::init_transcribe_backend();
-                managers::transcription::report_compute_devices();
-                managers::transcription::apply_accelerator_settings(&app_handle);
 
                 let handle = app_handle.clone();
                 let args = cli_args.clone();
                 std::thread::spawn(move || {
                     let code = run_headless_guarded(|| run_headless_transcription(&handle, &args));
-                    // Drop the loaded engine before teardown: ggml-metal's global
-                    // device free asserts (SIGABRT) if a model's Metal resources
-                    // are still alive at C++ static-destructor time.
+                    // Drop the loaded engine before exit so each lane's
+                    // transcription worker is told to shut down cleanly.
                     for tm in transcription_managers(&handle) {
                         let _ = tm.unload_model();
                     }
@@ -1245,10 +1237,14 @@ pub fn run(cli_args: CliArgs) {
             // stays off the startup path. get_available_accelerators then enumerates
             // ORT execution providers and transcribe-cpp compute devices; without this
             // the cost is paid synchronously when the user first opens Advanced
-            // settings, freezing the UI. Result is cached in a OnceLock.
-            std::thread::spawn(|| {
-                crate::managers::transcription::report_compute_devices();
-                let _ = crate::managers::transcription::get_available_accelerators();
+            // settings, freezing the UI. The device list is kept by the
+            // transcription engine and refreshed by every worker it starts that may
+            // use the GPU (CPU-only workers can't see it).
+            let devices_app_handle = app_handle.clone();
+            std::thread::spawn(move || {
+                let tm = devices_app_handle.state::<Arc<TranscriptionManager>>();
+                crate::managers::transcription::report_compute_devices(&tm);
+                let _ = crate::managers::transcription::get_available_accelerators(&tm);
             });
 
             // Hide tray icon if --no-tray was passed
@@ -1309,6 +1305,8 @@ pub fn run(cli_args: CliArgs) {
     #[cfg(target_os = "macos")]
     apply_startup_activation_policy(&mut app, headless_mode);
 
+    // `app` is only used by the macOS arm.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     app.run(|app, event| match &event {
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
@@ -1327,7 +1325,6 @@ pub fn run(cli_args: CliArgs) {
             }
             show_main_window(app);
         }
-        // Teardown transcribe.cpp before exit
         tauri::RunEvent::Exit => {
             shorthand::telemetry::on_exit();
             // Clean shutdown: stop accepting connections and remove the
@@ -1349,13 +1346,14 @@ pub fn run(cli_args: CliArgs) {
                 // tasks, so a follower may observe EOF instead of this cancel.
                 hub.cancel_active();
             }
-            // Before the unloads, and before this handler returns: Tauri
-            // frees the settings store as soon as it does, and a watcher
-            // tick after that panics (see `stop_idle_watchers`).
+            // Before this handler returns: Tauri frees the settings store as
+            // soon as it does, and a watcher tick after that panics (see
+            // `stop_idle_watchers`).
             managers::transcription::stop_idle_watchers(app);
-            for tm in transcription_managers(app) {
-                let _ = tm.unload_model();
-            }
+            // No transcription teardown: transcribe.cpp runs only in the
+            // worker processes, which exit by themselves as soon as this
+            // process's end of their stdin closes, even if hung. Waiting on
+            // an unload here could block quitting behind a hung model load.
         }
         _ => {}
     });

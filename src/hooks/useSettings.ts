@@ -6,6 +6,7 @@ import type {
   SystemAudioAvailability,
   SystemAudioDevice,
   CredentialStatus,
+  PostProcessApiFormat,
 } from "@/bindings";
 
 interface UseSettingsReturn {
@@ -48,6 +49,10 @@ interface UseSettingsReturn {
   updatePostProcessBaseUrl: (
     providerId: string,
     baseUrl: string,
+  ) => Promise<void>;
+  updatePostProcessApiFormat: (
+    providerId: string,
+    apiFormat: PostProcessApiFormat,
   ) => Promise<void>;
   updatePostProcessApiKey: (
     providerId: string,
@@ -93,6 +98,7 @@ export const useSettings = (): UseSettingsReturn => {
     getSetting: store.getSetting,
     setPostProcessProvider: store.setPostProcessProvider,
     updatePostProcessBaseUrl: store.updatePostProcessBaseUrl,
+    updatePostProcessApiFormat: store.updatePostProcessApiFormat,
     updatePostProcessApiKey: store.updatePostProcessApiKey,
     updatePostProcessModel: store.updatePostProcessModel,
     fetchPostProcessModels: store.fetchPostProcessModels,

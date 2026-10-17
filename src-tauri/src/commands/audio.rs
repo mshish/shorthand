@@ -1,7 +1,5 @@
 use crate::audio_feedback;
-use crate::audio_toolkit::audio::{
-    list_input_devices, list_output_devices, list_system_audio_devices, AudioRecorder,
-};
+use crate::audio_toolkit::audio::{list_output_devices, list_system_audio_devices};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::{
@@ -179,10 +177,10 @@ fn macos_system_audio_device_for_permission_prompt(
     use cpal::traits::HostTrait;
 
     if let Some(device_name) = device_name {
-        match list_output_devices() {
+        match list_system_audio_devices() {
             Ok(devices) => devices
                 .into_iter()
-                .find(|candidate| candidate.name == device_name)
+                .find(|candidate| candidate.id == device_name)
                 .map(|candidate| candidate.device),
             Err(error) => {
                 warn!("Failed to enumerate macOS system-audio devices: {error}");
@@ -602,8 +600,8 @@ pub fn get_microphone_mode(app: AppHandle) -> Result<bool, String> {
 pub async fn get_available_microphones() -> Result<Vec<AudioDevice>, String> {
     // cpal device enumeration can stall — run it off the webview/main run loop.
     tokio::task::spawn_blocking(|| {
-        let devices =
-            list_input_devices().map_err(|e| format!("Failed to list audio devices: {}", e))?;
+        let devices = handy_recorder::list_input_devices()
+            .map_err(|e| format!("Failed to list audio devices: {}", e))?;
 
         let mut result = vec![AudioDevice {
             index: "default".to_string(),
@@ -611,11 +609,17 @@ pub async fn get_available_microphones() -> Result<Vec<AudioDevice>, String> {
             is_default: true,
         }];
 
-        result.extend(devices.into_iter().map(|d| AudioDevice {
-            index: d.index,
-            name: d.name,
-            is_default: false, // The explicit default is handled separately
-        }));
+        // PulseAudio monitor sources record a speaker's output, not a microphone.
+        result.extend(
+            devices
+                .into_iter()
+                .filter(|d| !d.is_monitor)
+                .map(|d| AudioDevice {
+                    index: d.id,
+                    name: d.name,
+                    is_default: false, // The explicit default is handled separately
+                }),
+        );
 
         Ok::<_, String>(result)
     })
@@ -747,26 +751,19 @@ pub fn is_recording(app: AppHandle) -> bool {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_microphone_channels(device_name: String) -> Result<u16, String> {
-    // cpal device enumeration and config queries can stall, so keep them off
-    // the webview/main run loop.
+    // Device enumeration can stall, so keep it off the webview/main run loop.
     tokio::task::spawn_blocking(move || {
-        use cpal::traits::HostTrait;
-
+        let devices = handy_recorder::list_input_devices()
+            .map_err(|e| format!("Failed to list audio devices: {e}"))?;
         let device = if device_name.eq_ignore_ascii_case("default") {
-            crate::audio_toolkit::get_cpal_host().default_input_device()
+            devices.into_iter().find(|device| device.is_default)
         } else {
-            list_input_devices()
-                .map_err(|e| format!("Failed to list audio devices: {e}"))?
+            devices
                 .into_iter()
                 .find(|device| device.name == device_name)
-                .map(|device| device.device)
         };
-
-        match device {
-            Some(device) => AudioRecorder::preferred_input_channel_count(&device)
-                .map_err(|e| format!("Failed to get microphone config: {e}")),
-            None => Ok(1),
-        }
+        // `channels` is unknown only on ALSA, where reading it opens the device.
+        Ok(device.and_then(|device| device.channels).unwrap_or(1))
     })
     .await
     .map_err(|e| format!("audio task join failed: {e}"))?
