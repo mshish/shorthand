@@ -107,7 +107,16 @@ impl RequestSocketServer {
                 Err(error) if attempt < MAX_ATTEMPTS && is_retryable_listener_error(&error) => {
                     tokio::time::sleep(RETRY_DELAY).await;
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    log::error!("Failed to create request-socket listener: {error}");
+                    crate::shorthand::telemetry::report_error(
+                        "request_socket_listen",
+                        // The io error kind only: the message can name the
+                        // per-user socket path.
+                        Some(&format!("{:?}", error.kind())),
+                    );
+                    return Err(error);
+                }
             }
         }
 
@@ -133,19 +142,7 @@ impl RequestSocketServer {
             let _runtime_guard = runtime.inner().enter();
             crate::follow_stream::create_listener(name)
         };
-        let listener = match listener_result {
-            Ok(listener) => listener,
-            Err(error) => {
-                log::error!("Failed to create request-socket listener: {error}");
-                crate::shorthand::telemetry::report_error(
-                    "request_socket_listen",
-                    // The io error kind only: the message can name the
-                    // per-user socket path.
-                    Some(&format!("{:?}", error.kind())),
-                );
-                return Err(error);
-            }
-        };
+        let listener = listener_result?;
 
         let shared = Arc::new(ServerShared::new(store, app_version));
         let connections = Arc::new(Mutex::new(Vec::new()));

@@ -63,7 +63,16 @@ impl FollowStreamServer {
                 Err(error) if attempt < MAX_ATTEMPTS && is_retryable_listener_error(&error) => {
                     tokio::time::sleep(RETRY_DELAY).await;
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    log::error!("Failed to create follow-stream listener: {error}");
+                    crate::shorthand::telemetry::report_error(
+                        "follow_stream_listen",
+                        // The io error kind only: the message can name the
+                        // per-user socket path.
+                        Some(&format!("{:?}", error.kind())),
+                    );
+                    return Err(error);
+                }
             }
         }
 
@@ -93,13 +102,6 @@ impl FollowStreamServer {
             Ok(listener) => listener,
             Err(error) => {
                 hub.set_enabled(false);
-                log::error!("Failed to create follow-stream listener: {error}");
-                crate::shorthand::telemetry::report_error(
-                    "follow_stream_listen",
-                    // The io error kind only: the message can name the
-                    // per-user socket path.
-                    Some(&format!("{:?}", error.kind())),
-                );
                 return Err(error);
             }
         };
@@ -307,11 +309,38 @@ pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
 
 #[cfg(unix)]
 pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
+    match bind_unix_listener(name.clone(), false) {
+        // Outside Linux's abstract namespace the socket is a file, and an
+        // unclean exit (crash, force quit, killed by an update) leaves it
+        // behind. Binding over it fails AddrInUse on every later launch, so
+        // the retry loop alone never recovers. Replace it only once a refused
+        // connect proves nobody is listening; a live listener is left alone.
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse && socket_is_stale(&name) => {
+            log::info!("Replacing a stale socket file left by an unclean exit");
+            bind_unix_listener(name, true)
+        }
+        result => result,
+    }
+}
+
+#[cfg(unix)]
+fn socket_is_stale(name: &Name<'static>) -> bool {
+    use interprocess::local_socket::{traits::Stream as _, Stream as SyncStream};
+
+    matches!(
+        SyncStream::connect(name.clone()),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused
+    )
+}
+
+#[cfg(unix)]
+fn bind_unix_listener(name: Name<'static>, overwrite: bool) -> io::Result<Listener> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
 
     match ListenerOptions::new()
         .name(name.clone())
         .mode(0o600)
+        .try_overwrite(overwrite)
         .create_tokio()
     {
         // macOS rejects fchmod() on an unbound socket, which interprocess
@@ -323,7 +352,10 @@ pub(crate) fn create_listener(name: Name<'static>) -> io::Result<Listener> {
             log::debug!(
                 "Socket file mode unsupported on this platform; relying on peer-euid check"
             );
-            ListenerOptions::new().name(name).create_tokio()
+            ListenerOptions::new()
+                .name(name)
+                .try_overwrite(overwrite)
+                .create_tokio()
         }
         result => result,
     }
@@ -625,6 +657,34 @@ mod tests {
         assert!(is_retryable_listener_error(&error));
         assert!(!server.is_running());
         assert!(!hub.is_enabled());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_socket_file_from_an_unclean_exit_is_replaced() {
+        use interprocess::{local_socket::ToFsName, os::unix::local_socket::FilesystemUdSocket};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("follow.sock");
+        // std's listener does not unlink its file on drop, which is exactly
+        // what a crashed process leaves behind.
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        assert!(path.exists());
+
+        let name = path.to_fs_name::<FilesystemUdSocket>().unwrap();
+        let hub = Arc::new(FollowStreamHub::default());
+        let server = FollowStreamServer::default();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            server.start_with_name(name.clone(), "test-version", Arc::clone(&hub)),
+        )
+        .await
+        .expect("listener start hung on a stale socket file")
+        .expect("a stale socket file must not block the listener");
+
+        let mut client = connect(name).await;
+        assert!(read_line(&mut client).await.contains("\"t\":\"hello\""));
+        server.stop();
     }
 
     #[cfg(windows)]
