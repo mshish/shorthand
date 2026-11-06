@@ -34,13 +34,15 @@ import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
  * nesting a group inside a group would put a heading above a heading.
  * `ModelSettingsCard` self-hides when the active model supports neither
  * language selection nor translation; that behaviour is untouched here.
+ *
+ * The catalog comes last: it is the long part, and the settings above it are
+ * what a user changes most, so they should not sit under a screenful of models.
  */
 export const ModelSettings: React.FC = () => {
   const { t } = useTranslation();
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-8">
-      <ModelsSettings />
       <ModelSettingsCard />
       <Sheet title={t("settings.languages.title")}>
         <PreferredLanguages descriptionMode="tooltip" grouped={true} />
@@ -57,6 +59,7 @@ export const ModelSettings: React.FC = () => {
           <LanguageDetection descriptionMode="tooltip" grouped={true} />
         </AdvancedOnly>
       </Sheet>
+      <ModelsSettings />
     </div>
   );
 };
