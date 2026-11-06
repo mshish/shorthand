@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type } from "@tauri-apps/plugin-os";
-import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import { ShortcutInput } from "@/components/settings/ShortcutInput";
 import { ShortcutActivationSetting } from "@/components/settings/ShortcutActivation";
 import { ModeShortcutActivation } from "../ModeShortcutActivation";
@@ -78,9 +77,9 @@ import type {
  *      settings. Neither has a counterpart because meeting mode cannot be
  *      switched off. Each renders as its own tab's first row, so the mode is
  *      discoverable rather than hidden behind its own absence.
- *   2. `AccessibilityPermissions` — an OS permission prompt, not a persisted
- *      setting at all. It renders in the Dictation tab, because that is the
- *      mode that needs the permission.
+ *   2. The macOS Accessibility permission — an OS prompt, not a persisted
+ *      setting at all. Upstream moved it out of Settings into the launch-time
+ *      permissions screen (`ReturningPermissions`), so no tab renders it.
  *   3. `external_script_path` — bound inside `PasteMethod` and revealed only
  *      by the Linux-only "external script" method. It has no dictation
  *      counterpart, so by the rule it is shared; in practice it travels with
@@ -407,7 +406,6 @@ export const ModesSettings: React.FC = () => {
                   descriptionMode="inline"
                   grouped={true}
                 />
-                <AccessibilityPermissions />
                 {/* Tooltip, matching the Meetings tab. Its description runs to
                     six lines; left inline here it became the loudest thing on
                     this tab, which is the defect that was just fixed on the

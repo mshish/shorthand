@@ -1,7 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { ShortcutInput } from "@/components/settings/ShortcutInput";
-import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
 import { useSettings } from "@/hooks/useSettings";
 import { DictationToggleField } from "./dictation/DictationToggleField";
@@ -61,12 +60,6 @@ export const DictationSettings: React.FC = () => {
           />
         )}
       </SettingsGroup>
-
-      {/* Not disabled-when-off like the rows above: AccessibilityPermissions
-          has no disabled prop, only self-hide/show-a-Grant-button states, so
-          gating on dictationEnabled means not rendering it at all rather
-          than rendering it inert. */}
-      {dictationEnabled && <AccessibilityPermissions />}
 
       <SettingsGroup title={t("settings.advanced.groups.output")}>
         <DictationPasteMethod grouped={true} disabled={!dictationEnabled} />
