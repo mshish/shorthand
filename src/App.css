@@ -8,6 +8,8 @@
 /* Fork-only: the highlighter sweep and its one animation. Separate from
    theme.css so that file keeps introducing no selector of its own. */
 @import "./shorthand/brand/marks.css";
+/* Fork-only: publishes --color-mid-gray to Tailwind, which upstream dropped. */
+@import "./shorthand/brand/utilities.css";
 
 /* Register the shared color tokens (src/styles/theme.css) as Tailwind
    utilities */
