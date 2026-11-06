@@ -1,6 +1,7 @@
 import React from "react";
 import type { OSType } from "@/lib/utils/keyboard";
-import TrayIcon from "../icons/TrayIcon";
+import type TrayIcon from "../icons/TrayIcon";
+import { ShorthandMark } from "@/shorthand/brand";
 import "./desktopBar.css";
 
 // Placeholder menu widths per size.
@@ -21,7 +22,7 @@ const Tux = () => (
   </svg>
 );
 
-/** The drawn menu bar (macOS) or taskbar (Windows, Linux) holding Handy's icon. */
+/** The drawn menu bar (macOS) or taskbar (Windows, Linux) holding Shorthand's icon. */
 export const DesktopBar: React.FC<{
   os: OSType;
   size: "demo" | "try";
@@ -35,8 +36,10 @@ export const DesktopBar: React.FC<{
       ref={trayRef}
       className="desktop-tray"
       data-caught={caught || undefined}
+      data-state={state}
     >
-      <TrayIcon state={state} size={ICON_SIZE[size]} />
+      {/* Fork: the Shorthand mark, not Handy's hand. */}
+      <ShorthandMark size={ICON_SIZE[size]} />
     </span>
   );
   const clock = <span className="tabular-nums">9:41</span>;

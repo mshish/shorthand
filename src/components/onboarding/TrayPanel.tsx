@@ -9,7 +9,7 @@ import { usePressAway } from "@/hooks/usePressAway";
 import { languageList } from "@/lib/constants/languages";
 import { CapturedKeys, Keycaps } from "../shared/Keycaps";
 import { Switch } from "../ui/Switch";
-import TrayIcon from "../icons/TrayIcon";
+import { ShorthandMark } from "@/shorthand/brand";
 
 interface TrayPanelProps {
   os: OSType;
@@ -97,7 +97,7 @@ export const TrayPanel: React.FC<TrayPanelProps> = ({
       onMouseDown={(ev) => ev.preventDefault()}
     >
       <div className="try-panel-head">
-        <TrayIcon state="idle" size={17} />
+        <ShorthandMark size={17} />
         <span className="try-panel-name">
           {t("onboarding.done.panel.name")}
         </span>
