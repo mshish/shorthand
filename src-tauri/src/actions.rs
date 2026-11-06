@@ -1301,14 +1301,14 @@ impl ShortcutAction for TranscribeAction {
 
                             // Publish the terminal here, synchronously, before the
                             // hook runs and before this async block returns — not from
-                            // inside the paste closure queued below. `_guard`
+                            // inside the paste thread spawned below. `_guard`
                             // (`FinishGuard`) is what tells the coordinator the pipeline
                             // is free to admit a new capture, and it only drops once
-                            // this async block actually returns. `run_on_main_thread`
-                            // only *queues* the paste closure; when `hub.finish` ran
+                            // this async block actually returns. Spawning the paste
+                            // thread does not wait for it; when `hub.finish` ran
                             // inside it, the guard could drop — and a rapid next
-                            // capture's `hub.begin` could run — before the closure ever
-                            // executed. `begin` would then find this session's
+                            // capture's `hub.begin` could run — before the thread had
+                            // got that far. `begin` would then find this session's
                             // `ActiveSession` still open, treat it as orphaned, and
                             // force-cancel it: the delayed `hub.finish` then found the
                             // session already replaced and silently dropped as stale
@@ -1349,11 +1349,16 @@ impl ShortcutAction for TranscribeAction {
 
                             // The user's hook only changes what gets pasted; history
                             // above and the follow-stream transcript keep the text as
-                            // produced. With no paste method nothing is pasted, so the
-                            // hook would only delay the pipeline.
-                            let final_text = if paste_settings.paste_method
+                            // produced. With no paste method nothing is typed, so the
+                            // hook would only delay the pipeline, unless the text is
+                            // still copied: `clipboard::paste()` runs its
+                            // CopyToClipboard tail even under `PasteMethod::None`, and
+                            // that writes the hook's output.
+                            let nothing_pasted = paste_settings.paste_method
                                 == crate::settings::PasteMethod::None
-                            {
+                                && paste_settings.clipboard_handling
+                                    != crate::settings::ClipboardHandling::CopyToClipboard;
+                            let final_text = if nothing_pasted {
                                 processed.final_text
                             } else {
                                 let Some(hooked) = complete_unless_cancelled(

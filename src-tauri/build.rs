@@ -316,9 +316,10 @@ fn generate_tray_translations() {
     }
 
     // English-only casing preferences (src/shorthand/english-copy.json),
-    // reaching `en` alone — mirrors ENGLISH_COPY in branding.ts. None of
-    // today's entries fall under "tray." or "transcript.", but a future one
-    // should not require touching this generator.
+    // reaching `en` alone — mirrors ENGLISH_COPY in branding.ts. Entries under
+    // "tray." reach the tray strings (the notice titles' sentence case is one
+    // `tray.<name>Title` each, since the tray is built from `tray.*` and not
+    // from the `errors.*` overrides); none fall under "transcript." today.
     let english_copy: serde_json::Map<String, serde_json::Value> = {
         let content = fs::read_to_string(english_copy_path).unwrap();
         serde_json::from_str(&content).unwrap()
