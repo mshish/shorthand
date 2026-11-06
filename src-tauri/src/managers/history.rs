@@ -1,15 +1,17 @@
 use crate::shorthand::mode::{active, Mode};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local, Utc};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use rusqlite::{params, Connection, OptionalExtension};
-use rusqlite_migration::{Migrations, M};
+use rusqlite_migration::{MigrationDefinitionError, Migrations, M};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_specta::Event;
+
+use crate::language_detection::{LanguageDecision, LanguageSource};
 
 /// Database migrations for transcription history.
 /// Each migration is applied in order. The library tracks which migrations
@@ -34,6 +36,15 @@ static MIGRATIONS: &[M] = &[
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_requested BOOLEAN NOT NULL DEFAULT 0;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN source TEXT NOT NULL DEFAULT 'meeting';"),
 ];
+
+/// Nullable columns added outside [`MIGRATIONS`]; see
+/// [`HistoryManager::apply_migrations`].
+const ADDED_COLUMNS: &[&str] = &["source_name", "language", "language_source"];
+
+/// Every column a [`HistoryEntry`] is read from.
+const ENTRY_COLUMNS: &str = "id, file_name, timestamp, saved, title, transcription_text, \
+    post_processed_text, post_process_prompt, post_process_requested, source, source_name, language, \
+    language_source";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
 pub struct PaginatedHistory {
@@ -66,6 +77,13 @@ pub struct HistoryEntry {
     pub post_process_prompt: Option<String>,
     pub post_process_requested: bool,
     pub source: String,
+    /// The name of the file this entry was transcribed from; `None` for a
+    /// dictation.
+    pub source_name: Option<String>,
+    /// The language it was transcribed in, when known.
+    pub language: Option<String>,
+    /// How that language was chosen; `None` before it was recorded.
+    pub language_source: Option<LanguageSource>,
 }
 
 /// Maps the fork's mode cell to the value stored in
@@ -76,6 +94,31 @@ fn source_for_mode(mode: Mode) -> &'static str {
         Mode::Meeting => "meeting",
         Mode::Dictation => "dictation",
         Mode::AssistedNotes => "assisted_notes",
+    }
+}
+
+/// `transcription_history.source` of an entry made from a dropped file. A
+/// file is not a capture, so it has no mode to take the value from. Rows
+/// written before this value existed keep their mode's, and a client that
+/// doesn't know it shows the column's default, Meeting.
+const FILE_SOURCE: &str = "file";
+
+/// The entry for a file whose audio is already at `file_name`.
+fn file_entry(file_name: String, source_name: String, timestamp: i64) -> HistoryEntry {
+    HistoryEntry {
+        id: 0,
+        file_name,
+        timestamp,
+        saved: false,
+        title: String::new(),
+        transcription_text: String::new(),
+        post_processed_text: None,
+        post_process_prompt: None,
+        post_process_requested: false,
+        source: FILE_SOURCE.to_string(),
+        source_name: Some(source_name),
+        language: None,
+        language_source: None,
     }
 }
 
@@ -98,6 +141,14 @@ fn recording_file_to_delete(dir: &Path, file_name: &str) -> Option<PathBuf> {
         None
     } else {
         Some(dir.join(file_name))
+    }
+}
+
+/// A transcription's language as its two columns.
+fn split_language(language: Option<LanguageDecision>) -> (Option<String>, Option<LanguageSource>) {
+    match language {
+        Some(decision) => (decision.language, Some(decision.source)),
+        None => (None, None),
     }
 }
 
@@ -135,20 +186,18 @@ impl HistoryManager {
         // tauri-plugin-sql used _sqlx_migrations table, rusqlite_migration uses user_version pragma
         self.migrate_from_tauri_plugin_sql(&conn)?;
 
-        // Create migrations object and run to latest version
-        let migrations = Migrations::new(MIGRATIONS.to_vec());
-
         // Validate migrations in debug builds
         #[cfg(debug_assertions)]
-        migrations.validate().expect("Invalid migrations");
+        Migrations::new(MIGRATIONS.to_vec())
+            .validate()
+            .expect("Invalid migrations");
 
         // Get current version before migration
         let version_before: i32 =
             conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         debug!("Database version before migration: {}", version_before);
 
-        // Apply any pending migrations
-        migrations.to_latest(&mut conn)?;
+        Self::apply_migrations(&mut conn)?;
 
         // Get version after migration
         let version_after: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -163,6 +212,41 @@ impl HistoryManager {
         }
 
         Ok(())
+    }
+
+    /// Bring the schema up to date. A newer Handy's database opens as is:
+    /// migrations only add columns, and every query names its columns.
+    fn apply_migrations(conn: &mut Connection) -> Result<()> {
+        match Migrations::new(MIGRATIONS.to_vec()).to_latest(conn) {
+            Err(rusqlite_migration::Error::MigrationDefinition(
+                MigrationDefinitionError::DatabaseTooFarAhead,
+            )) => {
+                warn!("history.db is from a newer version of Handy; opening it without migrating")
+            }
+            other => other?,
+        }
+
+        // Not a migration: a higher user_version makes released builds refuse
+        // the database, while an extra nullable column is invisible to them.
+        for column in ADDED_COLUMNS {
+            if !Self::has_column(conn, column)? {
+                conn.execute(
+                    &format!("ALTER TABLE transcription_history ADD COLUMN {column} TEXT"),
+                    [],
+                )?;
+                info!("Added the {column} column to transcription history");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn has_column(conn: &Connection, name: &str) -> Result<bool> {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('transcription_history') WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )?)
     }
 
     /// Migrate from tauri-plugin-sql's migration tracking to rusqlite_migration's.
@@ -238,6 +322,12 @@ impl HistoryManager {
             post_process_prompt: row.get("post_process_prompt")?,
             post_process_requested: row.get("post_process_requested")?,
             source: row.get("source")?,
+            source_name: row.get("source_name")?,
+            language: row.get("language")?,
+            language_source: row
+                .get::<_, Option<String>>("language_source")?
+                .as_deref()
+                .and_then(LanguageSource::parse),
         })
     }
 
@@ -254,13 +344,43 @@ impl HistoryManager {
         post_process_requested: bool,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        language: Option<LanguageDecision>,
     ) -> Result<HistoryEntry> {
-        let timestamp = Utc::now().timestamp();
-        let title = self.format_timestamp_title(timestamp);
-        // Reads the mode of the capture currently in flight rather than
-        // taking a parameter, per the fork's mode-cell design — see
-        // src-tauri/src/shorthand/mode.rs.
-        let source = source_for_mode(active(&self.app_handle));
+        let (language, language_source) = split_language(language);
+        let entry = self.insert_entry(HistoryEntry {
+            id: 0,
+            file_name,
+            timestamp: Utc::now().timestamp(),
+            saved: false,
+            title: String::new(),
+            transcription_text,
+            post_processed_text,
+            post_process_prompt,
+            post_process_requested,
+            // Reads the mode of the capture currently in flight rather than
+            // taking a parameter, per the fork's mode-cell design — see
+            // src-tauri/src/shorthand/mode.rs.
+            source: source_for_mode(active(&self.app_handle)).to_string(),
+            source_name: None,
+            language,
+            language_source,
+        })?;
+
+        self.cleanup_old_entries()?;
+
+        Ok(entry)
+    }
+
+    /// Save the entry for a file whose audio is already at `file_name`.
+    /// Retention never removes it (only deleting it does); never
+    /// post-processed.
+    pub fn save_file_entry(&self, file_name: String, source_name: String) -> Result<HistoryEntry> {
+        self.insert_entry(file_entry(file_name, source_name, Utc::now().timestamp()))
+    }
+
+    /// Insert `entry`, filling in its id and title, and announce it.
+    fn insert_entry(&self, mut entry: HistoryEntry) -> Result<HistoryEntry> {
+        entry.title = self.format_timestamp_title(entry.timestamp);
 
         let conn = self.get_connection()?;
         conn.execute(
@@ -273,37 +393,29 @@ impl HistoryManager {
                 post_processed_text,
                 post_process_prompt,
                 post_process_requested,
-                source
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                &file_name,
-                timestamp,
-                false,
-                &title,
-                &transcription_text,
-                &post_processed_text,
-                &post_process_prompt,
-                post_process_requested,
                 source,
+                source_name,
+                language,
+                language_source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                &entry.file_name,
+                entry.timestamp,
+                entry.saved,
+                &entry.title,
+                &entry.transcription_text,
+                &entry.post_processed_text,
+                &entry.post_process_prompt,
+                entry.post_process_requested,
+                &entry.source,
+                &entry.source_name,
+                &entry.language,
+                entry.language_source.map(LanguageSource::as_str),
             ],
         )?;
-
-        let entry = HistoryEntry {
-            id: conn.last_insert_rowid(),
-            file_name,
-            timestamp,
-            saved: false,
-            title,
-            transcription_text,
-            post_processed_text,
-            post_process_prompt,
-            post_process_requested,
-            source: source.to_string(),
-        };
+        entry.id = conn.last_insert_rowid();
 
         debug!("Saved history entry with id {}", entry.id);
-
-        self.cleanup_old_entries()?;
 
         // Emit typed event for real-time frontend updates
         if let Err(e) = (HistoryUpdatePayload::Added {
@@ -324,18 +436,24 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        language: Option<LanguageDecision>,
     ) -> Result<HistoryEntry> {
+        let (language, language_source) = split_language(language);
         let conn = self.get_connection()?;
         let updated = conn.execute(
             "UPDATE transcription_history
              SET transcription_text = ?1,
                  post_processed_text = ?2,
-                 post_process_prompt = ?3
-             WHERE id = ?4",
+                 post_process_prompt = ?3,
+                 language = ?4,
+                 language_source = ?5
+             WHERE id = ?6",
             params![
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
+                language,
+                language_source.map(LanguageSource::as_str),
                 id
             ],
         )?;
@@ -344,13 +462,11 @@ impl HistoryManager {
             return Err(anyhow!("History entry {} not found", id));
         }
 
-        let entry = conn
-            .query_row(
-                "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
-                 FROM transcription_history WHERE id = ?1",
-                params![id],
-                Self::map_history_entry,
-            )?;
+        let entry = conn.query_row(
+            &format!("SELECT {ENTRY_COLUMNS} FROM transcription_history WHERE id = ?1"),
+            params![id],
+            Self::map_history_entry,
+        )?;
 
         debug!("Updated transcription for history entry {}", id);
 
@@ -419,9 +535,10 @@ impl HistoryManager {
     fn cleanup_by_count(&self, limit: usize) -> Result<()> {
         let conn = self.get_connection()?;
 
-        // Get all entries that are not saved, ordered by timestamp desc
+        // Unsaved dictations, newest first. Transcribed files are only ever
+        // deleted explicitly, and don't count toward the limit.
         let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 ORDER BY timestamp DESC"
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND source_name IS NULL ORDER BY timestamp DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -460,9 +577,10 @@ impl HistoryManager {
             _ => unreachable!("Should not reach here"),
         };
 
-        // Get all unsaved entries older than the cutoff timestamp
+        // Unsaved dictations older than the cutoff; transcribed files are only
+        // ever deleted explicitly.
         let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND timestamp < ?1",
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND source_name IS NULL AND timestamp < ?1",
         )?;
 
         let rows = stmt.query_map(params![cutoff_timestamp], |row| {
@@ -497,13 +615,13 @@ impl HistoryManager {
         let mut entries: Vec<HistoryEntry> = match (cursor, limit) {
             (Some(cursor_id), Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
                      WHERE id < ?1
                      ORDER BY id DESC
-                     LIMIT ?2",
-                )?;
+                     LIMIT ?2"
+                ))?;
                 let result = stmt
                     .query_map(params![cursor_id, fetch_count], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -511,23 +629,23 @@ impl HistoryManager {
             }
             (None, Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
                      ORDER BY id DESC
-                     LIMIT ?1",
-                )?;
+                     LIMIT ?1"
+                ))?;
                 let result = stmt
                     .query_map(params![fetch_count], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result
             }
             (_, None) => {
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested, source
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
-                     ORDER BY id DESC",
-                )?;
+                     ORDER BY id DESC"
+                ))?;
                 let result = stmt
                     .query_map([], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -545,51 +663,32 @@ impl HistoryManager {
 
     #[cfg(test)]
     fn get_latest_entry_with_conn(conn: &Connection) -> Result<Option<HistoryEntry>> {
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested,
-                source
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ENTRY_COLUMNS}
              FROM transcription_history
              ORDER BY timestamp DESC
-             LIMIT 1",
-        )?;
+             LIMIT 1"
+        ))?;
 
         let entry = stmt.query_row([], Self::map_history_entry).optional()?;
         Ok(entry)
     }
 
-    /// Get the latest entry with non-empty transcription text.
+    /// Get the latest dictation with non-empty transcription text. Files are
+    /// left out: a long file's transcript is never the "last transcript".
     pub fn get_latest_completed_entry(&self) -> Result<Option<HistoryEntry>> {
         let conn = self.get_connection()?;
         Self::get_latest_completed_entry_with_conn(&conn)
     }
 
     fn get_latest_completed_entry_with_conn(conn: &Connection) -> Result<Option<HistoryEntry>> {
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested,
-                source
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ENTRY_COLUMNS}
              FROM transcription_history
-             WHERE transcription_text != ''
+             WHERE transcription_text != '' AND source_name IS NULL
              ORDER BY timestamp DESC
-             LIMIT 1",
-        )?;
+             LIMIT 1"
+        ))?;
 
         let entry = stmt.query_row([], Self::map_history_entry).optional()?;
         Ok(entry)
@@ -628,21 +727,11 @@ impl HistoryManager {
 
     pub async fn get_entry_by_id(&self, id: i64) -> Result<Option<HistoryEntry>> {
         let conn = self.get_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested,
-                source
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ENTRY_COLUMNS}
              FROM transcription_history
-             WHERE id = ?1",
-        )?;
+             WHERE id = ?1"
+        ))?;
 
         let entry = stmt.query_row([id], Self::map_history_entry).optional()?;
 
@@ -712,7 +801,10 @@ mod tests {
                 post_processed_text TEXT,
                 post_process_prompt TEXT,
                 post_process_requested BOOLEAN NOT NULL DEFAULT 0,
-                source TEXT NOT NULL DEFAULT 'meeting'
+                source TEXT NOT NULL DEFAULT 'meeting',
+                source_name TEXT,
+                language TEXT,
+                language_source TEXT
             );",
         )
         .expect("create transcription_history table");
@@ -774,6 +866,65 @@ mod tests {
             ],
         )
         .expect("insert history entry with source");
+    }
+
+    fn user_version(conn: &Connection) -> i32 {
+        conn.pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read user_version")
+    }
+
+    #[test]
+    fn migrating_adds_columns_without_raising_the_version() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        HistoryManager::apply_migrations(&mut conn).expect("migrate");
+        for column in ADDED_COLUMNS {
+            assert!(HistoryManager::has_column(&conn, column).expect("read table info"));
+        }
+        assert_eq!(user_version(&conn), MIGRATIONS.len() as i32);
+
+        // Opening it again changes nothing.
+        HistoryManager::apply_migrations(&mut conn).expect("migrate again");
+        assert_eq!(user_version(&conn), MIGRATIONS.len() as i32);
+    }
+
+    #[test]
+    fn a_database_from_a_newer_handy_still_opens() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        HistoryManager::apply_migrations(&mut conn).expect("migrate");
+        conn.execute(
+            "ALTER TABLE transcription_history ADD COLUMN from_the_future TEXT",
+            [],
+        )
+        .expect("add newer column");
+        conn.pragma_update(None, "user_version", MIGRATIONS.len() as i32 + 3)
+            .expect("set newer version");
+
+        HistoryManager::apply_migrations(&mut conn).expect("open newer database");
+        insert_entry(&conn, 100, "still works", None);
+        let entry = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+        assert_eq!(entry.transcription_text, "still works");
+    }
+
+    #[test]
+    fn reads_the_language_and_ignores_an_unknown_source() {
+        let conn = setup_conn();
+        let latest = |source: &str| {
+            conn.execute(
+                "INSERT INTO transcription_history (file_name, timestamp, title, transcription_text, language, language_source)
+                 VALUES ('a.wav', (SELECT COUNT(*) FROM transcription_history), 'a', 'hallo', 'de', ?1)",
+                [source],
+            )
+            .expect("insert entry");
+            HistoryManager::get_latest_entry_with_conn(&conn)
+                .unwrap()
+                .unwrap()
+        };
+        let entry = latest("detected");
+        assert_eq!(entry.language.as_deref(), Some("de"));
+        assert_eq!(entry.language_source, Some(LanguageSource::Detected));
+        assert_eq!(latest("from_the_future").language_source, None);
     }
 
     #[test]
@@ -838,6 +989,20 @@ mod tests {
     }
 
     #[test]
+    fn a_file_entry_is_sourced_as_a_file_whatever_mode_was_last_active() {
+        let entry = file_entry("handy-file-1.wav".into(), "talk.mp3".into(), 5);
+        assert_eq!(entry.source, "file");
+        assert_eq!(entry.source_name.as_deref(), Some("talk.mp3"));
+
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 5, "text", &entry.source);
+        let stored = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+        assert_eq!(stored.source, "file");
+    }
+
+    #[test]
     fn source_round_trips_through_the_source_column() {
         let conn = setup_conn();
         insert_entry(&conn, 100, "meeting text", None);
@@ -880,5 +1045,23 @@ mod tests {
             )
             .expect("read source column");
         assert_eq!(source, "meeting");
+    }
+
+    #[test]
+    fn get_latest_completed_entry_skips_files() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "dictated", None);
+        conn.execute(
+            "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, source_name)
+             VALUES ('handy-file-1.wav', 200, 1, 'file', 'from a file', 'talk.mp3')",
+            [],
+        )
+        .expect("insert file entry");
+
+        let entry = HistoryManager::get_latest_completed_entry_with_conn(&conn)
+            .expect("fetch latest completed entry")
+            .expect("completed entry exists");
+
+        assert_eq!(entry.transcription_text, "dictated");
     }
 }

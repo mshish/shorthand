@@ -1,4 +1,13 @@
 {
+  "errors.retryTranscriptionFailedTitle": "Transcribing again failed",
+  "onboarding.demo.shorthandContinue": "Continue",
+  "onboarding.demo.shorthandHold": "<0>Open your note.</0> <1>Hold your shortcut and talk.</1> <2>Let go, and Shorthand adds what you said to your note.</2>",
+  "onboarding.demo.shorthandTap": "<0>Open your note.</0> <1>Tap your shortcut and talk.</1> <2>Tap again, and Shorthand adds what you said to your note.</2>",
+  "onboarding.demo.shorthandTitle": "Talk, and your note keeps up",
+  "onboarding.done.shorthandSubMac": "Shorthand's in your menu bar now. Press <keys/> to start or stop a capture, then follow along in your note.",
+  "onboarding.done.shorthandSubTray": "Shorthand's in your system tray now. Press <keys/> to start or stop a capture, then follow along in your note.",
+  "onboarding.model.hiddenMatch": "Models that can't write live notes are hidden here.",
+  "onboarding.model.noLiveNotes": "Live notes won't appear with the suggested model for your language.",
   "onboarding.telemetry.continue": "Continue",
   "onboarding.telemetry.intro": "Shorthand can send crash reports and a little usage info so problems get found and fixed. It is anonymous, and you can change this any time under Settings → App.",
   "onboarding.telemetry.link": "See exactly what is sent",
@@ -83,9 +92,12 @@
   "settings.general.shortcut.bindings.transcribe_with_post_process.name": "AI cleanup shortcut",
   "settings.history.source.assistedNotes": "Assisted notes",
   "settings.history.source.dictation": "Dictation",
+  "settings.history.source.file": "File",
   "settings.history.source.meeting": "Meeting",
   "settings.history.transcriptNotSaved": "Transcript not saved.",
-  "settings.model.groups.output": "How transcripts read",
+  "settings.model.groups.output": "Transcript settings",
+  "settings.models.hiddenByBoth": "Some models that match are hidden by the {{preview}} and {{translate}} filters. Turn them off to see them.",
+  "settings.models.hiddenByFilter": "Some models that match are hidden by the {{filter}} filter. Turn it off to see them.",
   "settings.modes.description": "Meetings and Assisted notes both stream what they hear to whatever is following along. Meetings can include the other participants; Assisted notes records only you. Dictation types what you say into the focused window.",
   "settings.modes.heading": "How each mode behaves",
   "settings.modes.shared.description": "One setting, used by whichever mode is recording.",
@@ -135,5 +147,6 @@
   "sidebar.transcription": "Transcription",
   "transcript.retryUnavailable": "Retry is unavailable for transcripts containing system audio.",
   "transcript.speakerMic": "You",
-  "transcript.speakerSystem": "System"
+  "transcript.speakerSystem": "System",
+  "tray.retryTranscriptionFailedTitle": "Transcribing again failed"
 }

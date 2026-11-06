@@ -6,6 +6,7 @@ import { MuteWhileRecording } from "@/components/settings/MuteWhileRecording";
 import { VoiceActivityDetection } from "@/components/settings/VoiceActivityDetection";
 import { AlwaysOnMicrophone } from "@/components/settings/AlwaysOnMicrophone";
 import { ClamshellMicrophoneSelector } from "@/components/settings/ClamshellMicrophoneSelector";
+import { AirPodsMode } from "@/components/settings/AirPodsMode";
 import { SystemAudioDeviceSelector } from "@/components/settings/advanced/SystemAudioDeviceSelector";
 import { Sheet } from "@/shorthand/ui/Sheet";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
@@ -60,6 +61,8 @@ export const AudioSettings: React.FC = () => {
             descriptionMode="tooltip"
             grouped={true}
           />
+          {/* Self-hides outside macOS. */}
+          <AirPodsMode descriptionMode="tooltip" grouped={true} />
         </AdvancedOnly>
       </Sheet>
     </div>

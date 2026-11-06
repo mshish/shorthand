@@ -86,13 +86,19 @@ live provider. Check that:
   reasoning fields, a failed retry (which must not be remembered), and a
   structured-output error that falls through to the legacy request.
 
-Known gap: `${output}` handling, the parsing and the fallbacks cannot be reached
-from a fork-owned test today. They live in private functions of `actions.rs`
-(`build_system_prompt` and the `async fn post_process_transcription`), which no
-module outside `actions.rs` can call. Even with access, the fork changed
-`post_process_transcription` to take an `AppHandle` and read the key from the
-credential store, and the `tauri` dependency is not built with its `test`
-feature, so there is no mock `AppHandle`.
+Partly closed: `post_process_with_key` takes the settings and a key lookup
+instead of an `AppHandle`, so it is reachable from `actions.rs`'s test module
+without a mock app. Its tests there drive it against a stub HTTP server (a reply
+is done; a reply with no content failed). That module is upstream's file, so
+new cases still land in an upstream file; prefer a fork-owned seam where one
+exists.
+
+Known gap: `${output}` handling, the parsing and the fallbacks of the other
+private functions of `actions.rs` (`build_system_prompt` and
+`async fn post_process_transcription`) cannot be reached from a fork-owned test
+today. `post_process_transcription` itself takes an `AppHandle` to read the key
+from the credential store, and the `tauri` dependency is not built with its
+`test` feature, so there is no mock `AppHandle`.
 
 Decided (2026-10-10): the gap is **accepted in the fork**. No visibility is
 widened and no code is added inside the upstream files to close it. The fix is a

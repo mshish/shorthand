@@ -1,19 +1,44 @@
-use crate::actions::process_transcription_output;
 use crate::managers::{
-    history::{HistoryManager, PaginatedHistory},
-    transcription::TranscriptionManager,
+    history::{HistoryEntry, HistoryManager, PaginatedHistory},
+    transcription_jobs::TranscriptionJobManager,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 /// Rejects a retry attempt for a history entry that has no saved recording
 /// (an empty `file_name`, e.g. because the save-recordings toggle was off
 /// when it was created) — there is no audio file to re-transcribe.
-fn require_recording(file_name: &str) -> Result<(), String> {
+pub(crate) fn require_recording(file_name: &str) -> Result<(), String> {
     if file_name.is_empty() {
         Err("This entry has no saved recording to re-transcribe".to_string())
     } else {
         Ok(())
+    }
+}
+
+/// Why an entry can't be transcribed again, if it can't: it has no recording,
+/// or its text merges two speakers (so a single pass would drop one).
+/// `retry_unavailable` is the user-facing line for the merged case.
+pub(crate) fn retry_blocker(
+    file_name: &str,
+    text: &str,
+    retry_unavailable: impl FnOnce() -> String,
+) -> Option<String> {
+    if let Err(message) = require_recording(file_name) {
+        return Some(message);
+    }
+    crate::tray_i18n::is_merged_transcript(text).then(retry_unavailable)
+}
+
+/// [`retry_blocker`] with the app's language for the merged-transcript line.
+pub(crate) fn check_retryable(app: &AppHandle, entry: &HistoryEntry) -> Result<(), String> {
+    match retry_blocker(&entry.file_name, &entry.transcription_text, || {
+        crate::tray_i18n::merged_transcript_retry_error_for_app(app, &entry.transcription_text)
+            .unwrap_or_default()
+    }) {
+        Some(message) => Err(message),
+        None => Ok(()),
     }
 }
 
@@ -62,71 +87,59 @@ pub async fn get_audio_file_path(
 pub async fn delete_history_entry(
     _app: AppHandle,
     history_manager: State<'_, Arc<HistoryManager>>,
+    jobs: State<'_, Arc<TranscriptionJobManager>>,
     id: i64,
 ) -> Result<(), String> {
+    jobs.cancel(id);
     history_manager
         .delete_entry(id)
         .await
         .map_err(|e| e.to_string())
 }
 
+/// Queues the entry to be transcribed again with the current model. Its
+/// progress and outcome arrive as `TranscriptionJob` events. Refused up
+/// front, with the reason, when the entry can't be transcribed again; the job
+/// checks again when it runs.
 #[tauri::command]
 #[specta::specta]
 pub async fn retry_history_entry_transcription(
     app: AppHandle,
     history_manager: State<'_, Arc<HistoryManager>>,
-    transcription_manager: State<'_, Arc<TranscriptionManager>>,
+    jobs: State<'_, Arc<TranscriptionJobManager>>,
     id: i64,
 ) -> Result<(), String> {
     let entry = history_manager
         .get_entry_by_id(id)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("History entry {} not found", id))?;
+        .ok_or_else(|| format!("History entry {id} not found"))?;
+    check_retryable(&app, &entry)?;
+    jobs.retry(id);
+    Ok(())
+}
 
-    require_recording(&entry.file_name)?;
+/// Stops the entry's background transcription: a queued one is dropped, a
+/// running one stops after the chunk it is on. The entry keeps the text it
+/// had before.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_history_entry_transcription(jobs: State<'_, Arc<TranscriptionJobManager>>, id: i64) {
+    jobs.cancel(id);
+}
 
-    if let Some(message) =
-        crate::tray_i18n::merged_transcript_retry_error_for_app(&app, &entry.transcription_text)
-    {
-        return Err(message);
-    }
-
-    let audio_path = history_manager.get_audio_file_path(&entry.file_name);
-    let samples = crate::audio_toolkit::read_wav_samples(&audio_path)
-        .map_err(|e| format!("Failed to load audio: {}", e))?;
-
-    if samples.is_empty() {
-        return Err("Recording has no audio samples".to_string());
-    }
-
-    transcription_manager.initiate_model_load();
-
-    let tm = Arc::clone(&transcription_manager);
-    let transcription = tauri::async_runtime::spawn_blocking(move || tm.transcribe(samples))
+/// Adds an audio or video file to History and queues its transcription.
+/// Fails without adding anything if the file has no audio Handy can read.
+#[tauri::command]
+#[specta::specta]
+pub async fn transcribe_file(
+    jobs: State<'_, Arc<TranscriptionJobManager>>,
+    path: String,
+) -> Result<HistoryEntry, String> {
+    let jobs = Arc::clone(&jobs);
+    tauri::async_runtime::spawn_blocking(move || jobs.transcribe_file(PathBuf::from(path)))
         .await
-        .map_err(|e| format!("Transcription task panicked: {}", e))?
-        .map_err(|e| e.to_string())?;
-
-    if transcription.is_empty() {
-        return Err("Recording contains no speech".to_string());
-    }
-
-    let processed =
-        process_transcription_output(&app, &transcription, entry.post_process_requested).await;
-    // Deliberately not gated on save_transcripts: retry is an explicit,
-    // user-initiated request to produce this exact transcript, and a retry
-    // that silently discarded its own result would be worse than the toggle
-    // being momentarily overridden. Unlike the normal save path, the user
-    // asked for this text by name.
-    history_manager
-        .update_transcription(
-            id,
-            transcription,
-            processed.post_processed_text,
-            processed.post_process_prompt,
-        )
-        .map(|_| ())
+        .map_err(|e| format!("Failed to read the file: {}", e))?
         .map_err(|e| e.to_string())
 }
 
@@ -190,5 +203,28 @@ mod tests {
     #[test]
     fn require_recording_accepts_non_empty_file_name() {
         assert!(require_recording("handy-123.wav").is_ok());
+    }
+
+    #[test]
+    fn retry_blocker_refuses_an_entry_without_a_recording() {
+        let message = retry_blocker("", "hello", || "merged".to_string());
+        assert_eq!(
+            message.as_deref(),
+            Some("This entry has no saved recording to re-transcribe")
+        );
+    }
+
+    #[test]
+    fn retry_blocker_refuses_a_merged_two_speaker_transcript() {
+        let message = retry_blocker("a.wav", "You: hi\nSystem: hello", || "merged".to_string());
+        assert_eq!(message.as_deref(), Some("merged"));
+    }
+
+    #[test]
+    fn retry_blocker_allows_a_plain_entry_with_a_recording() {
+        assert_eq!(
+            retry_blocker("a.wav", "hello", || unreachable!("not merged")),
+            None
+        );
     }
 }

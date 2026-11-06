@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod chunking;
 pub mod constants;
+pub(crate) mod cpu_engine;
 pub mod lang_id;
 pub mod text;
 pub mod utils;
@@ -9,8 +10,8 @@ pub mod vad;
 #[cfg(target_os = "linux")]
 pub use audio::resolve_linux_system_audio_device;
 pub use audio::{
-    device_display_name, list_output_devices, list_system_audio_devices, read_wav_samples,
-    save_wav_file, verify_wav_file, CaptureSink, CaptureVad, LoopbackOpenOutcome,
+    decode_audio_file, device_display_name, list_output_devices, list_system_audio_devices,
+    read_wav_samples, save_wav_file, verify_wav_file, CaptureSink, CaptureVad, LoopbackOpenOutcome,
     SystemAudioDeviceInfo, VadPolicy,
 };
 pub use lang_id::detect_output_language;

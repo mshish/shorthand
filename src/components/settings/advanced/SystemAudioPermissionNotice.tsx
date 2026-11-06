@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { notify } from "@/stores/noticeStore";
 import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { Button } from "../../ui/Button";
@@ -47,11 +47,11 @@ export const SystemAudioPermissionNotice: React.FC<
           "Failed to open system audio privacy settings:",
           result.error,
         );
-        toast.error(String(result.error));
+        notify({ title: String(result.error) });
       }
     } catch (error) {
       console.error("Failed to open system audio privacy settings:", error);
-      toast.error(String(error));
+      notify({ title: String(error) });
     }
   };
 
@@ -70,7 +70,7 @@ export const SystemAudioPermissionNotice: React.FC<
             void openPrivacySettings();
           }}
         >
-          {t("accessibility.openSettings")}
+          {t("onboarding.permissions.openSettings")}
         </Button>
         <Button
           variant="secondary"

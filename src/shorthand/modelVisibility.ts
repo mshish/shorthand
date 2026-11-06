@@ -1,85 +1,138 @@
-import { useMemo } from "react";
-import type { ModelInfo } from "@/bindings";
-import { useSettings } from "@/hooks/useSettings";
+import { CURATED_ASR, picksFor, type CatalogModel } from "@/lib/models/catalog";
+import type { DownloadState } from "@/lib/models/downloadState";
 
 /**
- * Single source of truth for catalog-model visibility.
+ * Which catalog models Shorthand offers.
  *
  * Shorthand's pipeline consumes `--follow-stream json` and needs `partial`
  * events; a non-streaming model emits only one final transcript, so live
- * enhancement never fires — see `shorthand-core/docs/DESIGN.md`. The catalog
- * ships far more non-streaming models than streaming ones, and a user who
- * onboards onto one gets a product that silently does nothing. This module
- * hides those models from the two pickers that show the full/undownloaded
- * catalog, riding the same `show_all_settings` escape hatch documented in
- * `visibility.ts` rather than adding a new setting: "hide models Shorthand
- * can't use" is the same simplified-vs-everything question about a
- * different list.
+ * notes never appear — see `shorthand-core/docs/DESIGN.md`. The catalog ships
+ * far more non-streaming models than streaming ones, and a user who onboards
+ * onto one gets a product that silently does nothing. So the model table hides
+ * those models, and the onboarding picks prefer streaming ones.
  *
- * `ModelsSettings.tsx` used to run its full model list through
- * `useVisibleModels` before applying its own, independent `filterStreaming`
- * chip — which meant this hatch-driven predicate could hide a non-streaming
- * model from *Available to Download* that the chip's "off" state was
- * supposed to reveal. The two mechanisms disagreed about who owns
- * visibility. `ModelsSettings.tsx` no longer calls this hook: the chip now
- * governs both of its sections on its own, via
- * `src/shorthand/streamingModelFilter.ts`. This hook remains the hatch-driven
- * guard for `Onboarding.tsx`, which has no chip and therefore no other way to
- * recover a hidden on-disk, in-progress, or custom model.
+ * Onboarding's full list hides them, and the `show_all_settings` escape hatch
+ * documented in `visibility.ts` shows them again. Settings > Model does not
+ * hide anything: it starts with the table's own "Live preview" filter pressed
+ * (`DEFAULT_MODEL_FILTERS`), so the user sees why a model is missing and can
+ * turn it off.
  */
+
+/** Whether a model is on disk or being fetched, which are the states that count as held. */
+export const holdsModel = (state: DownloadState): boolean =>
+  state.state === "ready" ||
+  state.state === "downloading" ||
+  state.state === "checking";
 
 /**
- * Whether a catalog model should be shown.
+ * Whether the model table shows a model.
  *
- * When `showAllSettings` is true, everything is shown — that's the hatch
- * upstream users and power users reach for.
+ * With `showAllSettings` everything shows. Otherwise a model shows if it
+ * streams, or if the user already holds it (`held`: on disk or downloading).
  *
- * Otherwise, a model is hidden unless it streams, or is already on disk,
- * mid-download, or custom. That exemption is not about letting users keep
- * models they already have — it's forced by how `supports_streaming` can be
- * populated. Catalog-listed models and their alternate quants get their caps
- * from the catalog descriptor (`render_model_info` / `to_model_info_for_file`
- * reading `self.caps.supports_streaming`, `managers/model.rs:249`), and local
- * discovery deliberately skips the header probe for anything catalog-listed
- * because the catalog is authoritative (`model.rs:1765-1768`) — so a
- * catalog match's flag is never an unprobed guess. The genuinely uncertain
- * case is a non-catalog GGUF found in the local HF cache: its `local_caps`
- * reads `probe.supports_streaming.unwrap_or(false)` (`model.rs:360-364`), so
- * an absent `stt.capability.streaming` header key reads as non-streaming
- * until the model has been loaded once and reconciled by
- * `set_runtime_capabilities`. `false` therefore conflates "confirmed
- * non-streaming" with "unknown until loaded" for that one path — a model
- * already on disk, or in the middle of downloading, must never be hidden by
- * a flag we may be wrong about, or it becomes unloadable and so never gets
- * corrected.
+ * The held exemption is not about keeping models the user has. A model's
+ * `supports_streaming` is read from the catalog for catalog-listed models, but
+ * for a non-catalog GGUF found in the local Hugging Face cache an absent
+ * `stt.capability.streaming` header key reads as `false` until the model has
+ * been loaded once (`managers/model.rs`, `local_caps`). So `false` can mean
+ * "unknown until loaded", and a model on disk or mid-download must never be
+ * hidden by a flag that may be wrong, or it can never be loaded and corrected.
  */
-export function isModelVisible(
-  model: ModelInfo,
+export function isTableModelVisible(
+  entry: { streaming: boolean },
   showAllSettings: boolean,
+  held: boolean,
 ): boolean {
-  if (showAllSettings) {
-    return true;
-  }
+  return showAllSettings || entry.streaming || held;
+}
 
-  return (
-    model.supports_streaming ||
-    model.is_downloaded ||
-    model.is_downloading ||
-    model.is_custom
-  );
+/** Settings > Model's filters at rest: Live preview pressed, no search. */
+export const DEFAULT_MODEL_FILTERS = {
+  query: "",
+  preview: true,
+  translate: false,
+};
+
+/**
+ * Whether the Models page keeps a model under its pressed capability filters
+ * (the search is applied separately).
+ *
+ * Translate is strict. Live preview never hides a model the user holds (on
+ * disk or downloading, which includes the current model and custom ones), for
+ * the reason `isTableModelVisible` gives: a non-catalog GGUF reads
+ * `streaming: false` until it has been loaded once, so hiding it by that flag
+ * could keep it from ever being loaded and corrected. Turning the chip off
+ * shows everything.
+ */
+export function passesModelFilters(
+  entry: { streaming: boolean; translate: boolean },
+  filters: { preview: boolean; translate: boolean },
+  held: boolean,
+): boolean {
+  if (filters.translate && !entry.translate) return false;
+  return held || !filters.preview || entry.streaming;
 }
 
 /**
- * Filters a model list down to the ones `isModelVisible` allows, reactive to
- * `show_all_settings` so toggling the hatch in About updates open pickers
- * without a restart.
+ * Which pressed filters hide models that match the search, or null when none
+ * do. A model failing both counts for both. The Models page uses it to say so
+ * beside the results, because a search that finds a model the filters hide
+ * otherwise looks like it found nothing.
  */
-export function useVisibleModels(models: ModelInfo[]): ModelInfo[] {
-  const { getSetting } = useSettings();
-  const showAllSettings = getSetting("show_all_settings") ?? false;
+export function hiddenByFilters<
+  E extends { streaming: boolean; translate: boolean },
+>(
+  entries: E[],
+  filters: { preview: boolean; translate: boolean },
+  held: (entry: E) => boolean,
+  matchesText: (entry: E) => boolean,
+): { preview: boolean; translate: boolean } | null {
+  const hidden = { preview: false, translate: false };
+  for (const e of entries) {
+    if (!matchesText(e) || passesModelFilters(e, filters, held(e))) continue;
+    if (filters.translate && !e.translate) hidden.translate = true;
+    if (filters.preview && !held(e) && !e.streaming) hidden.preview = true;
+  }
+  return hidden.preview || hidden.translate ? hidden : null;
+}
 
-  return useMemo(
-    () => models.filter((model) => isModelVisible(model, showAllSettings)),
-    [models, showAllSettings],
-  );
+/**
+ * What the Models page's "On this computer" section shows at rest (no typed
+ * search). A chip can empty it without the user holding fewer models, so the
+ * "No models yet" note is for a user who holds none, and a section a chip
+ * emptied is dropped instead.
+ */
+export function yoursSection(
+  heldCount: number,
+  shownCount: number,
+): "rows" | "empty" | "hidden" {
+  if (shownCount > 0) return "rows";
+  return heldCount === 0 ? "empty" : "hidden";
+}
+
+/**
+ * The model table's picks for the languages: streaming models only, so every
+ * pick can write live notes. For a language no streaming model covers, falls
+ * back to the catalog's unfiltered picks and reports `liveNotes: false` so the
+ * screen can warn that live notes won't appear with that model.
+ *
+ * `offered` limits both to models the app can download; `streams` says
+ * whether the app's copy of a model streams.
+ */
+export function shorthandPicksFor(
+  languages: string[],
+  offered: (model: CatalogModel) => boolean,
+  streams: (model: CatalogModel) => boolean,
+) {
+  const pool = CURATED_ASR.filter((m) => offered(m) && streams(m));
+  // `recommendModels` falls back to candidates over its error floor, rated
+  // `unsupported` or `experimental` for the language. Those don't count as
+  // covering it: such a model would be offered as the recommendation for a
+  // language it can't be relied on for.
+  const streaming = (
+    pool.length ? picksFor(languages, offered, pool) : []
+  ).filter((p) => p.status !== "unsupported" && p.status !== "experimental");
+  if (streaming.length) return { picks: streaming, liveNotes: true };
+  const picks = picksFor(languages, offered);
+  return { picks, liveNotes: picks.length === 0 };
 }

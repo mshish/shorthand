@@ -1,4 +1,4 @@
-use rubato::{FftFixedIn, Resampler};
+use rubato016::{FftFixedIn, Resampler};
 use std::time::Duration;
 
 // Make this a constant you can tweak

@@ -1,8 +1,9 @@
 use crate::input;
+use crate::notices::Notice;
 use crate::settings;
 use crate::settings::{OverlayPosition, OverlayStyle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 #[cfg(not(target_os = "macos"))]
@@ -33,6 +34,11 @@ tauri_panel! {
     })
 }
 
+// These are only the window's first size on each show: once the overlay has
+// rendered it reports its card's measured size and the window is fitted to it
+// (shorthand/overlay_fit.rs), because the transparent remainder of a larger
+// window would take clicks meant for the app beneath.
+//
 // Native overlay window sizes (logical points). One window is reused for every
 // state and resized in `show_overlay_state`; each size need only be at least as
 // large as the card it hosts (the `--ov-*` vars in RecordingOverlay.css). The
@@ -45,8 +51,9 @@ tauri_panel! {
 //
 // Compact overlay (Minimal / transcribing / processing): the 40h pill animates
 // width from 172 (--ov-rest-w) to 216 (--ov-work-w) and expands from center, so
-// the window must fit the widest state plus a little slack.
-const OVERLAY_WIDTH: f64 = 256.0;
+// the window must fit the widest state plus a little slack. The longest notice
+// titles need nearly all of it.
+const OVERLAY_WIDTH: f64 = 266.0;
 const OVERLAY_HEIGHT: f64 = 50.0;
 
 // Actual is 394x118, just a little extra
@@ -71,11 +78,31 @@ const OVERLAY_ERROR_WIDTH: f64 = 360.0;
 const OVERLAY_ERROR_HEIGHT: f64 = 88.0;
 const ERROR_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_millis(4000);
 
+const NOTICE_STATE: &str = "notice";
+const LIVE_NOTICE_STATE: &str = "live_notice";
+
+/// How long a notice holds before the overlay fades it.
+const NOTICE_HOLD: Duration = Duration::from_secs(4);
+
+fn is_live_state(state: &str) -> bool {
+    state == "streaming" || state == LIVE_NOTICE_STATE
+}
+
+/// The notice form that matches the session it replaces, so the first window
+/// size (before the card reports its own) is the one the session had. A notice with no session gets the compact form.
+fn notice_state(session_is_live: bool) -> &'static str {
+    if session_is_live {
+        LIVE_NOTICE_STATE
+    } else {
+        NOTICE_STATE
+    }
+}
+
 /// Overlay window size (logical) for a given UI state.
 fn overlay_dimensions(state: &str) -> (f64, f64) {
-    if state == "streaming" && DUAL_LANE_OVERLAY.load(Ordering::Relaxed) {
+    if is_live_state(state) && DUAL_LANE_OVERLAY.load(Ordering::Relaxed) {
         (OVERLAY_STREAM_WIDTH, OVERLAY_DUAL_STREAM_HEIGHT)
-    } else if state == "streaming" {
+    } else if is_live_state(state) {
         (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
     } else if state == "error" {
         (OVERLAY_ERROR_WIDTH, OVERLAY_ERROR_HEIGHT)
@@ -145,7 +172,7 @@ fn configure_layer_shell_position(gtk_window: &gtk::ApplicationWindow, position:
 /// derive their dimensions from GTK's size request. gtk-layer-shell documents
 /// the `set_size_request` + `resize(1, 1)` sequence for forcing a new size.
 #[cfg(target_os = "linux")]
-fn configure_layer_shell_surface(
+pub(crate) fn configure_layer_shell_surface(
     gtk_window: &gtk::ApplicationWindow,
     position: OverlayPosition,
     width: f64,
@@ -290,7 +317,7 @@ fn is_mouse_within_monitor(
 /// converts PhysicalPosition using the scale factor of the monitor the window
 /// is *currently* on, which is wrong when moving cross-monitor. Windows uses
 /// `place_windows_overlay` instead (no single logical space across mixed DPI).
-fn calculate_overlay_position(
+pub(crate) fn calculate_overlay_position(
     app_handle: &AppHandle,
     width: f64,
     height: f64,
@@ -339,7 +366,7 @@ static WINDOWS_OVERLAY_IS_STREAMING: AtomicBool = AtomicBool::new(false);
 /// Windows accessibility text size (Settings > Accessibility > Text size), a
 /// separate axis from display scaling that WebView2 applies as a document zoom.
 #[cfg(target_os = "windows")]
-fn windows_text_scale_factor() -> f64 {
+pub(crate) fn windows_text_scale_factor() -> f64 {
     // Absent until the user moves the slider off 100%; stored as a percentage.
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Accessibility")
@@ -548,6 +575,8 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
     if settings.overlay_style == OverlayStyle::None {
         return;
     }
+    OVERLAY_SESSION_SHOWING.store(true, Ordering::SeqCst);
+    OVERLAY_SESSION_LIVE.store(is_live_state(state), Ordering::SeqCst);
 
     // Claim the current epoch before enqueueing main-thread work. A hide that
     // was scheduled before this show — or is scheduled concurrently — checks
@@ -599,7 +628,7 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
             let _ =
                 overlay_window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
             #[cfg(target_os = "windows")]
-            WINDOWS_OVERLAY_IS_STREAMING.store(state == "streaming", Ordering::Relaxed);
+            WINDOWS_OVERLAY_IS_STREAMING.store(is_live_state(state), Ordering::Relaxed);
             let size_elapsed = size_started.elapsed();
 
             let pos_started = std::time::Instant::now();
@@ -650,6 +679,7 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
             );
         }
 
+        crate::shorthand::overlay_fit::on_shown(&overlay_window);
         let _ = overlay_window.emit("show-overlay", state);
     }
 }
@@ -717,6 +747,47 @@ pub fn show_error_overlay(app_handle: &AppHandle, kind: &'static str, saved: boo
     });
 }
 
+/// Shows `notice` in place of the session's overlay and fades it after
+/// [`NOTICE_HOLD`] unless something newer has shown. With the overlay off, it
+/// still hides the session's overlay in case the setting changed mid-session.
+pub fn show_overlay_notice(app_handle: &AppHandle, notice: &Notice) {
+    if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
+        hide_recording_overlay(app_handle);
+        return;
+    }
+    OVERLAY_SESSION_SHOWING.store(false, Ordering::SeqCst);
+
+    let state = notice_state(OVERLAY_SESSION_LIVE.load(Ordering::SeqCst));
+    let handle = app_handle.clone();
+    let notice = notice.clone();
+    // On the main thread for the same reason as show_overlay_state.
+    let _ = app_handle.run_on_main_thread(move || {
+        let _ = handle.emit_to("recording_overlay", "overlay-notice", notice);
+        show_overlay_state_on_main(&handle, state);
+
+        let generation = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
+        OVERLAY_NOTICE_GENERATION.store(generation, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            std::thread::sleep(NOTICE_HOLD);
+            if OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) == generation {
+                hide_recording_overlay(&handle);
+            }
+        });
+    });
+}
+
+/// Hides the notice early, unless a new session has replaced it.
+pub fn dismiss_overlay_notice(app_handle: &AppHandle) {
+    let shown = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
+    if OVERLAY_NOTICE_GENERATION.load(Ordering::SeqCst) == shown {
+        hide_recording_overlay(app_handle);
+    }
+}
+
+pub fn is_session_showing() -> bool {
+    OVERLAY_SESSION_SHOWING.load(Ordering::SeqCst)
+}
+
 /// Updates the overlay window position based on current settings
 pub fn update_overlay_position(app_handle: &AppHandle) {
     // Positioning queries monitors/cursor (GDK/Xlib on Linux) and moves the
@@ -761,6 +832,8 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
                     .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
             }
         }
+
+        crate::shorthand::overlay_fit::on_position_changed(&overlay_window);
     }
 }
 
@@ -772,8 +845,21 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
 /// the instant it drained, well inside the 300 ms hide delay.
 static OVERLAY_SHOW_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+/// The show generation of the latest notice; it's on screen while this matches
+/// `OVERLAY_SHOW_GENERATION`.
+static OVERLAY_NOTICE_GENERATION: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Set while the overlay shows a recording or transcribing session.
+static OVERLAY_SESSION_SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the overlay's current session uses the Live window. The style alone
+/// can't say: a model that doesn't stream gets the compact pill under Live too.
+static OVERLAY_SESSION_LIVE: AtomicBool = AtomicBool::new(false);
+
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
+    OVERLAY_SESSION_SHOWING.store(false, Ordering::SeqCst);
+    OVERLAY_SESSION_LIVE.store(false, Ordering::SeqCst);
     // Always hide the overlay regardless of settings - if setting was changed while recording,
     // we still want to hide it properly
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
@@ -828,7 +914,7 @@ static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Tracks whether gtk-layer-shell was successfully initialized (Linux only).
 /// Used to skip layer-shell calls when the window is a regular fallback.
 #[cfg(target_os = "linux")]
-static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub(crate) static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Pure predicate behind `set_capture_overlay_events_enabled`'s call sites:
 /// only `OverlayStyle::None` disables the active capture's overlay events.
@@ -889,6 +975,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_notice_keeps_the_size_of_its_session() {
+        for (session, live) in [("streaming", true), ("recording", false)] {
+            assert_eq!(
+                overlay_dimensions(notice_state(is_live_state(session))),
+                overlay_dimensions(session)
+            );
+            assert_eq!(is_live_state(session), live);
+        }
+    }
+
+    #[test]
     fn monitor_hit_test_uses_half_open_physical_bounds() {
         let position = PhysicalPosition::new(-2560, -200);
         let size = PhysicalSize::new(2560, 1440);
@@ -942,7 +1039,7 @@ mod tests {
                 OVERLAY_HEIGHT,
                 OverlayPosition::Bottom,
             ),
-            (3648, 2025, 384, 75)
+            (3641, 2025, 399, 75)
         );
         assert_eq!(
             windows_overlay_bounds(
@@ -954,7 +1051,7 @@ mod tests {
                 OVERLAY_HEIGHT,
                 OverlayPosition::Top,
             ),
-            (3648, 6, 384, 75)
+            (3641, 6, 399, 75)
         );
     }
 

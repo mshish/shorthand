@@ -4,7 +4,8 @@
 //! frontend locale files (src/i18n/locales/*/translation.json).
 //!
 //! The English translation.json is the single source of truth:
-//! - TrayStrings and TranscriptStrings are derived from their English sections
+//! - TrayStrings and TranscriptStrings are derived from their English sections;
+//!   TrayStrings also carries the notice titles (see `build.rs`)
 //! - All languages are auto-discovered from the locales directory
 //!
 //! To add a new backend-consumed string:
@@ -48,7 +49,7 @@ pub fn merged_transcript_retry_error_for_app(app: &AppHandle, text: &str) -> Opt
     is_merged_transcript(text).then_some(labels.retry_unavailable)
 }
 
-fn is_merged_transcript(text: &str) -> bool {
+pub(crate) fn is_merged_transcript(text: &str) -> bool {
     TRANSCRIPT_TRANSLATIONS.values().any(|strings| {
         let mic = format!("{}: ", strings.speaker_mic);
         let system = format!("{}: ", strings.speaker_system);
@@ -72,7 +73,7 @@ fn resolve_translations<T: Clone>(
         .iter()
         .find_map(|(code, strings)| code.eq_ignore_ascii_case(&normalized).then_some(strings));
     let fallback = match chinese_script_for_locale(&normalized) {
-        Some(ChineseScript::Traditional) => "zh-TW",
+        Some(ChineseScript::TraditionalTw | ChineseScript::TraditionalHk) => "zh-TW",
         Some(_) => "zh",
         None => language,
     };

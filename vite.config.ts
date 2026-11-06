@@ -18,7 +18,7 @@ export default defineConfig(async () => ({
     },
   },
 
-  // Multiple entry points for main app and overlay
+  // Multiple entry points: the main app and the overlay
   build: {
     rollupOptions: {
       input: {

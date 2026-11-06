@@ -137,13 +137,17 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
   - `model.rs` - Model downloading and management
   - `transcription.rs` - Speech-to-text processing pipeline
   - `history.rs` - Transcription history storage
+  - `transcription_jobs.rs` - Background transcription of dropped files and re-transcribed History entries: one job at a time, in chunks that yield to dictation
 - `audio_toolkit/` - Low-level audio processing:
   - `audio/` - Recording sink (VAD, levels, live streaming feed), output devices, WAV I/O
   - `vad/` - Voice Activity Detection (Silero VAD)
 - `commands/` - Tauri command handlers for frontend communication
 - `cli.rs` - CLI argument definitions (clap derive)
 - `shortcut.rs` - Global keyboard shortcut handling
+- `transcription_hook.rs` - The optional `hooks/transcription` script that rewrites text just before it is pasted
+- `language_detection/` - Spoken-language detection for the Auto language setting (a small detector model, run before transcription)
 - `settings.rs` - Application settings management
+- `notices.rs` - Reports background errors to the user (see [Error notices](#error-notices))
 - `overlay.rs` - Recording overlay window (platform-specific)
 - `signal_handle.rs` - `send_transcription_input()` reusable function
 - `utils.rs` - Platform detection helpers
@@ -162,6 +166,9 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 - `stores/settingsStore.ts` - Zustand store for settings
 - `bindings.ts` - Auto-generated Tauri type bindings (via tauri-specta)
 - `overlay/` - Recording overlay window entry point
+- `lib/notices.ts` - Maps each notice code to its text
+- `stores/noticeStore.ts` - The one place notices are handled: what's active and what's on screen
+- `components/notices/NoticePanel.tsx` - The one place notices are drawn, as a toast or the full list
 - `lib/types.ts` - Shared TypeScript type definitions
 
 ### Key Architecture Patterns
@@ -204,6 +211,32 @@ Settings are stored using Tauri's store plugin with reactive updates:
 ### Single Instance Architecture
 
 The app enforces single instance behavior — launching when already running brings the settings window to front rather than creating a new process. Remote control flags (`--toggle-transcription`, etc.) work by launching a second instance that sends args to the running instance via `tauri_plugin_single_instance`, then exits.
+
+## Error notices
+
+`notices::raise` is the one way to report a failure that happens while the user isn't looking at the settings window. Don't add a new event, toast or overlay state for one. A new error should take a few lines and need no new UI.
+
+**Adding a new error:**
+
+1. Add a `NoticeCode` in `src-tauri/src/notices.rs`, with its level in `NoticeCode::level` and its title in `NoticeCode::tray_title`. **Error** means nothing came out, or Handy can't do its job. **Warning** means the user got a result, but not the one they set up.
+2. Add the title as `errors.<name>Title` in `src/i18n/locales/en/translation.json` (upstream writes it in Title Case), then add the key to the other locales (`bun run check:translations` fails otherwise). The fork's English is sentence case and uses the app's terms, so also add the sentence-case title to `src/shorthand/english-copy.json` as both `errors.<name>Title` and `tray.<name>Title`; the tray is built from `tray.*`, which the `errors.*` override does not reach. A code that exists only in the fork puts both keys in `src/shorthand/locales/en.json` instead of upstream's catalogue. The `Title` suffix is what makes `build.rs` give the tray `strings.<name>_title`. A dictation title has to fit the overlay pill, at most 215px of 12px text.
+3. Map the code to its title and optional explanation in `NOTICE_DISPLAY` in `src/lib/notices.ts`. TypeScript won't compile until you do.
+4. Call `notices::raise` where the failure happens, and regenerate `bindings.ts` by running the app in debug:
+
+```rust
+notices::raise(
+    app,
+    Notice::new(NoticeCode::PasteFailed, NoticeSource::Dictation),
+);
+```
+
+**Rules:**
+
+- Rust sends codes, never display strings. Use `with_detail` for what only Rust knows, such as a model name or a raw error.
+- Handy keeps one notice per `NoticeSource`, and a newer one replaces it. A notice ends when its source next succeeds or when the user dismisses it in the footer. When a source next succeeds, call `notices::clear` before raising anything about that session, or the clear wipes the session's own notice.
+- A message from the frontend goes through `notify` in `stores/noticeStore.ts`, the app's only toast. Without a `key` it's a click's result and ends with its pop-up, such as a failed copy. With one it stays in the footer until dismissed or cleared, such as a file Handy can't read. It's text the frontend already translated, so it needs no `NoticeCode`, and it doesn't show in the tray.
+- A dictation notice replaces the overlay, so call `raise` instead of hiding the overlay. If a newer session owns the overlay by then, call `raise_without_overlay`.
+- A raised notice pops up in the window as a toast. Its X dismisses the notice; otherwise the toast times out and the notice stays in the tray and footer, where the user can bring it back up. During onboarding it pops up below the top bar, and the footer lists it once onboarding ends. Only dictation notices show on the overlay.
 
 ## Internationalization (i18n)
 

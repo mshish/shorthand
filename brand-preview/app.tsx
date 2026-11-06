@@ -29,7 +29,6 @@ import { platform } from "@tauri-apps/plugin-os";
 import "@/App.css";
 import "@/i18n";
 
-import AccessibilityPermissions from "@/components/AccessibilityPermissions";
 import SecureInputWarning from "@/components/SecureInputWarning";
 import Footer from "@/components/footer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -60,7 +59,6 @@ const SettingsWindow: React.FC = () => {
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto">
             <div className="flex flex-col items-center p-4 gap-4">
-              <AccessibilityPermissions />
               <SecureInputWarning />
               <ErrorBoundary context="Settings section">
                 <ActiveComponent />

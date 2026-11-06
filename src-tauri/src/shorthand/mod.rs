@@ -9,5 +9,6 @@ pub mod dictation;
 pub mod mode;
 pub mod obsidian;
 pub mod overlay_error;
+pub mod overlay_fit;
 pub mod request_socket;
 pub mod telemetry;

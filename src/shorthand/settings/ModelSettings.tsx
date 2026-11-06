@@ -5,6 +5,9 @@ import { ModelSettingsCard } from "@/components/settings/general/ModelSettingsCa
 import { CustomWords } from "@/components/settings/CustomWords";
 import { FillerWordRemoval } from "@/components/settings/FillerWordRemoval";
 import { ChineseScriptSetting } from "@/components/settings/ChineseScript";
+import { PreferredLanguages } from "@/components/settings/PreferredLanguages";
+import { LanguageDetection } from "@/components/settings/LanguageDetection";
+import { LongFormChunking } from "@/components/settings/LongFormChunking";
 import { ModelUnloadTimeoutSetting } from "@/components/settings/ModelUnloadTimeout";
 import { AccelerationSelector } from "@/components/settings/AccelerationSelector";
 import { VadBackendSelector } from "@/components/settings/VadBackendSelector";
@@ -31,14 +34,19 @@ import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
  * nesting a group inside a group would put a heading above a heading.
  * `ModelSettingsCard` self-hides when the active model supports neither
  * language selection nor translation; that behaviour is untouched here.
+ *
+ * The catalog comes last: it is the long part, and the settings above it are
+ * what a user changes most, so they should not sit under a screenful of models.
  */
 export const ModelSettings: React.FC = () => {
   const { t } = useTranslation();
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-8">
-      <ModelsSettings />
       <ModelSettingsCard />
+      <Sheet title={t("settings.languages.title")}>
+        <PreferredLanguages descriptionMode="tooltip" grouped={true} />
+      </Sheet>
       <Sheet title={t("settings.model.groups.output")}>
         <CustomWords descriptionMode="inline" grouped={true} />
         <FillerWordRemoval descriptionMode="inline" grouped={true} />
@@ -47,8 +55,11 @@ export const ModelSettings: React.FC = () => {
           <ModelUnloadTimeoutSetting descriptionMode="tooltip" grouped={true} />
           <AccelerationSelector descriptionMode="tooltip" grouped={true} />
           <VadBackendSelector descriptionMode="tooltip" grouped={true} />
+          <LongFormChunking descriptionMode="tooltip" grouped={true} />
+          <LanguageDetection descriptionMode="tooltip" grouped={true} />
         </AdvancedOnly>
       </Sheet>
+      <ModelsSettings />
     </div>
   );
 };

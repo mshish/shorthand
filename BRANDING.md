@@ -311,6 +311,7 @@ The fork-owned implementation is in `src/shorthand/brand/`:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection                                                                                 |
 | `marks.css`             | The active-tab indicator and the wordmark's theme selection; all brand selectors                                                                 |
+| `utilities.css`         | Registers `--color-mid-gray` as a Tailwind colour (upstream dropped it); without it `border-mid-gray/*` and friends emit nothing                 |
 | `ShorthandMark.tsx`     | Four-path silhouette component, filled with `currentColor` — used by the icon generator's reference, not currently placed directly in any screen |
 | `ShorthandWordmark.tsx` | The delivered lockup as one raster, sized by the word's cap height                                                                               |
 | `logo-light.png`        | Generated: the approved lockup, trimmed and resized. Do not hand-edit — re-run the generator                                                     |
@@ -335,6 +336,10 @@ components and the fork’s values follow without conflict.
 - `package.json` and `bun.lock` carry the Fontsource dependencies.
 
 Upstream’s `HandyHand.tsx` and `HandyTextLogo.tsx` remain unused but present.
+`HandyMascot.tsx` and `shared/Mascot.tsx` are too, in effect: only the Try it
+screen renders the mascot, and the fork’s onboarding skips that step (see
+`STEP_ORDER` in `onboardingStore.ts`). Welcome and the file-drop overlay show
+the Shorthand lockup and mark instead.
 Deleting a file upstream still maintains turns every future upstream edit into
 a delete/modify conflict. The same rule leaves `src-tauri/icons/logo.png` in
 place: it is upstream’s waving hand, is referenced by nothing, and is absent

@@ -276,7 +276,8 @@ fn split_versioned_so(name: &str) -> Option<(&str, usize)> {
 /// The English "tray" and "transcript" sections (after that merge) define
 /// their struct fields. `transcript` is fork-only content — upstream carries
 /// no such section — so every field in `TranscriptStrings` today comes from
-/// `src/shorthand/locales/en.json`; `tray` remains upstream's.
+/// `src/shorthand/locales/en.json`; `tray` remains upstream's, plus every
+/// `errors.*Title` (notice titles), which the tray consumes as `<name>_title`.
 fn generate_tray_translations() {
     use std::collections::BTreeMap;
     use std::fs;
@@ -315,9 +316,10 @@ fn generate_tray_translations() {
     }
 
     // English-only casing preferences (src/shorthand/english-copy.json),
-    // reaching `en` alone — mirrors ENGLISH_COPY in branding.ts. None of
-    // today's entries fall under "tray." or "transcript.", but a future one
-    // should not require touching this generator.
+    // reaching `en` alone — mirrors ENGLISH_COPY in branding.ts. Entries under
+    // "tray." reach the tray strings (the notice titles' sentence case is one
+    // `tray.<name>Title` each, since the tray is built from `tray.*` and not
+    // from the `errors.*` overrides); none fall under "transcript." today.
     let english_copy: serde_json::Map<String, serde_json::Value> = {
         let content = fs::read_to_string(english_copy_path).unwrap();
         serde_json::from_str(&content).unwrap()
@@ -390,6 +392,12 @@ fn generate_tray_translations() {
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
+        // Notice titles (errors.<name>Title) join the tray strings.
+        if let Some(errors) = parsed.get("errors").and_then(|v| v.as_object()) {
+            for (key, title) in errors.iter().filter(|(key, _)| key.ends_with("Title")) {
+                tray.insert(key.clone(), title.clone());
+            }
+        }
         substitute_brand_in_map(&mut tray);
 
         let mut transcript = parsed

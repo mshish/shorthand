@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { notify } from "@/stores/noticeStore";
 import { commands, type DictationSettings } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { useModelStore } from "@/stores/modelStore";
@@ -78,14 +78,14 @@ export const DictationSystemAudioCapture: React.FC<
               "Failed to update dictation system audio capture:",
               result.error,
             );
-            toast.error(String(result.error));
+            notify({ title: String(result.error) });
           }
         } catch (error) {
           console.error(
             "Failed to update dictation system audio capture:",
             error,
           );
-          toast.error(String(error));
+          notify({ title: String(error) });
         } finally {
           await Promise.all([
             refreshSettings(),

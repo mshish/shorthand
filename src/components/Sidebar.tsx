@@ -6,7 +6,6 @@ import { AdvancedSwitch } from "@/shorthand/ui/AdvancedSwitch";
 import { useSettings } from "../hooks/useSettings";
 import { getVisibleSectionIds } from "@/shorthand/visibility";
 import { SHORTHAND_SECTIONS } from "@/shorthand/sections";
-import { DebugSettings } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -21,7 +20,8 @@ interface IconProps {
 interface SectionConfig {
   labelKey: string;
   icon: React.ComponentType<IconProps>;
-  component: React.ComponentType;
+  /** `null` when App renders the section itself (Debug, with its handlers). */
+  component: React.ComponentType | null;
   enabled: (settings: any) => boolean;
 }
 
@@ -45,7 +45,7 @@ export const SECTIONS_CONFIG = {
   debug: {
     labelKey: "sidebar.debug",
     icon: FlaskConical,
-    component: DebugSettings,
+    component: null,
     enabled: (settings) => settings?.debug_mode ?? false,
   },
 } as const satisfies Record<string, SectionConfig>;

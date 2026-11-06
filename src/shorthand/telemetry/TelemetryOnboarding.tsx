@@ -15,9 +15,10 @@ interface TelemetryOnboardingProps {
 
 /**
  * Fork-only first-run consent for crash reports and usage info. Shown to
- * new installs only, as the last onboarding step, after model selection.
- * Model selection (`select_model`) already stamps `onboarding_completed`
- * before this screen runs, so quitting here leaves telemetry unanswered
+ * new installs only, as the last onboarding step, after the onboarding flow.
+ * The flow's last screen calls `complete_onboarding`, which stamps
+ * `onboarding_completed` before this screen runs, so quitting here leaves
+ * telemetry unanswered
  * (`None`, treated as off) — the safe direction. Never asked (`null`/
  * `undefined`) pre-sets the switch on; an answer the user already gave,
  * through Settings, is shown rather than overridden. Nothing is sent until

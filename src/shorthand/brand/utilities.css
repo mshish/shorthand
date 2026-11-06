@@ -1,0 +1,20 @@
+/*
+ * Fork-only. Registers `--color-mid-gray` as a Tailwind colour, so the fork's
+ * `border-mid-gray/20`, `divide-mid-gray/15`, `ring-mid-gray/80`,
+ * `bg-mid-gray/10` and `text-mid-gray` produce CSS.
+ *
+ * Tailwind only generates a colour utility for a variable declared inside
+ * `@theme`. Upstream's `@theme inline` block in `src/App.css` used to include
+ * mid-gray; v0.10.0 dropped it when it moved to its own `line`/`ink` tokens.
+ * The fork's components (Sidebar, Sheet, Tabs, History's chips, the dictation
+ * hints) still use the utilities. With no utility, a `border`/`divide-y` has no
+ * colour class and Tailwind v4 falls back to `currentColor`, which drew every
+ * divider and outline in full-strength text colour.
+ *
+ * This stays out of `theme.css` because that file is also loaded by the overlay
+ * window, which never imports Tailwind and so has no `@theme`. The value is
+ * still owned by `theme.css`: this only publishes it to Tailwind.
+ */
+@theme inline {
+  --color-mid-gray: var(--color-mid-gray);
+}

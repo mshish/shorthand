@@ -55,9 +55,11 @@ export function useVisibleSection(settings: any) {
   // visible list), so SECTIONS_CONFIG[currentSection] is never actually
   // undefined at runtime -- the ?? below is a defensive fallback, not a
   // live path.
+  // Debug's component is null: App renders it itself, with its handlers.
   const ActiveComponent: ComponentType =
     SECTIONS_CONFIG[currentSection]?.component ??
-    SECTIONS_CONFIG[firstVisibleSection].component;
+    SECTIONS_CONFIG[firstVisibleSection].component ??
+    (() => null);
 
   return { currentSection, setCurrentSection, ActiveComponent };
 }

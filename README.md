@@ -6,7 +6,7 @@ Shorthand is AI-assisted note taking for meetings and spoken thinking. It listen
 - **Assisted notes:** Talk through an idea, plan, or rough draft and let Shorthand organize it as you go.
 - **Your notes stay yours:** The plugin updates only its marked section. Anything you write outside that section stays untouched.
 
-The desktop app also includes all of [Handy](https://github.com/cjpais/Handy)'s local transcription and dictation features, including keyboard-shortcut dictation, local model choices, history, and audio controls.
+The desktop app also includes all of [Handy](https://github.com/cjpais/Handy)'s local transcription and dictation features, including keyboard-shortcut dictation, local model choices, history, and audio controls. That includes transcribing an audio or video file dropped onto the window, and the optional `hooks/transcription` script that rewrites text just before it is pasted ([HANDY.md](HANDY.md) describes it).
 
 ## Use your existing AI subscription
 

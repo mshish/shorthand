@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { notify } from "@/stores/noticeStore";
 import { useSettings } from "../../../hooks/useSettings";
 import {
   commands,
@@ -164,7 +164,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
       try {
         await updatePostProcessApiKey(selectedProviderId, trimmed);
       } catch (error) {
-        toast.error(String(error));
+        notify({ title: String(error) });
         // Re-thrown so the field (which awaits this call) knows the write
         // failed and does not clear what the user just typed.
         throw error;
@@ -177,7 +177,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     try {
       await updatePostProcessApiKey(selectedProviderId, "");
     } catch (error) {
-      toast.error(String(error));
+      notify({ title: String(error) });
     }
   }, [selectedProviderId, updatePostProcessApiKey]);
 

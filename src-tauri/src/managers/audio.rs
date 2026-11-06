@@ -13,6 +13,7 @@ use crate::audio_toolkit::{
 };
 use crate::helpers::clamshell;
 use crate::managers::transcription::StreamRouter;
+use crate::notices::NoticeCode;
 use crate::settings::{get_settings, write_settings, AppSettings, VadBackend};
 use crate::utils;
 #[cfg(target_os = "macos")]
@@ -326,18 +327,17 @@ impl OpenMicrophone {
     }
 }
 
-/// The `recording-error` event's `error_type` for a recording that couldn't
-/// start.
-pub fn recording_error_type(error: &anyhow::Error) -> &'static str {
+/// The notice for a recording that couldn't start.
+pub fn recording_notice_code(error: &anyhow::Error) -> NoticeCode {
     match error
         .downcast_ref::<handy_recorder::Error>()
         .map(handy_recorder::Error::kind)
     {
-        Some(ErrorKind::PermissionDenied) => "microphone_permission_denied",
+        Some(ErrorKind::PermissionDenied) => NoticeCode::MicPermissionDenied,
         // A missing selected microphone falls back to the default, so this
         // means there is no input device at all.
-        Some(ErrorKind::DeviceUnavailable) => "no_input_device",
-        _ => "unknown",
+        Some(ErrorKind::DeviceUnavailable) => NoticeCode::NoMicrophone,
+        _ => NoticeCode::RecordingFailed,
     }
 }
 
@@ -371,27 +371,36 @@ pub fn create_detector(
     })
 }
 
-fn create_capture_vad(
+/// A detector for `backend` with a recording's smoothing (pre-roll, onset,
+/// offline hangover): what keeps speech in a recording, and what cuts the
+/// silence out of other audio the same way.
+pub fn create_smoothed_detector(
     backend: VadBackend,
     app_handle: &tauri::AppHandle,
-) -> Result<CaptureVad, anyhow::Error> {
+) -> Result<SmoothedVad, anyhow::Error> {
     let detector: Box<dyn VoiceActivityDetector> = create_detector(backend, app_handle)?;
 
     // Earshot uses 16 ms frames while Silero uses 32 ms. Convert the existing
     // time-based capture profile to each detector's frame size so selecting a
     // backend does not shorten pre-roll, onset, or post-speech audio.
     let frame_samples = detector.frame_samples();
-    let prefill_frames = frames_for_duration_ms(VAD_PREFILL_MS, frame_samples);
+    Ok(SmoothedVad::new(
+        detector,
+        frames_for_duration_ms(VAD_PREFILL_MS, frame_samples),
+        frames_for_duration_ms(VAD_OFFLINE_HANGOVER_MS, frame_samples),
+        frames_for_duration_ms(VAD_ONSET_MS, frame_samples),
+    ))
+}
+
+fn create_capture_vad(
+    backend: VadBackend,
+    app_handle: &tauri::AppHandle,
+) -> Result<CaptureVad, anyhow::Error> {
+    let smoothed_vad = create_smoothed_detector(backend, app_handle)?;
+    let frame_samples = smoothed_vad.frame_samples();
     let offline_hangover_frames = frames_for_duration_ms(VAD_OFFLINE_HANGOVER_MS, frame_samples);
     let streaming_hangover_frames =
         frames_for_duration_ms(VAD_STREAMING_HANGOVER_MS, frame_samples);
-    let onset_frames = frames_for_duration_ms(VAD_ONSET_MS, frame_samples);
-    let smoothed_vad = SmoothedVad::new(
-        detector,
-        prefill_frames,
-        offline_hangover_frames,
-        onset_frames,
-    );
 
     info!(
         "Initialized {:?} VAD backend ({} samples/frame)",
@@ -450,12 +459,14 @@ fn default_input_id() -> Option<String> {
 fn microphone_config(
     device: Option<String>,
     channel: Option<u16>,
+    take_headset: bool,
     frames_per_chunk: usize,
 ) -> RecorderConfig {
     RecorderConfig {
         device,
         channels: channel.map_or(Channels::MixToMono, Channels::Only),
         frames_per_chunk: Some(frames_per_chunk),
+        take_headset,
         ..RecorderConfig::speech()
     }
 }
@@ -476,12 +487,23 @@ fn open_microphone(config: RecorderConfig) -> Result<OpenMicrophone, handy_recor
 fn open_microphone_on_channel(
     device: Option<String>,
     channel: Option<u16>,
+    take_headset: bool,
     frames_per_chunk: usize,
 ) -> Result<OpenMicrophone, handy_recorder::Error> {
-    match open_microphone(microphone_config(device.clone(), channel, frames_per_chunk)) {
+    match open_microphone(microphone_config(
+        device.clone(),
+        channel,
+        take_headset,
+        frames_per_chunk,
+    )) {
         Err(error) if error.kind() == ErrorKind::InvalidChannel => {
             warn!("{error}; averaging all input channels instead");
-            open_microphone(microphone_config(device, None, frames_per_chunk))
+            open_microphone(microphone_config(
+                device,
+                None,
+                take_headset,
+                frames_per_chunk,
+            ))
         }
         result => result,
     }
@@ -520,6 +542,9 @@ pub struct AudioRecordingManager {
     /// Held here rather than read from settings, which are persisted only
     /// after a channel change reopens successfully.
     selected_channel: Arc<Mutex<Option<u16>>>,
+    /// Hold a Bluetooth headset on this Mac while recording. Held here for
+    /// the same reason as `selected_channel`.
+    airpods_mode: Arc<AtomicBool>,
     /// Spectrum levels for the overlay.
     on_levels: LevelCallback,
     /// VAD-passed frames for live streaming, via a shared `StreamRouter`
@@ -566,6 +591,8 @@ pub struct AudioRecordingManager {
     /// Whether the currently open stream has a live system-audio lane.
     system_audio_active: Arc<AtomicBool>,
     loopback_open_outcome: Arc<Mutex<LoopbackOpenOutcome>>,
+    /// The last recording was all-zero samples, not just audio without speech.
+    last_input_silent: Arc<AtomicBool>,
 }
 
 impl AudioRecordingManager {
@@ -597,6 +624,7 @@ impl AudioRecordingManager {
             recorder: Arc::new(Mutex::new(None)),
             vad: Arc::new(Mutex::new(VadSlot::Unloaded)),
             selected_channel: Arc::new(Mutex::new(settings.selected_channel)),
+            airpods_mode: Arc::new(AtomicBool::new(settings.airpods_mode)),
             on_levels,
             on_audio,
             is_open: Arc::new(Mutex::new(false)),
@@ -614,6 +642,7 @@ impl AudioRecordingManager {
             active_system_audio: Arc::new(Mutex::new(None)),
             system_audio_active: Arc::new(AtomicBool::new(false)),
             loopback_open_outcome: Arc::new(Mutex::new(LoopbackOpenOutcome::NotRequested)),
+            last_input_silent: Arc::new(AtomicBool::new(false)),
         };
 
         // Always-on?  Open immediately.
@@ -1036,9 +1065,10 @@ impl AudioRecordingManager {
         let vad_elapsed = vad_started.elapsed();
 
         let channel = *self.selected_channel.lock().unwrap();
+        let take_headset = self.airpods_mode.load(Ordering::Acquire);
         let open_started = Instant::now();
         let open = |device: Option<String>| {
-            open_microphone_on_channel(device, channel, frames_per_chunk)
+            open_microphone_on_channel(device, channel, take_headset, frames_per_chunk)
                 .map_err(anyhow::Error::new)
         };
         // Debug builds only: SHORTHAND_DEBUG_FAIL_DEFAULT_MIC=<any value but
@@ -1280,11 +1310,14 @@ impl AudioRecordingManager {
                 }
                 let captured = stopped.sink.finish();
                 self.return_vad(captured.vad);
+                self.last_input_silent
+                    .store(captured.input_silent, Ordering::Release);
                 captured.samples
             }
             Err(e) => {
                 // The recording and its detector are lost with the sink.
                 error!("Failed to stop recording: {e}");
+                self.last_input_silent.store(false, Ordering::Release);
                 if e.kind() != ErrorKind::NotRecording {
                     microphone.failed.store(true, Ordering::Release);
                 }
@@ -1534,6 +1567,31 @@ impl AudioRecordingManager {
         Ok(())
     }
 
+    /// Takes effect on the next open, so a warm stream is reopened.
+    pub fn update_airpods_mode(&self, enabled: bool) -> Result<(), anyhow::Error> {
+        let state = self.state.lock().unwrap();
+        if !matches!(*state, RecordingState::Idle) {
+            return Err(anyhow::anyhow!(
+                "Cannot change AirPods mode while recording"
+            ));
+        }
+
+        let was_open = *self.is_open.lock().unwrap();
+        if was_open {
+            self.close_generation.fetch_add(1, Ordering::SeqCst);
+            self.stop_microphone_stream();
+        }
+        let previous = self.airpods_mode.swap(enabled, Ordering::AcqRel);
+        if was_open {
+            if let Err(error) = self.start_microphone_stream() {
+                self.airpods_mode.store(previous, Ordering::Release);
+                return Err(error);
+            }
+        }
+        drop(state);
+        Ok(())
+    }
+
     /// Aligns an already-open stream with the capture mode selected for the
     /// next action. Meeting and Dictation each own an enabled flag, whereas
     /// the physical loopback device is shared. Reopening only when the
@@ -1628,6 +1686,11 @@ impl AudioRecordingManager {
         self.cancel_generation.load(Ordering::Acquire)
     }
 
+    /// Whether the last stopped recording's device sent only digital silence.
+    pub fn last_input_silent(&self) -> bool {
+        self.last_input_silent.load(Ordering::Acquire)
+    }
+
     pub fn was_cancelled_since(&self, generation: u64) -> bool {
         self.cancel_generation.load(Ordering::Acquire) != generation
     }
@@ -1673,6 +1736,7 @@ impl AudioRecordingManager {
                     Some(microphone) => self.collect_recording(microphone),
                     None => {
                         error!("Recorder not available");
+                        self.last_input_silent.store(false, Ordering::Release);
                         Vec::new()
                     }
                 };
@@ -1791,27 +1855,33 @@ mod tests {
                 .map(handy_recorder::Error::kind),
             Some(ErrorKind::UnsupportedFormat)
         );
-        assert_eq!(recording_error_type(&wrapped), "unknown");
+        assert_eq!(recording_notice_code(&wrapped), NoticeCode::RecordingFailed);
     }
 
     #[test]
     fn errors_from_outside_the_recorder_are_unknown() {
         assert_eq!(
-            recording_error_type(&anyhow::anyhow!("Already recording")),
-            "unknown"
+            recording_notice_code(&anyhow::anyhow!("Already recording")),
+            NoticeCode::RecordingFailed
         );
     }
 
     #[test]
     fn microphone_config_maps_the_selected_channel() {
-        let all = microphone_config(None, None, 480);
+        let all = microphone_config(None, None, false, 480);
         assert_eq!(all.channels, Channels::MixToMono);
         assert_eq!(all.sample_rate, Some(16_000));
         assert_eq!(all.frames_per_chunk, Some(480));
 
-        let second = microphone_config(Some("id".into()), Some(1), 256);
+        let second = microphone_config(Some("id".into()), Some(1), false, 256);
         assert_eq!(second.channels, Channels::Only(1));
         assert_eq!(second.device.as_deref(), Some("id"));
         assert_eq!(second.frames_per_chunk, Some(256));
+    }
+
+    #[test]
+    fn microphone_config_takes_the_headset_only_in_airpods_mode() {
+        assert!(!microphone_config(None, None, false, 480).take_headset);
+        assert!(microphone_config(None, None, true, 480).take_headset);
     }
 }

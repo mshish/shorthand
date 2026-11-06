@@ -8,14 +8,17 @@ const STUB_MODEL_NAME = "Stub Model";
  * Vite, with a fresh profile (`onboarding_completed: false`) on a platform
  * with no permission step, and records every command the UI invokes.
  *
- * The consent step is now the last onboarding step (after model selection),
- * so the stub also carries one already-downloaded, recommended model so the
- * model step can be driven to completion without a real download.
+ * The consent step comes after the onboarding flow, so the stub seeds the
+ * flow's saved progress on its last screen (see `completeOnboardingFlow`).
  */
 async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
   await page.setViewportSize({ width: 680, height: 570 });
   await page.addInitScript(
     ({ telemetryEnabled, modelId, modelName }) => {
+      localStorage.setItem(
+        "handy.onboarding",
+        JSON.stringify({ step: "done", downloadId: modelId }),
+      );
       const calls: Array<{ cmd: string; args: unknown }> = [];
       const settings: Record<string, unknown> = {
         onboarding_completed: false,
@@ -104,6 +107,7 @@ async function bootFreshProfile(page: Page, telemetryEnabled?: boolean) {
               return null;
             case "get_audio_devices":
             case "get_output_devices":
+            case "get_active_notices":
               return [];
             default:
               return null;
@@ -125,12 +129,15 @@ async function recordedCalls(page: Page) {
   );
 }
 
-/** Drives the model step to completion by picking the stubbed model. */
-async function completeModelStep(page: Page) {
-  await page
-    .locator('[role="button"]')
-    .filter({ hasText: STUB_MODEL_NAME })
-    .click();
+/**
+ * Drives onboarding to its end by opening the flow on its last screen, the one
+ * a relaunch resumes on (progress persists in localStorage), and pressing Done.
+ * The consent step follows the flow, so this reaches it without stepping through
+ * the language, model and shortcut screens, which have their own behaviour and
+ * need a real catalogue and download to exercise.
+ */
+async function completeOnboardingFlow(page: Page) {
+  await page.getByRole("button", { name: "Done", exact: true }).click();
 }
 
 test.describe("telemetry consent step", () => {
@@ -138,7 +145,7 @@ test.describe("telemetry consent step", () => {
     page,
   }) => {
     await bootFreshProfile(page);
-    await completeModelStep(page);
+    await completeOnboardingFlow(page);
     const cont = page.getByTestId("telemetry-continue");
     await expect(cont).toBeVisible();
     expect(
@@ -155,7 +162,7 @@ test.describe("telemetry consent step", () => {
     page,
   }) => {
     await bootFreshProfile(page);
-    await completeModelStep(page);
+    await completeOnboardingFlow(page);
     const cont = page.getByTestId("telemetry-continue");
     await expect(cont).toBeVisible();
     await expect(page.getByRole("checkbox")).toBeChecked();
@@ -169,7 +176,7 @@ test.describe("telemetry consent step", () => {
 
   test("switching off before Continue writes false", async ({ page }) => {
     await bootFreshProfile(page);
-    await completeModelStep(page);
+    await completeOnboardingFlow(page);
     // The input is visually `sr-only`; the styled switch `<div>` its sibling
     // renders on top of it in the hit-test, but both sit inside the same
     // `<label>`, so a forced click still reaches the input via native label
@@ -185,7 +192,7 @@ test.describe("telemetry consent step", () => {
 
   test("a stored false shows the switch off", async ({ page }) => {
     await bootFreshProfile(page, false);
-    await completeModelStep(page);
+    await completeOnboardingFlow(page);
     await expect(page.getByRole("checkbox")).not.toBeChecked();
   });
 });
