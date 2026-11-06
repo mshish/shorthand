@@ -1,88 +1,66 @@
-import { useMemo } from "react";
-import type { ModelInfo } from "@/bindings";
-import { useSettings } from "@/hooks/useSettings";
+import { CURATED_ASR, picksFor, type CatalogModel } from "@/lib/models/catalog";
+import type { DownloadState } from "@/lib/models/downloadState";
 
 /**
- * Single source of truth for catalog-model visibility.
+ * Which catalog models Shorthand offers.
  *
  * Shorthand's pipeline consumes `--follow-stream json` and needs `partial`
  * events; a non-streaming model emits only one final transcript, so live
- * enhancement never fires — see `shorthand-core/docs/DESIGN.md`. The catalog
- * ships far more non-streaming models than streaming ones, and a user who
- * onboards onto one gets a product that silently does nothing. This module
- * hides those models from the two pickers that show the full/undownloaded
- * catalog, riding the same `show_all_settings` escape hatch documented in
- * `visibility.ts` rather than adding a new setting: "hide models Shorthand
- * can't use" is the same simplified-vs-everything question about a
+ * notes never appear — see `shorthand-core/docs/DESIGN.md`. The catalog ships
+ * far more non-streaming models than streaming ones, and a user who onboards
+ * onto one gets a product that silently does nothing. So the model table hides
+ * those models, and the onboarding picks prefer streaming ones. The
+ * `show_all_settings` escape hatch documented in `visibility.ts` shows the
+ * hidden models again, rather than adding a new setting: "hide models
+ * Shorthand can't use" is the same simplified-vs-everything question about a
  * different list.
- *
- * Both pickers (`ModelsSettings.tsx` and the onboarding `Model` screen) use
- * `isTableModelVisible`; `useVisibleModels` has no remaining callers.
  */
 
-/**
- * Whether a catalog model should be shown.
- *
- * When `showAllSettings` is true, everything is shown — that's the hatch
- * upstream users and power users reach for.
- *
- * Otherwise, a model is hidden unless it streams, or is already on disk,
- * mid-download, or custom. That exemption is not about letting users keep
- * models they already have — it's forced by how `supports_streaming` can be
- * populated. Catalog-listed models and their alternate quants get their caps
- * from the catalog descriptor (`render_model_info` / `to_model_info_for_file`
- * reading `self.caps.supports_streaming`, `managers/model.rs:249`), and local
- * discovery deliberately skips the header probe for anything catalog-listed
- * because the catalog is authoritative (`model.rs:1765-1768`) — so a
- * catalog match's flag is never an unprobed guess. The genuinely uncertain
- * case is a non-catalog GGUF found in the local HF cache: its `local_caps`
- * reads `probe.supports_streaming.unwrap_or(false)` (`model.rs:360-364`), so
- * an absent `stt.capability.streaming` header key reads as non-streaming
- * until the model has been loaded once and reconciled by
- * `set_runtime_capabilities`. `false` therefore conflates "confirmed
- * non-streaming" with "unknown until loaded" for that one path — a model
- * already on disk, or in the middle of downloading, must never be hidden by
- * a flag we may be wrong about, or it becomes unloadable and so never gets
- * corrected.
- */
-export function isModelVisible(
-  model: ModelInfo,
-  showAllSettings: boolean,
-): boolean {
-  if (showAllSettings) {
-    return true;
-  }
-
-  return (
-    model.supports_streaming ||
-    model.is_downloaded ||
-    model.is_downloading ||
-    model.is_custom
-  );
-}
+/** Whether a model is on disk or being fetched, which are the states that count as held. */
+export const holdsModel = (state: DownloadState): boolean =>
+  state.state === "ready" ||
+  state.state === "downloading" ||
+  state.state === "checking";
 
 /**
- * `isModelVisible` for the table's row shape. Only rows not on disk are passed
- * in, so "streams" is the whole test.
+ * Whether the model table shows a model.
+ *
+ * With `showAllSettings` everything shows. Otherwise a model shows if it
+ * streams, or if the user already holds it (`held`: on disk or downloading).
+ *
+ * The held exemption is not about keeping models the user has. A model's
+ * `supports_streaming` is read from the catalog for catalog-listed models, but
+ * for a non-catalog GGUF found in the local Hugging Face cache an absent
+ * `stt.capability.streaming` header key reads as `false` until the model has
+ * been loaded once (`managers/model.rs`, `local_caps`). So `false` can mean
+ * "unknown until loaded", and a model on disk or mid-download must never be
+ * hidden by a flag that may be wrong, or it can never be loaded and corrected.
  */
 export function isTableModelVisible(
   entry: { streaming: boolean },
   showAllSettings: boolean,
+  held: boolean,
 ): boolean {
-  return showAllSettings || entry.streaming;
+  return showAllSettings || entry.streaming || held;
 }
 
 /**
- * Filters a model list down to the ones `isModelVisible` allows, reactive to
- * `show_all_settings` so toggling the hatch in About updates open pickers
- * without a restart.
+ * The model table's picks for the languages: streaming models only, so every
+ * pick can write live notes. For a language no streaming model covers, falls
+ * back to the catalog's unfiltered picks and reports `liveNotes: false` so the
+ * screen can warn that live notes won't appear with that model.
+ *
+ * `offered` limits both to models the app can download; `streams` says
+ * whether the app's copy of a model streams.
  */
-export function useVisibleModels(models: ModelInfo[]): ModelInfo[] {
-  const { getSetting } = useSettings();
-  const showAllSettings = getSetting("show_all_settings") ?? false;
-
-  return useMemo(
-    () => models.filter((model) => isModelVisible(model, showAllSettings)),
-    [models, showAllSettings],
-  );
+export function shorthandPicksFor(
+  languages: string[],
+  offered: (model: CatalogModel) => boolean,
+  streams: (model: CatalogModel) => boolean,
+) {
+  const pool = CURATED_ASR.filter((m) => offered(m) && streams(m));
+  const streaming = pool.length ? picksFor(languages, offered, pool) : [];
+  if (streaming.length) return { picks: streaming, liveNotes: true };
+  const picks = picksFor(languages, offered);
+  return { picks, liveNotes: picks.length === 0 };
 }

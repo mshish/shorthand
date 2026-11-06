@@ -84,6 +84,8 @@ interface ModelTableProps {
   /** Sections in order; the caller drops empty ones. */
   sections: TableSection[];
   renderRow: (entry: TableModel) => React.ReactNode;
+  /** Fork: said under the "nothing matches" line, for matches that are hidden. */
+  emptyHint?: string;
   /** Head for the delete/stop column; omit for no such column. */
   actionsHead?: React.ReactNode;
   /** After the last section, under a rule. */
@@ -103,6 +105,7 @@ export const ModelTable: React.FC<ModelTableProps> = ({
   setFilters,
   sections,
   renderRow,
+  emptyHint,
   actionsHead,
   footer,
   onEscape,
@@ -350,6 +353,9 @@ export const ModelTable: React.FC<ModelTableProps> = ({
                       query: filters.query.trim(),
                     })
                   : t("modelTable.noFilterMatch")}
+                {emptyHint && (
+                  <p className="mt-[6px] text-ink-3">{emptyHint}</p>
+                )}
               </div>
             )}
             {!empty &&

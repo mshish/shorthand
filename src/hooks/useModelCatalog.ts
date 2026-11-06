@@ -4,11 +4,11 @@ import { useModelStore } from "@/stores/modelStore";
 import {
   CURATED_ASR,
   groupModels,
-  picksFor,
   type CatalogModel,
 } from "@/lib/models/catalog";
 import { makeGrading } from "@/lib/models/grading";
 import { repoIdOf } from "@/lib/models/retired";
+import { shorthandPicksFor } from "@/shorthand/modelVisibility";
 import { useMachineTier } from "./useMachineTier";
 
 /**
@@ -43,8 +43,15 @@ export const useModelCatalog = (languages: string[]) => {
     [langsKey],
   );
 
-  const picks = useMemo(
-    () => picksFor(langs, (m) => infoByRepo.has(m.repository)),
+  // Fork: prefer streaming models, which are the only ones that write live
+  // notes (see shorthand/modelVisibility.ts).
+  const { picks, liveNotes } = useMemo(
+    () =>
+      shorthandPicksFor(
+        langs,
+        (m) => infoByRepo.has(m.repository),
+        (m) => !!infoByRepo.get(m.repository)?.supports_streaming,
+      ),
     [langs, infoByRepo],
   );
 
@@ -62,5 +69,14 @@ export const useModelCatalog = (languages: string[]) => {
   const catalogFor = (infoId: string): CatalogModel | undefined =>
     offered.find((m) => infoByRepo.get(m.repository)?.id === infoId);
 
-  return { tier, offered, picks, groups, grading, infoFor, catalogFor };
+  return {
+    tier,
+    offered,
+    picks,
+    liveNotes,
+    groups,
+    grading,
+    infoFor,
+    catalogFor,
+  };
 };

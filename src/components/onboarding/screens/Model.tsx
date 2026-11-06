@@ -33,7 +33,7 @@ import {
 } from "../../shared/modelTable/ModelTableRow";
 import { formatModelSize } from "@/lib/utils/format";
 import { useSettings } from "@/hooks/useSettings";
-import { isTableModelVisible } from "@/shorthand/modelVisibility";
+import { holdsModel, isTableModelVisible } from "@/shorthand/modelVisibility";
 import { OnboardingShell, ScreenHeader, ScreenMain } from "../OnboardingShell";
 import { useOnboardingStore } from "../onboardingStore";
 import { useDownloadWords } from "../DownloadStatus";
@@ -88,12 +88,12 @@ export const Model: React.FC<ModelProps> = ({
   const speedWords = useSpeedWords();
   const { modelId, extraModelId, downloadId, set } = useOnboardingStore();
   const [showAll, setShowAll] = useState(false);
-  const { filters, setFilters, matches } = useModelFilters();
+  const { filters, setFilters, matches, searching } = useModelFilters();
   const showAllSettings =
     useSettings().getSetting("show_all_settings") ?? false;
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const { picks, groups, offered, grading } = models;
+  const { picks, groups, offered, grading, liveNotes } = models;
   const langs = grading.langs;
   const dense = langs.length > 5;
   // Shown regardless of settings: they're capabilities, as on the Models page.
@@ -517,6 +517,25 @@ export const Model: React.FC<ModelProps> = ({
   const title = <span data-vt="mf-title">{t("onboarding.model.title")}</span>;
   const sub = <span data-vt="mf-sub">{t("onboarding.model.subtitle")}</span>;
 
+  /* ---------------- which models show ---------------- */
+
+  // Fork: the full list hides models that can't stream unless the
+  // show-all-settings hatch is on, except ones already on disk or downloading.
+  // The three picks above are never filtered.
+  const isVisible = (e: TableModel) =>
+    isTableModelVisible(
+      e,
+      showAllSettings,
+      holdsModel(models.downloadState(e.model)),
+    );
+  const visibleOthers = (rows: ModelRow[]) =>
+    entriesFor(rows).filter(isVisible);
+  // What the full list holds, so "Show all N" is the rows it will show.
+  const shownCount =
+    entriesFor(groups.picks).length +
+    visibleOthers(groups.others).length +
+    visibleOthers(groups.partial).length;
+
   /* ---------------- the picks ---------------- */
 
   if (!showAll) {
@@ -553,12 +572,17 @@ export const Model: React.FC<ModelProps> = ({
           >
             {items}
           </div>
+          {!liveNotes && (
+            <p role="status" className="mt-[8px] text-small text-ink-2">
+              {t("onboarding.model.noLiveNotes")}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => open()}
             className="mt-[8px] flex h-[38px] flex-none cursor-pointer items-center gap-[8px] self-stretch rounded-card border-[1.5px] border-dashed border-line-strong px-[20px] text-start text-small font-semibold text-ink-2 hover:border-solid hover:bg-wash hover:text-text"
           >
-            {t("onboarding.model.showAll", { count: models.offered.length })}
+            {t("onboarding.model.showAll", { count: shownCount })}
             <Chevron />
           </button>
         </ScreenMain>
@@ -569,10 +593,14 @@ export const Model: React.FC<ModelProps> = ({
   /* ---------------- every model ---------------- */
 
   const kept = (rows: ModelRow[]) => entriesFor(rows).filter(matches);
-  // Fork: the full list hides models that can't stream unless the
-  // show-all-settings hatch is on. The three picks above are never filtered.
-  const keptVisible = (rows: ModelRow[]) =>
-    kept(rows).filter((e) => isTableModelVisible(e, showAllSettings));
+  const keptVisible = (rows: ModelRow[]) => kept(rows).filter(isVisible);
+  // A search that only matches hidden models says where they went.
+  const hiddenMatch =
+    searching &&
+    !showAllSettings &&
+    [...groups.others, ...groups.partial].some((row) =>
+      entriesFor([row]).some((e) => !isVisible(e) && matches(e)),
+    );
   // Picks, then the rest by value; models missing a language last.
   const sections: TableSection[] = [
     {
@@ -633,6 +661,7 @@ export const Model: React.FC<ModelProps> = ({
           setFilters={setFilters}
           sections={sections}
           renderRow={tableRow}
+          emptyHint={hiddenMatch ? t("settings.models.hiddenMatch") : undefined}
           onEscape={close}
           focusOnMount
         />

@@ -93,13 +93,19 @@ const PACKAGE_ROLES = [
   ["accurate", "accurate"],
 ] as const;
 
-/** The package's picks for these languages, one per model, limited to `offered`. */
+/**
+ * The package's picks for these languages, one per model, limited to `offered`.
+ * `pool` recommends from those models instead of every curated one.
+ */
 export const picksFor = (
   languages: string[],
   offered: (model: CatalogModel) => boolean,
+  pool?: readonly CatalogModel[],
 ): ModelPick[] =>
-  catalog
-    .recommend(languages)
+  (pool
+    ? catalog.recommendModels(pool, languages)
+    : catalog.recommend(languages)
+  )
     .filter((r) => offered(r.model))
     .map((r) => {
       const role = PACKAGE_ROLES.find(([p]) => r.roles.includes(p))?.[1];

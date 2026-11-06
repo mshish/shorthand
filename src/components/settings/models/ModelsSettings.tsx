@@ -14,7 +14,8 @@ import { ModelRow } from "./ModelRow";
 import { Legend } from "./Legend";
 import { useModelEntries } from "./modelEntries";
 import { useSettings } from "@/hooks/useSettings";
-import { isTableModelVisible } from "@/shorthand/modelVisibility";
+import { downloadStateOf } from "@/lib/models/downloadState";
+import { holdsModel, isTableModelVisible } from "@/shorthand/modelVisibility";
 
 /** Past this many models on disk, the rest fold under "Show N more". */
 const YOURS_LIMIT = 5;
@@ -57,8 +58,20 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
   // show-all-settings hatch is on (see shorthand/modelVisibility.ts).
   const showAllSettings =
     useSettings().getSetting("show_all_settings") ?? false;
+  const sources = {
+    models: useModelStore((s) => s.models),
+    downloadingModels: useModelStore((s) => s.downloadingModels),
+    verifyingModels: useModelStore((s) => s.verifyingModels),
+    downloadProgress: useModelStore((s) => s.downloadProgress),
+  };
   const visible = (xs: typeof allLists.yours) =>
-    xs.filter((e) => isTableModelVisible(e, showAllSettings));
+    xs.filter((e) =>
+      isTableModelVisible(
+        e,
+        showAllSettings,
+        holdsModel(downloadStateOf(sources, e.id)),
+      ),
+    );
   const lists = {
     yours: allLists.yours,
     fits: visible(allLists.fits),
@@ -79,6 +92,14 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
   }
 
   const keep = (xs: typeof lists.yours) => xs.filter(matches);
+  // A search that finds nothing, but would find models hidden for not
+  // streaming: say where they went rather than "no match".
+  const hiddenMatch =
+    searching &&
+    !showAllSettings &&
+    [allLists.fits, allLists.partial, allLists.untested].some((xs) =>
+      xs.some((e) => !visible([e]).length && matches(e)),
+    );
   const moreButton = !searching && lists.yours.length > YOURS_LIMIT && (
     <button
       type="button"
@@ -177,6 +198,7 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
           (s) => s.rows.length || (s.key === "yours" && !searching),
         )}
         renderRow={(e) => <ModelRow key={e.id} entry={e} />}
+        emptyHint={hiddenMatch ? t("settings.models.hiddenMatch") : undefined}
         actionsHead={<Legend tier={facts.tier} />}
         footer={
           !searching &&
