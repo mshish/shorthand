@@ -44,3 +44,4 @@
 
 # SVG is text and benefits from normalisation, so it is deliberately not listed
 # above — it is XML, and diffs of it are worth reading.
+src-tauri/src/catalog/catalog.json -text

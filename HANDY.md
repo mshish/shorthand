@@ -155,6 +155,25 @@ handy --follow-stream text   # Plain `me: `/`them: ` text as it commits
 
 The flags above control a running Shorthand. This one reads from it: you get transcript events until you disconnect, and Shorthand carries on regardless. **Follow live transcript output** under Advanced controls it: on by default for Meetings and Assisted notes, off for Dictation. [FOLLOW_STREAM.md](FOLLOW_STREAM.md) has the protocol.
 
+### Transcription hook
+
+Advanced users on macOS and Linux can rewrite text right before Handy pastes it. Put an executable at `hooks/transcription` in Handy's app data folder (`~/Library/Application Support/com.pais.handy/` on macOS, `~/.local/share/com.pais.handy/` on Linux). Handy writes the text to its stdin, after any LLM post-processing, and pastes its stdout. One trailing newline is removed, and empty output pastes nothing. If the hook fails or runs longer than 30 seconds, the original text is pasted.
+
+The hook doesn't get your shell's `PATH`: on macOS, Handy started from the Dock or Finder only sees `/usr/bin:/bin:/usr/sbin:/sbin`. Use absolute paths for anything else, such as `/opt/homebrew/bin/opencc`.
+
+Example that prefixes `#` when Terminal is the frontmost app (macOS):
+
+```bash
+mkdir -p ~/Library/Application\ Support/com.pais.handy/hooks
+cd ~/Library/Application\ Support/com.pais.handy/hooks
+cat > transcription << 'EOF'
+#!/bin/bash
+app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
+if [ "$app" = "Terminal" ]; then echo "# $(cat)"; else cat; fi
+EOF
+chmod +x transcription
+```
+
 ## Known Issues & Current Limitations
 
 This project is actively being developed and has some [known issues](https://github.com/cjpais/Handy/issues). We believe in transparency about the current state:

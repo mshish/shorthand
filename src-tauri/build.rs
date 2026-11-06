@@ -276,7 +276,8 @@ fn split_versioned_so(name: &str) -> Option<(&str, usize)> {
 /// The English "tray" and "transcript" sections (after that merge) define
 /// their struct fields. `transcript` is fork-only content — upstream carries
 /// no such section — so every field in `TranscriptStrings` today comes from
-/// `src/shorthand/locales/en.json`; `tray` remains upstream's.
+/// `src/shorthand/locales/en.json`; `tray` remains upstream's, plus every
+/// `errors.*Title` (notice titles), which the tray consumes as `<name>_title`.
 fn generate_tray_translations() {
     use std::collections::BTreeMap;
     use std::fs;
@@ -390,6 +391,12 @@ fn generate_tray_translations() {
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
+        // Notice titles (errors.<name>Title) join the tray strings.
+        if let Some(errors) = parsed.get("errors").and_then(|v| v.as_object()) {
+            for (key, title) in errors.iter().filter(|(key, _)| key.ends_with("Title")) {
+                tray.insert(key.clone(), title.clone());
+            }
+        }
         substitute_brand_in_map(&mut tray);
 
         let mut transcript = parsed

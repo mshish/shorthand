@@ -19,6 +19,7 @@ use super::{post_process_transcription_text, TranscriptionManager};
 use crate::audio_toolkit::OutputLanguageEvidence;
 use crate::managers::model::ModelManager;
 use crate::settings::AppSettings;
+use crate::language_detection::LanguageDecision;
 
 const STREAM_TURN_GAP: Duration = Duration::from_millis(1500);
 const SUBSTANTIAL_TURN_CHARS: usize = 20;
@@ -258,6 +259,8 @@ pub struct FinalizedStreamResult {
     /// Custom words went to the model as vocabulary, so fuzzy correction is
     /// skipped for this lane's turns as it was for its whole text.
     pub(super) custom_words_prompted: bool,
+    /// The language it ran in and how that was chosen, for the history row.
+    pub language: Option<LanguageDecision>,
 }
 
 impl FinalizedStreamResult {
@@ -508,6 +511,7 @@ mod tests {
             output_language,
             supported_languages,
             custom_words_prompted: false,
+            language: None,
         }
     }
 

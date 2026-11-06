@@ -13,9 +13,12 @@ pub mod engine_supervisor;
 pub mod follow_stream;
 mod helpers;
 mod input;
+mod language_detection;
+mod languages;
 mod llm_client;
 mod managers;
 mod memory;
+mod notices;
 mod overlay;
 mod paste_tx;
 pub mod portable;
@@ -35,10 +38,13 @@ mod signal_handle;
     allow(dead_code)
 )]
 mod system_audio_permission;
+mod system_languages;
 mod transcription_coordinator;
+mod transcription_hook;
 mod tray;
 mod tray_i18n;
 mod utils;
+pub mod webkit_renderer;
 
 pub use cli::{CliArgs, FollowStreamMode};
 #[cfg(debug_assertions)]
@@ -55,6 +61,7 @@ use managers::transcription::{
     transcription_managers, ActiveStreamManagers, StreamSource, StreamTranscriptMerger,
     TranscriptionManager,
 };
+use managers::transcription_jobs::TranscriptionJobManager;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::image::Image;
@@ -329,6 +336,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     )));
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
+    app_handle.manage(TranscriptionJobManager::new(app_handle));
 
     // Fork-only: provider secrets live in the OS credential store. A failed
     // platform-store install is reported once here and every later status
@@ -450,6 +458,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 // Full explanation lives in the settings-window banner
                 show_main_window(app);
             }
+            "notice" => {
+                show_main_window(app);
+            }
             "check_updates" => {
                 let settings = settings::get_settings(app);
                 if settings::update_checks_effectively_enabled(&settings) {
@@ -464,6 +475,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 let managers = transcription_managers(app);
                 if !managers.iter().any(|manager| manager.is_model_loaded()) {
                     log::warn!("No model is currently loaded.");
+                    return;
+                }
+                if let Err(e) = app
+                    .state::<Arc<TranscriptionManager>>()
+                    .ensure_model_unlocked()
+                {
+                    log::warn!("{}", e);
                     return;
                 }
                 for manager in managers {
@@ -499,6 +517,17 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                     tray::update_tray_menu(&app_clone);
                 });
             }
+            id if id.starts_with("language_select:") => {
+                let language = id.strip_prefix("language_select:").unwrap().to_string();
+                if let Err(e) =
+                    shortcut::change_selected_language_setting(app.clone(), language.clone())
+                {
+                    log::error!("Failed to switch language via tray: {}", e);
+                    return;
+                }
+                log::info!("Language switched to {} via tray.", language);
+                tray::rebuild_tray_menu(app);
+            }
             _ => {}
         })
         .build(app_handle)
@@ -519,6 +548,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.listen("model-state-changed", move |_| {
         tray::update_tray_menu(&app_handle_for_listener);
     });
+    // A download or delete can change what the language submenu offers (the
+    // language detector arriving makes Auto usable).
+    for event in ["model-download-complete", "model-deleted"] {
+        let app_handle_for_listener = app_handle.clone();
+        app_handle.listen(event, move |_| {
+            tray::update_tray_menu(&app_handle_for_listener);
+        });
+    }
 
     // Apply the autostart preference (SMAppService login item on macOS 13+,
     // tauri-plugin-autostart elsewhere)
@@ -814,11 +851,14 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_autostart_setting,
             shortcut::change_translate_to_english_setting,
             shortcut::change_selected_language_setting,
+            shortcut::change_spoken_languages_setting,
             shortcut::change_overlay_position_setting,
             shortcut::change_overlay_style_setting,
             shortcut::change_debug_mode_setting,
             shortcut::change_word_correction_threshold_setting,
             shortcut::change_extra_recording_buffer_setting,
+            shortcut::change_language_detection_setting,
+            shortcut::change_language_detection_window_setting,
             shortcut::change_paste_delay_ms_setting,
             shortcut::change_paste_delay_after_ms_setting,
             shortcut::change_reliable_paste_setting,
@@ -892,9 +932,12 @@ pub fn run(cli_args: CliArgs) {
             commands::check_apple_intelligence_available,
             commands::initialize_enigo,
             commands::initialize_shortcuts,
+            commands::complete_onboarding,
             commands::models::get_available_models,
             commands::models::get_model_info,
             commands::models::download_model,
+            commands::models::download_language_detector,
+            commands::models::is_language_detector_downloaded,
             commands::models::delete_model,
             commands::models::get_retired_models,
             commands::models::delete_retired_model,
@@ -927,22 +970,33 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::change_system_audio_enabled_setting,
             commands::audio::change_dictation_system_audio_enabled_setting,
             commands::audio::set_system_audio_device,
+            commands::audio::change_airpods_mode_setting,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
+            commands::transcription::get_language_status,
             commands::transcription::unload_model_manually,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,
             commands::history::delete_history_entry,
             commands::history::retry_history_entry_transcription,
+            commands::history::cancel_history_entry_transcription,
+            commands::history::transcribe_file,
             commands::history::update_history_limit,
             commands::history::update_recording_retention_period,
             helpers::clamshell::is_laptop,
+            notices::get_active_notices,
+            notices::dismiss_notice,
+            notices::dismiss_overlay_notice,
         ])
         .events(collect_events![
             managers::history::HistoryUpdatePayload,
+            managers::transcription_jobs::TranscriptionJob,
             managers::transcription::StreamTextEvent,
             managers::transcription::StreamPhaseEvent,
+            transcription_coordinator::RecordingStateEvent,
+            actions::TranscriptionCompleteEvent,
+            notices::NoticesChanged,
         ]);
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
@@ -1089,6 +1143,7 @@ pub fn run(cli_args: CliArgs) {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_os::init())
+        .plugin(system_languages::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_macos_permissions::init())
         .plugin(tauri_plugin_opener::init())
@@ -1099,6 +1154,7 @@ pub fn run(cli_args: CliArgs) {
             Some(vec![]),
         ))
         .manage(cli_args.clone())
+        .manage(notices::NoticeStore::default())
         .setup(move |app| {
             #[cfg(target_os = "windows")]
             log::info!(
@@ -1106,6 +1162,7 @@ pub fn run(cli_args: CliArgs) {
                 std::env::var_os("VK_LOADER_LAYERS_DISABLE"),
                 utils::env_flag_enabled("HANDY_KEEP_VULKAN_IMPLICIT_LAYERS"),
             );
+            system_languages::log_system_languages();
 
             specta_builder.mount_events(app);
 
@@ -1160,8 +1217,8 @@ pub fn run(cli_args: CliArgs) {
             let mut win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
                     .title("Shorthand")
-                    .inner_size(680.0, 570.0)
-                    .min_inner_size(680.0, 570.0)
+                    .inner_size(utils::MAIN_WINDOW_SIZE.0, utils::MAIN_WINDOW_SIZE.1)
+                    .min_inner_size(utils::MAIN_WINDOW_SIZE.0, utils::MAIN_WINDOW_SIZE.1)
                     .resizable(true)
                     .maximizable(true)
                     .visible(false);
@@ -1170,9 +1227,26 @@ pub fn run(cli_args: CliArgs) {
                 win_builder = win_builder.data_directory(data_dir.join("webview"));
             }
 
-            // Only used on Windows, to disable WebView2 browser accelerators.
-            #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+            // Only used on macOS (to size it) and Windows (to disable WebView2
+            // browser accelerators).
+            #[cfg_attr(
+                not(any(target_os = "macos", target_os = "windows")),
+                allow(unused_variables)
+            )]
             let main_window = win_builder.build()?;
+
+            // macOS draws the title bar inside the inner size; grow the window to fit it.
+            #[cfg(target_os = "macos")]
+            {
+                let bar = utils::measure_title_bar(&main_window);
+                if bar > 0.0 {
+                    let (width, height) = utils::MAIN_WINDOW_SIZE;
+                    let size = tauri::LogicalSize::new(width, height + bar);
+                    let _ = main_window.set_min_size(Some(size));
+                    let _ = main_window.set_size(size);
+                    let _ = main_window.center();
+                }
+            }
 
             // Disable WebView2 browser accelerators (F5, F6, Ctrl+F, F12, ...).
             // A settings window has no use for them, and pressing F6 while

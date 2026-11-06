@@ -264,3 +264,14 @@ pub fn get_post_process_api_key_status(
         })
         .collect())
 }
+
+/// Mark onboarding as finished; called when its last screen closes, so quitting
+/// midway resumes the flow.
+#[specta::specta]
+#[tauri::command]
+pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.onboarding_completed = true;
+    crate::settings::write_settings(&app, settings);
+    Ok(())
+}

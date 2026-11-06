@@ -5,14 +5,43 @@ use crate::settings::ShortcutActivation;
 use crate::shorthand::capture_command::{self, CaptureState};
 use crate::shorthand::mode::{self, Mode};
 use log::{debug, error, warn};
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
+use tauri_specta::Event;
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const RELEASE_GRACE: Duration = Duration::from_millis(50);
+
+/// Recording phase events for windows that follow along (onboarding's Try it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingPhase {
+    /// Recording began.
+    Started,
+    /// The key came up before the hold threshold (or the binding toggles):
+    /// recording stays on until the next press.
+    Locked,
+    /// Recording ended; transcription follows.
+    Stopped,
+    /// The session was cancelled.
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type, tauri_specta::Event)]
+pub struct RecordingStateEvent {
+    pub phase: RecordingPhase,
+}
+
+fn emit_recording_phase(app: &AppHandle, phase: RecordingPhase) {
+    if let Err(e) = (RecordingStateEvent { phase }).emit(app) {
+        warn!("Failed to emit recording state {phase:?}: {e}");
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PttAction {
@@ -376,6 +405,12 @@ impl CoordinatorState {
     fn is_locked(&self) -> bool {
         self.hold.as_ref().is_some_and(|h| h.locked)
             || self.pending_press.as_ref().is_some_and(|p| p.locked)
+    }
+
+    /// A recording is running and outlives its key (a tap, or toggle mode).
+    fn is_recording_locked(&self) -> bool {
+        matches!(self.stage, Stage::Recording { .. })
+            && self.hold.as_ref().is_some_and(|h| h.locked)
     }
 
     fn on_input(&mut self, input: InputEvent, now: Instant) -> Option<Effect> {
@@ -992,8 +1027,12 @@ impl TranscriptionCoordinator {
                         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                             Ok(cmd) => cmd,
                             Err(mpsc::RecvTimeoutError::Timeout) => {
+                                let was_locked = state.is_recording_locked();
                                 if let Some(effect) = state.on_grace_expired() {
                                     run_effect(&app, &mut state, effect);
+                                }
+                                if !was_locked && state.is_recording_locked() {
+                                    emit_recording_phase(&app, RecordingPhase::Locked);
                                 }
                                 continue;
                             }
@@ -1006,6 +1045,7 @@ impl TranscriptionCoordinator {
                         }
                     };
 
+                    let was_locked = state.is_recording_locked();
                     match cmd {
                         Command::Input(input) => {
                             if let Some(effect) = dispatch_input(&mut state, input) {
@@ -1015,7 +1055,13 @@ impl TranscriptionCoordinator {
                         Command::Cancel {
                             recording_was_active,
                         } => {
+                            // A cancel while transcribing ends the take too.
+                            let busy = recording_was_active
+                                || matches!(state.stage, Stage::Processing { .. });
                             state.on_cancel(recording_was_active);
+                            if busy {
+                                emit_recording_phase(&app, RecordingPhase::Cancelled);
+                            }
                             publish_capture_state(&app, &state);
                         }
                         Command::ProcessingFinished => {
@@ -1081,6 +1127,9 @@ impl TranscriptionCoordinator {
                                 hub.suppress_if_active(mode);
                             }
                         }
+                    }
+                    if !was_locked && state.is_recording_locked() {
+                        emit_recording_phase(&app, RecordingPhase::Locked);
                     }
                 }
                 debug!("Transcription coordinator exited");
@@ -1333,6 +1382,9 @@ fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
                     hub.cancel(orphaned_session);
                 }
             }
+            if started {
+                emit_recording_phase(app, RecordingPhase::Started);
+            }
             publish_capture_state(app, state);
         }
         Effect::Stop {
@@ -1342,6 +1394,7 @@ fn run_effect(app: &AppHandle, state: &mut CoordinatorState, effect: Effect) {
         } => {
             publish_capture_state(app, state);
             stop(app, &binding_id, &hotkey_string, publication_session);
+            emit_recording_phase(app, RecordingPhase::Stopped);
         }
     }
 }

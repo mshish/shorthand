@@ -200,6 +200,8 @@ mod tests {
             "option+shift+space",
             "ctrl+space",
             "ctrl+shift+space",
+            "ctrl+alt+space",
+            "ctrl+alt+shift+space",
             "alt+space",
             "escape",
         ] {

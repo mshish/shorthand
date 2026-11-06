@@ -70,6 +70,17 @@ export function isModelVisible(
 }
 
 /**
+ * `isModelVisible` for the table's row shape. Only rows not on disk are passed
+ * in, so "streams" is the whole test.
+ */
+export function isTableModelVisible(
+  entry: { streaming: boolean },
+  showAllSettings: boolean,
+): boolean {
+  return showAllSettings || entry.streaming;
+}
+
+/**
  * Filters a model list down to the ones `isModelVisible` allows, reactive to
  * `show_all_settings` so toggling the hatch in About updates open pickers
  * without a restart.

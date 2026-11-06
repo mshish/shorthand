@@ -45,7 +45,12 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libgtk-layer-shell0", "libopenblas0", "libpipewire-0.3-0"],
+        "depends": [
+          "libgtk-layer-shell0",
+          "libopenblas0",
+          "libpipewire-0.3-0",
+          "libssl3t64 | libssl3"
+        ],
         "files": {
           "/usr/lib/Handy": "transcribe-libs"
         }
