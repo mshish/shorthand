@@ -311,7 +311,7 @@ The fork-owned implementation is in `src/shorthand/brand/`:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `theme.css`             | Palette, UI/mono/display type tokens, radius and theme selection                                                                                 |
 | `marks.css`             | The active-tab indicator and the wordmark's theme selection; all brand selectors                                                                 |
-| `utilities.css`         | Registers `--color-mid-gray` as a Tailwind colour (upstream dropped it); without it `border-mid-gray/*` and friends emit nothing                  |
+| `utilities.css`         | Registers `--color-mid-gray` as a Tailwind colour (upstream dropped it); without it `border-mid-gray/*` and friends emit nothing                 |
 | `ShorthandMark.tsx`     | Four-path silhouette component, filled with `currentColor` — used by the icon generator's reference, not currently placed directly in any screen |
 | `ShorthandWordmark.tsx` | The delivered lockup as one raster, sized by the word's cap height                                                                               |
 | `logo-light.png`        | Generated: the approved lockup, trimmed and resized. Do not hand-edit — re-run the generator                                                     |
