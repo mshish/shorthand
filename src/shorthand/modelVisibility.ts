@@ -16,16 +16,8 @@ import { useSettings } from "@/hooks/useSettings";
  * can't use" is the same simplified-vs-everything question about a
  * different list.
  *
- * `ModelsSettings.tsx` used to run its full model list through
- * `useVisibleModels` before applying its own, independent `filterStreaming`
- * chip — which meant this hatch-driven predicate could hide a non-streaming
- * model from *Available to Download* that the chip's "off" state was
- * supposed to reveal. The two mechanisms disagreed about who owns
- * visibility. `ModelsSettings.tsx` no longer calls this hook: the chip now
- * governs both of its sections on its own, via
- * `src/shorthand/streamingModelFilter.ts`. This hook remains the hatch-driven
- * guard for `Onboarding.tsx`, which has no chip and therefore no other way to
- * recover a hidden on-disk, in-progress, or custom model.
+ * Both pickers (`ModelsSettings.tsx` and the onboarding `Model` screen) use
+ * `isTableModelVisible`; `useVisibleModels` has no remaining callers.
  */
 
 /**
