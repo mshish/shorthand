@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import HandyHand from "./icons/HandyHand";
+import { ShorthandMark } from "@/shorthand/brand";
 import { transcribeFiles } from "./settings/history/transcribeFiles";
 
 interface FileDropOverlayProps {
@@ -41,7 +41,7 @@ export const FileDropOverlay: React.FC<FileDropOverlayProps> = ({
   return (
     <div className="fixed inset-0 z-50 p-3 bg-background/85 pointer-events-none">
       <div className="h-full w-full flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-logo-primary text-center">
-        <HandyHand width={44} height={47} />
+        <ShorthandMark size={46} className="text-logo-primary" />
         <p className="text-base font-semibold">
           {t("settings.history.dropTitle")}
         </p>

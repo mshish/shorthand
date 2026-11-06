@@ -335,6 +335,10 @@ components and the fork’s values follow without conflict.
 - `package.json` and `bun.lock` carry the Fontsource dependencies.
 
 Upstream’s `HandyHand.tsx` and `HandyTextLogo.tsx` remain unused but present.
+`HandyMascot.tsx` and `shared/Mascot.tsx` are too, in effect: only the Try it
+screen renders the mascot, and the fork’s onboarding skips that step (see
+`STEP_ORDER` in `onboardingStore.ts`). Welcome and the file-drop overlay show
+the Shorthand lockup and mark instead.
 Deleting a file upstream still maintains turns every future upstream edit into
 a delete/modify conflict. The same rule leaves `src-tauri/icons/logo.png` in
 place: it is upstream’s waving hand, is referenced by nothing, and is absent
