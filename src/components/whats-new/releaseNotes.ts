@@ -13,8 +13,10 @@ interface FindReleaseNoteOptions {
   lastSeenVersion: string;
 }
 
+// Fork: reads Shorthand's own notes, not `content/release-notes/`, which holds
+// Handy's (see shorthand/release-notes/README.md).
 const releaseNoteModules = import.meta.glob<string>(
-  "../../content/release-notes/*.md",
+  "../../shorthand/release-notes/*.md",
   {
     eager: true,
     import: "default",
