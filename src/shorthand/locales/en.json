@@ -1,5 +1,11 @@
 {
   "errors.retryTranscriptionFailedTitle": "Transcribing again failed",
+  "onboarding.demo.shorthandContinue": "Continue",
+  "onboarding.demo.shorthandHold": "<0>Open your note.</0> <1>Hold your shortcut and talk.</1> <2>Let go, and Shorthand adds what you said to your note.</2>",
+  "onboarding.demo.shorthandTap": "<0>Open your note.</0> <1>Tap your shortcut and talk.</1> <2>Tap again, and Shorthand adds what you said to your note.</2>",
+  "onboarding.demo.shorthandTitle": "Talk, and your note keeps up",
+  "onboarding.done.shorthandSubMac": "Shorthand's in your menu bar now. Press <keys/> to start or stop a capture, then follow along in your note.",
+  "onboarding.done.shorthandSubTray": "Shorthand's in your system tray now. Press <keys/> to start or stop a capture, then follow along in your note.",
   "onboarding.model.hiddenMatch": "Models that can't write live notes are hidden here.",
   "onboarding.model.noLiveNotes": "Live notes won't appear with the suggested model for your language.",
   "onboarding.telemetry.continue": "Continue",

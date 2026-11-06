@@ -79,7 +79,8 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
     // Decided once the model list is in.
   }, [models.offered.length]);
 
-  // Select the picked model as soon as it's on disk, so Try it can use it.
+  // Select the picked model as soon as it's on disk, so the shortcut can use
+  // it once setup ends.
   const downloaded = models.offered.find((m) => m.id === store.downloadId);
   const downloadedInfo = downloaded && models.infoFor(downloaded);
   useEffect(() => {
@@ -93,7 +94,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
     selectModel,
   ]);
 
-  // Demo and Try it teach hold and tap, which only hold_or_toggle supports;
+  // Demo teaches hold and tap, which only hold_or_toggle supports;
   // settings migrated from push_to_talk may still be Toggle or PushToTalk.
   const activationSet = useRef(false);
   const activation = settings?.shortcut_activation;
@@ -227,7 +228,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
           onContinue={() => moveScreens("in", next)}
         />
       );
-    // Same element for both steps, so Try it stays mounted into All set.
+    // Fork: "try" is not in STEP_ORDER, so only All set renders this.
     case "try":
     case "done":
       return (
@@ -247,7 +248,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
           onBack={() => moveScreens("out", back)}
           onArrive={() => go("done")}
           // Fork: Back from All set returns to Demo, as there is no Try it.
-          onUnfinish={() => go("demo")}
+          onUnfinish={() => moveScreens("out", () => go("demo"))}
           onDone={finish}
         />
       );

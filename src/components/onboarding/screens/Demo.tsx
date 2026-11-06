@@ -333,7 +333,7 @@ const DemoSentence: React.FC<{
             className={`${cell} ${on ? "demo-swap" : "invisible"}`}
           >
             <Trans
-              i18nKey={`onboarding.demo.${m}`}
+              i18nKey={`onboarding.demo.shorthand${m === "hold" ? "Hold" : "Tap"}`}
               components={[0, 1, 2].map((i) => (
                 <Lit key={i} on={on && phrase === i} />
               ))}
@@ -360,7 +360,7 @@ const DemoSentence: React.FC<{
 interface DemoProps {
   progress: { index: number; count: number };
   os: OSType;
-  /** The model is ready, so Try it can start. */
+  /** The model is ready, so setup can continue. */
   ready: boolean;
   /** Its download stopped: the button retries it. */
   downloadFailed: boolean;
@@ -520,7 +520,7 @@ export const Demo: React.FC<DemoProps> = ({
             disabled={!ready}
             onClick={onContinue}
           >
-            {t("onboarding.demo.tryIt")}
+            {t("onboarding.demo.shorthandContinue")}
           </Button>
         )
       }
@@ -528,7 +528,7 @@ export const Demo: React.FC<DemoProps> = ({
       <ScreenMain
         header={
           <ScreenHeader
-            title={t("onboarding.demo.title")}
+            title={t("onboarding.demo.shorthandTitle")}
             sub={<DemoSentence mode={chapter} phrase={phrase} say={say} />}
             // 8px, not 4: the bold lead-in would read as the title's next line.
             subClassName="mt-[8px]! grid items-center justify-items-center"

@@ -39,7 +39,14 @@ const WAIT_AFTER_MS = 400;
 /** Minimum time the wait message stays up, so it never just flashes. */
 const WAIT_SHOWN_MS = 500;
 
-export const useTryEngine = ({ os }: { os: OSType }) => {
+export const useTryEngine = ({
+  os,
+  enabled = true,
+}: {
+  os: OSType;
+  /** Fork: false leaves the shortcut and the recording events alone. */
+  enabled?: boolean;
+}) => {
   const { getSetting } = useSettings();
   const { preview, lessons, setLessons } = useOnboardingStore();
   const shortcut = getSetting("bindings")?.transcribe?.current_binding ?? "";
@@ -94,14 +101,15 @@ export const useTryEngine = ({ os }: { os: OSType }) => {
 
   // Normally done on Permissions; repeated in case that screen was skipped.
   useEffect(() => {
-    if (preview) return;
+    if (preview || !enabled) return;
     commands.initializeEnigo().catch(console.error);
     commands.initializeShortcuts().catch(console.error);
-  }, [preview]);
+  }, [preview, enabled]);
 
   /* ---------- takes ---------- */
 
   useEffect(() => {
+    if (!enabled) return;
     const stopWaiting = () => {
       clearTimeout(waitTimer.current);
       waitingSince.current = null;
@@ -230,7 +238,7 @@ export const useTryEngine = ({ os }: { os: OSType }) => {
       offState.then((off) => off());
       offDone.then((off) => off());
     };
-  }, [setLessons, threshold]);
+  }, [setLessons, threshold, enabled]);
 
   // Refocus the note after a shortcut change so the next take lands there.
   const capture = useShortcutCapture("transcribe", os, {

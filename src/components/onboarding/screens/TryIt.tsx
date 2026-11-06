@@ -184,7 +184,9 @@ export const TryIt: React.FC<TryItProps> = ({
   onDone,
 }) => {
   const { t, i18n } = useTranslation();
-  const e = useTryEngine({ os });
+  // Fork: All set is the only screen left, so the engine stays off (see
+  // useTryEngine); it would start capturing from the shortcut.
+  const e = useTryEngine({ os, enabled: !finished });
   const anyDone = e.lessons.hold || e.lessons.tap;
   const { languages, atLogin, set } = useOnboardingStore();
   const { refreshAudioDevices } = useSettings();
@@ -522,15 +524,7 @@ export const TryIt: React.FC<TryItProps> = ({
     <OnboardingShell
       progress={progress}
       onBack={
-        stage === "set"
-          ? () => {
-              setStage("try");
-              setCaught(false);
-              onUnfinish();
-            }
-          : stage === "try"
-            ? onBack
-            : undefined
+        stage === "set" ? onUnfinish : stage === "try" ? onBack : undefined
       }
       hint={hint}
       primary={primary}
@@ -549,7 +543,9 @@ export const TryIt: React.FC<TryItProps> = ({
           {after ? (
             <Trans
               i18nKey={
-                isMac ? "onboarding.done.subMac" : "onboarding.done.subTray"
+                isMac
+                  ? "onboarding.done.shorthandSubMac"
+                  : "onboarding.done.shorthandSubTray"
               }
               components={{
                 keys: (
