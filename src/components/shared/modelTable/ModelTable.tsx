@@ -26,13 +26,14 @@ export const NO_FILTERS: Filters = {
 };
 
 /** The search and its filters, and whether a model is kept by them. */
-export const useModelFilters = () => {
+export const useModelFilters = (initial: Filters = NO_FILTERS) => {
   const { t, i18n } = useTranslation();
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [filters, setFilters] = useState<Filters>(initial);
   const q = filters.query.trim().toLowerCase();
-  const matches = (e: TableModel) => {
+  // Fork: the search alone, for callers that treat the capability filters
+  // themselves (the Models page exempts models the user already holds).
+  const matchesText = (e: TableModel) => {
     const has = (c: Capability) => e[CAPABILITIES[c].flag];
-    if (CAPABILITY_KEYS.some((c) => filters[c] && !has(c))) return false;
     if (!q) return true;
     const hay = [
       e.name,
@@ -47,11 +48,15 @@ export const useModelFilters = () => {
       .toLowerCase();
     return q.split(/\s+/).every((w) => hay.includes(w));
   };
+  const matches = (e: TableModel) =>
+    !CAPABILITY_KEYS.some((c) => filters[c] && !e[CAPABILITIES[c].flag]) &&
+    matchesText(e);
   return {
     filters,
     setFilters,
     searching: !!q || CAPABILITY_KEYS.some((c) => filters[c]),
     matches,
+    matchesText,
   };
 };
 

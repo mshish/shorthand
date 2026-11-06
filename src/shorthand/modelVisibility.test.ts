@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { CURATED_ASR } from "@/lib/models/catalog";
 import {
+  DEFAULT_MODEL_FILTERS,
   holdsModel,
   isTableModelVisible,
+  passesModelFilters,
   shorthandPicksFor,
 } from "./modelVisibility";
 
@@ -103,6 +105,46 @@ describe("isTableModelVisible", () => {
   });
   test("show_all_settings shows everything", () => {
     expect(isTableModelVisible(quiet, true, false)).toBe(true);
+  });
+});
+
+describe("passesModelFilters", () => {
+  const live = { streaming: true, translate: false };
+  const quiet = { streaming: false, translate: false };
+  const on = { preview: true, translate: false };
+  const off = { preview: false, translate: false };
+
+  test("Settings > Model starts with Live preview pressed and no search", () => {
+    expect(DEFAULT_MODEL_FILTERS).toEqual({
+      query: "",
+      preview: true,
+      translate: false,
+    });
+  });
+  test("Live preview hides a non-streaming model the user does not hold", () => {
+    expect(passesModelFilters(quiet, on, false)).toBe(false);
+  });
+  test("Live preview keeps a streaming model", () => {
+    expect(passesModelFilters(live, on, false)).toBe(true);
+  });
+  test("Live preview never hides a held model: on disk, downloading, current, custom", () => {
+    expect(passesModelFilters(quiet, on, true)).toBe(true);
+  });
+  test("turning Live preview off shows everything", () => {
+    expect(passesModelFilters(quiet, off, false)).toBe(true);
+    expect(passesModelFilters(live, off, false)).toBe(true);
+  });
+  test("Translate is strict, held or not", () => {
+    const filters = { preview: false, translate: true };
+    expect(passesModelFilters(quiet, filters, true)).toBe(false);
+    expect(
+      passesModelFilters({ ...quiet, translate: true }, filters, false),
+    ).toBe(true);
+  });
+  test("both pressed: a held non-translating model still goes", () => {
+    expect(
+      passesModelFilters(live, { preview: true, translate: true }, true),
+    ).toBe(false);
   });
 });
 

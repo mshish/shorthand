@@ -9,11 +9,13 @@ import type { DownloadState } from "@/lib/models/downloadState";
  * notes never appear — see `shorthand-core/docs/DESIGN.md`. The catalog ships
  * far more non-streaming models than streaming ones, and a user who onboards
  * onto one gets a product that silently does nothing. So the model table hides
- * those models, and the onboarding picks prefer streaming ones. The
- * `show_all_settings` escape hatch documented in `visibility.ts` shows the
- * hidden models again, rather than adding a new setting: "hide models
- * Shorthand can't use" is the same simplified-vs-everything question about a
- * different list.
+ * those models, and the onboarding picks prefer streaming ones.
+ *
+ * Onboarding's full list hides them, and the `show_all_settings` escape hatch
+ * documented in `visibility.ts` shows them again. Settings > Model does not
+ * hide anything: it starts with the table's own "Live preview" filter pressed
+ * (`DEFAULT_MODEL_FILTERS`), so the user sees why a model is missing and can
+ * turn it off.
  */
 
 /** Whether a model is on disk or being fetched, which are the states that count as held. */
@@ -42,6 +44,33 @@ export function isTableModelVisible(
   held: boolean,
 ): boolean {
   return showAllSettings || entry.streaming || held;
+}
+
+/** Settings > Model's filters at rest: Live preview pressed, no search. */
+export const DEFAULT_MODEL_FILTERS = {
+  query: "",
+  preview: true,
+  translate: false,
+};
+
+/**
+ * Whether the Models page keeps a model under its pressed capability filters
+ * (the search is applied separately).
+ *
+ * Translate is strict. Live preview never hides a model the user holds (on
+ * disk or downloading, which includes the current model and custom ones), for
+ * the reason `isTableModelVisible` gives: a non-catalog GGUF reads
+ * `streaming: false` until it has been loaded once, so hiding it by that flag
+ * could keep it from ever being loaded and corrected. Turning the chip off
+ * shows everything.
+ */
+export function passesModelFilters(
+  entry: { streaming: boolean; translate: boolean },
+  filters: { preview: boolean; translate: boolean },
+  held: boolean,
+): boolean {
+  if (filters.translate && !entry.translate) return false;
+  return held || !filters.preview || entry.streaming;
 }
 
 /**
