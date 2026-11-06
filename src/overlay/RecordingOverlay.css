@@ -33,11 +33,13 @@
   --s-border: var(--color-line);
   --s-hair: var(--color-wash);
 
-  /* Card geometry — single source of truth for the visible overlay sizes. The
-     native overlay window (overlay.rs) is sized from these: it must be at least
-     the card's max footprint (--ov-work-w for compact, --ov-open-w for Live),
-     since the card is anchored flush to the screen edge in CSS. Keep overlay.rs
-     in sync when these change. */
+  /* Card geometry -- single source of truth for the visible overlay sizes. The
+     native window follows the card (useOverlayFit reports its size, and
+     overlay_fit.rs resizes the window around the anchored edge); the fixed
+     sizes in overlay.rs are only the window's first size on each show, so they
+     must still be at least the card's max footprint (--ov-work-w for compact,
+     --ov-open-w for Live) until the first report lands. The card is anchored
+     flush to the screen edge in CSS. Keep overlay.rs in sync when these change. */
   --ov-rest-w: 172px; /* resting compact pill (minimal, recording) -- roomy enough
                          for the English working label before the grow starts */
   --ov-pill-w: 184px; /* base width / Live pill before it opens or collapses */
@@ -501,11 +503,13 @@
 }
 
 /* Fork-only: error state — what failed and what to do, on up to three lines
-   that wrap within the native window (OVERLAY_ERROR_WIDTH in overlay.rs) rather
-   than truncate. Pill radius and surface; the dot sits where the pill's
-   recording dot does, in the reserved warning amber. `.ov-stage` outranks the
-   top placement's column-reverse, which would stack the dot under the text. */
+   that wrap at --ov-error-max-w (border-box, so padding and border count
+   toward it; the window then follows the card) rather than truncate. Pill
+   radius and surface; the dot sits where the pill's recording dot does, in the
+   reserved warning amber. `.ov-stage` outranks the top placement's
+   column-reverse, which would stack the dot under the text. */
 .ov-stage .scard.overlay-error {
+  box-sizing: border-box;
   width: auto;
   max-width: var(--ov-error-max-w);
   animation: none;

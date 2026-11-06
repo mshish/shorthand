@@ -11,6 +11,7 @@
 //! The fixed sizes remain as the window's first size on each show, big enough
 //! that nothing clips before the webview has rendered and reported.
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use crate::overlay;
 use crate::settings::OverlayPosition;
 use std::sync::Mutex;
@@ -65,6 +66,7 @@ fn origin_for(anchor: Anchor, width: f64, height: f64) -> (f64, f64) {
 }
 
 struct FitState {
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     anchor: Option<Anchor>,
     /// The size last requested (CSS pixels), so an unchanged report is dropped
     /// and a position change can re-apply it. Cleared on every show, because
@@ -179,8 +181,9 @@ fn apply(_app: &AppHandle, window: &tauri::webview::WebviewWindow, size: (f64, f
         return;
     };
     let content_scale = scale * overlay::windows_text_scale_factor();
-    let width = (size.0 * content_scale).round().max(1.0);
-    let height = (size.1 * content_scale).round().max(1.0);
+    // Round up: a card of 42.2 CSS px must not meet a window truncated short of it.
+    let width = (size.0 * content_scale).ceil().max(1.0);
+    let height = (size.1 * content_scale).ceil().max(1.0);
     let (x, y) = origin_for(anchor, width, height);
     let Ok(hwnd) = window.hwnd() else {
         return;

@@ -88,8 +88,8 @@ fn is_live_state(state: &str) -> bool {
     state == "streaming" || state == LIVE_NOTICE_STATE
 }
 
-/// The notice form that matches the session it replaces, so the window never
-/// changes size for one. A notice with no session gets the compact form.
+/// The notice form that matches the session it replaces, so the first window
+/// size (before the card reports its own) is the one the session had. A notice with no session gets the compact form.
 fn notice_state(session_is_live: bool) -> &'static str {
     if session_is_live {
         LIVE_NOTICE_STATE
