@@ -49,6 +49,35 @@ describe("shorthandPicksFor", () => {
     expect(picks.every((p) => !p.model.capabilities.streaming)).toBe(true);
   });
 
+  // The streaming model is only rated unsupported (hu, et) or experimental
+  // (the rest) for these, so it is not offered as the recommendation.
+  for (const language of [
+    "hu",
+    "et",
+    "da",
+    "ro",
+    "bg",
+    "cs",
+    "fi",
+    "hr",
+    "sk",
+    "sv",
+  ]) {
+    test(`${language}: a streaming model rated too weak falls back and warns`, () => {
+      const { picks, liveNotes } = shorthandPicksFor(
+        [language],
+        everything,
+        streams,
+      );
+      expect(liveNotes).toBe(false);
+      expect(
+        picks.every(
+          (p) => p.status !== "unsupported" && p.status !== "experimental",
+        ),
+      ).toBe(true);
+    });
+  }
+
   test("respects what the app offers", () => {
     const streaming = CURATED_ASR.filter(streams);
     const only = streaming[0];

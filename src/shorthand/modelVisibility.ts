@@ -59,7 +59,13 @@ export function shorthandPicksFor(
   streams: (model: CatalogModel) => boolean,
 ) {
   const pool = CURATED_ASR.filter((m) => offered(m) && streams(m));
-  const streaming = pool.length ? picksFor(languages, offered, pool) : [];
+  // `recommendModels` falls back to candidates over its error floor, rated
+  // `unsupported` or `experimental` for the language. Those don't count as
+  // covering it: such a model would be offered as the recommendation for a
+  // language it can't be relied on for.
+  const streaming = (
+    pool.length ? picksFor(languages, offered, pool) : []
+  ).filter((p) => p.status !== "unsupported" && p.status !== "experimental");
   if (streaming.length) return { picks: streaming, liveNotes: true };
   const picks = picksFor(languages, offered);
   return { picks, liveNotes: picks.length === 0 };

@@ -661,7 +661,9 @@ export const Model: React.FC<ModelProps> = ({
           setFilters={setFilters}
           sections={sections}
           renderRow={tableRow}
-          emptyHint={hiddenMatch ? t("settings.models.hiddenMatch") : undefined}
+          emptyHint={
+            hiddenMatch ? t("onboarding.model.hiddenMatch") : undefined
+          }
           onEscape={close}
           focusOnMount
         />
