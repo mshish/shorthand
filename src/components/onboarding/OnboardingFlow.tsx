@@ -246,7 +246,8 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
           onEdit={(to) => store.set({ step: to, returnTo: "done" })}
           onBack={() => moveScreens("out", back)}
           onArrive={() => go("done")}
-          onUnfinish={() => go("try")}
+          // Fork: Back from All set returns to Demo, as there is no Try it.
+          onUnfinish={() => go("demo")}
           onDone={finish}
         />
       );

@@ -14,12 +14,15 @@ export type OnboardingStep =
   | "try"
   | "done";
 
+// Fork: no "try" step. Try it sends a real Meeting-mode dictation, and the
+// fork's Meeting mode defaults to no paste method, so it would report success
+// with nothing written and start a real capture. The type and the TryIt screen
+// stay as upstream has them; "done" is rendered by TryIt, opening on All set.
 export const STEP_ORDER: OnboardingStep[] = [
   "welcome",
   "permissions",
   "model",
   "demo",
-  "try",
   "done",
 ];
 
@@ -92,7 +95,12 @@ const load = (): Persisted => {
     const isId = (v: unknown) => v === null || typeof v === "string";
     const isBool = (v: unknown) => typeof v === "boolean";
     return {
-      step: pick("step", (v) => STEP_ORDER.includes(v as OnboardingStep)),
+      // Progress saved on the removed "try" step resumes on All set, the
+      // screen that came after it.
+      step:
+        fields.step === "try"
+          ? "done"
+          : pick("step", (v) => STEP_ORDER.includes(v as OnboardingStep)),
       languages: pick("languages", isStringList),
       script: pick("script", (v) => CHINESE_SCRIPTS.some((c) => c.id === v)),
       modelId: pick("modelId", isId),
