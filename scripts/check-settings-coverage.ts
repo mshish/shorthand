@@ -41,10 +41,15 @@ import { join, dirname, resolve, relative } from "node:path";
 const ROOT = resolve(import.meta.dir, "..");
 const SRC = join(ROOT, "src");
 
-/** Where the walk starts: everything the sidebar can render. */
+/**
+ * Where the walk starts: everything the sidebar can render, plus `App.tsx`,
+ * which renders the Debug section itself (it passes the section its handlers,
+ * so `SECTIONS_CONFIG.debug.component` is `null`).
+ */
 const ENTRY_POINTS = [
   join(SRC, "shorthand/sections.ts"),
   join(SRC, "components/Sidebar.tsx"),
+  join(SRC, "App.tsx"),
 ];
 
 /**
@@ -307,7 +312,20 @@ const unresolved = [...literalKeys]
         (node, part) => (node == null ? node : node[part]),
         translation,
       );
-    return typeof value !== "string";
+    if (typeof value === "string") return false;
+    // i18next plurals: `key` is stored as `key_one`, `key_other`, ...
+    const parent = key
+      .split(".")
+      .slice(0, -1)
+      .reduce<any>(
+        (node, part) => (node == null ? node : node[part]),
+        translation,
+      );
+    const leaf = key.split(".").pop()!;
+    const plural = Object.keys(parent ?? {}).some((k) =>
+      k.startsWith(`${leaf}_`),
+    );
+    return !plural;
   })
   .sort();
 
