@@ -16,8 +16,10 @@ import { useModelEntries } from "./modelEntries";
 import { downloadStateOf } from "@/lib/models/downloadState";
 import {
   DEFAULT_MODEL_FILTERS,
+  hiddenByFilters,
   holdsModel,
   passesModelFilters,
+  yoursSection,
 } from "@/shorthand/modelVisibility";
 
 /** Past this many models on disk, the rest fold under "Show N more". */
@@ -95,6 +97,36 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
   }
 
   const keep = (xs: typeof lists.yours) => xs.filter(matchesText);
+  // A search that finds models the pressed filters hide would otherwise read
+  // as finding nothing, or as finding only the models the user holds.
+  const hidden = searching
+    ? hiddenByFilters(
+        [
+          ...allLists.yours,
+          ...allLists.fits,
+          ...allLists.partial,
+          ...allLists.untested,
+        ],
+        filters,
+        (e) => holdsModel(downloadStateOf(sources, e.id)),
+        matchesText,
+      )
+    : null;
+  const hiddenHint = !hidden
+    ? undefined
+    : hidden.preview && hidden.translate
+      ? t("settings.models.hiddenByBoth", {
+          preview: t("modelTable.tags.preview"),
+          translate: t("modelTable.tags.translate"),
+        })
+      : t("settings.models.hiddenByFilter", {
+          filter: t(
+            hidden.preview
+              ? "modelTable.tags.preview"
+              : "modelTable.tags.translate",
+          ),
+        });
+  const yoursState = yoursSection(allLists.yours.length, lists.yours.length);
   const moreButton = !searching && lists.yours.length > YOURS_LIMIT && (
     <button
       type="button"
@@ -133,7 +165,7 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
         {
           key: "untested",
           label: t("settings.models.sections.untested"),
-          rows: filters.query.trim() ? keep(lists.untested) : [],
+          rows: keep(lists.untested),
           note: t("settings.models.untestedNote"),
         },
       ]
@@ -147,11 +179,12 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
             </>
           ),
           rows: more ? lists.yours : lists.yours.slice(0, YOURS_LIMIT),
-          after: lists.yours.length ? (
-            moreButton
-          ) : (
-            <Note>{t("settings.models.emptyYours")}</Note>
-          ),
+          after:
+            yoursState === "empty" ? (
+              <Note>{t("settings.models.emptyYours")}</Note>
+            ) : (
+              moreButton
+            ),
         },
         {
           key: "fits",
@@ -188,10 +221,14 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({
         grading={facts}
         filters={filters}
         setFilters={setFilters}
-        // "Yours" always shows at rest; a search hides empty sections.
+        // "Yours" shows at rest with its note when the user holds no model; a
+        // search, or a chip that emptied it, hides empty sections.
         sections={sections.filter(
-          (s) => s.rows.length || (s.key === "yours" && !searching),
+          (s) =>
+            s.rows.length ||
+            (s.key === "yours" && !searching && yoursState === "empty"),
         )}
+        hiddenHint={hiddenHint}
         renderRow={(e) => <ModelRow key={e.id} entry={e} />}
         actionsHead={<Legend tier={facts.tier} />}
         footer={

@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { CURATED_ASR } from "@/lib/models/catalog";
 import {
   DEFAULT_MODEL_FILTERS,
+  hiddenByFilters,
   holdsModel,
   isTableModelVisible,
   passesModelFilters,
   shorthandPicksFor,
+  yoursSection,
 } from "./modelVisibility";
 
 const streams = (m: { capabilities: { streaming: boolean } }) =>
@@ -166,5 +168,63 @@ describe("holdsModel", () => {
   test("nothing and a failed download are not", () => {
     expect(holdsModel({ state: "none" })).toBe(false);
     expect(holdsModel({ state: "failed" })).toBe(false);
+  });
+});
+
+describe("hiddenByFilters", () => {
+  const whisper = { streaming: false, translate: true };
+  const parakeet = { streaming: true, translate: false };
+  const notHeld = () => false;
+  const all = () => true;
+
+  test("names Live preview when it hides a match", () => {
+    expect(
+      hiddenByFilters([whisper], DEFAULT_MODEL_FILTERS, notHeld, all),
+    ).toEqual({ preview: true, translate: false });
+  });
+
+  test("a held model is not hidden by Live preview", () => {
+    expect(
+      hiddenByFilters([whisper], DEFAULT_MODEL_FILTERS, () => true, all),
+    ).toBe(null);
+  });
+
+  test("names Translates when it hides a match", () => {
+    expect(
+      hiddenByFilters(
+        [parakeet],
+        { ...DEFAULT_MODEL_FILTERS, preview: false, translate: true },
+        () => true,
+        all,
+      ),
+    ).toEqual({ preview: false, translate: true });
+  });
+
+  test("models the search does not match are not counted", () => {
+    expect(
+      hiddenByFilters([whisper], DEFAULT_MODEL_FILTERS, notHeld, () => false),
+    ).toBe(null);
+  });
+});
+
+describe("yoursSection at rest", () => {
+  test("shows its rows", () => {
+    expect(yoursSection(3, 3)).toBe("rows");
+  });
+
+  test("says no models yet only when none are held", () => {
+    expect(yoursSection(0, 0)).toBe("empty");
+  });
+
+  test("Translates with only non-translating models held drops the section", () => {
+    const held = [{ streaming: true, translate: false }];
+    const shown = held.filter((e) =>
+      passesModelFilters(
+        e,
+        { ...DEFAULT_MODEL_FILTERS, translate: true },
+        true,
+      ),
+    );
+    expect(yoursSection(held.length, shown.length)).toBe("hidden");
   });
 });

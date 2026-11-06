@@ -74,6 +74,43 @@ export function passesModelFilters(
 }
 
 /**
+ * Which pressed filters hide models that match the search, or null when none
+ * do. A model failing both counts for both. The Models page uses it to say so
+ * beside the results, because a search that finds a model the filters hide
+ * otherwise looks like it found nothing.
+ */
+export function hiddenByFilters<
+  E extends { streaming: boolean; translate: boolean },
+>(
+  entries: E[],
+  filters: { preview: boolean; translate: boolean },
+  held: (entry: E) => boolean,
+  matchesText: (entry: E) => boolean,
+): { preview: boolean; translate: boolean } | null {
+  const hidden = { preview: false, translate: false };
+  for (const e of entries) {
+    if (!matchesText(e) || passesModelFilters(e, filters, held(e))) continue;
+    if (filters.translate && !e.translate) hidden.translate = true;
+    if (filters.preview && !held(e) && !e.streaming) hidden.preview = true;
+  }
+  return hidden.preview || hidden.translate ? hidden : null;
+}
+
+/**
+ * What the Models page's "On this computer" section shows at rest (no typed
+ * search). A chip can empty it without the user holding fewer models, so the
+ * "No models yet" note is for a user who holds none, and a section a chip
+ * emptied is dropped instead.
+ */
+export function yoursSection(
+  heldCount: number,
+  shownCount: number,
+): "rows" | "empty" | "hidden" {
+  if (shownCount > 0) return "rows";
+  return heldCount === 0 ? "empty" : "hidden";
+}
+
+/**
  * The model table's picks for the languages: streaming models only, so every
  * pick can write live notes. For a language no streaming model covers, falls
  * back to the catalog's unfiltered picks and reports `liveNotes: false` so the

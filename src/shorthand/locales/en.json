@@ -96,6 +96,8 @@
   "settings.history.source.meeting": "Meeting",
   "settings.history.transcriptNotSaved": "Transcript not saved.",
   "settings.model.groups.output": "Transcript settings",
+  "settings.models.hiddenByBoth": "Some models that match are hidden by the {{preview}} and {{translate}} filters. Turn them off to see them.",
+  "settings.models.hiddenByFilter": "Some models that match are hidden by the {{filter}} filter. Turn it off to see them.",
   "settings.modes.description": "Meetings and Assisted notes both stream what they hear to whatever is following along. Meetings can include the other participants; Assisted notes records only you. Dictation types what you say into the focused window.",
   "settings.modes.heading": "How each mode behaves",
   "settings.modes.shared.description": "One setting, used by whichever mode is recording.",

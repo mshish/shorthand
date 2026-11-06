@@ -91,6 +91,11 @@ interface ModelTableProps {
   renderRow: (entry: TableModel) => React.ReactNode;
   /** Fork: said under the "nothing matches" line, for matches that are hidden. */
   emptyHint?: string;
+  /**
+   * Fork: matches that the pressed filters hide. Replaces the "nothing matches"
+   * line when the table is empty, and sits under the rows when it is not.
+   */
+  hiddenHint?: string;
   /** Head for the delete/stop column; omit for no such column. */
   actionsHead?: React.ReactNode;
   /** After the last section, under a rule. */
@@ -111,6 +116,7 @@ export const ModelTable: React.FC<ModelTableProps> = ({
   sections,
   renderRow,
   emptyHint,
+  hiddenHint,
   actionsHead,
   footer,
   onEscape,
@@ -353,12 +359,13 @@ export const ModelTable: React.FC<ModelTableProps> = ({
           >
             {empty && (
               <div className="px-[12px] py-[28px] text-center text-small text-ink-2">
-                {filters.query.trim()
-                  ? t("modelTable.noMatch", {
-                      query: filters.query.trim(),
-                    })
-                  : t("modelTable.noFilterMatch")}
-                {emptyHint && (
+                {hiddenHint ??
+                  (filters.query.trim()
+                    ? t("modelTable.noMatch", {
+                        query: filters.query.trim(),
+                      })
+                    : t("modelTable.noFilterMatch"))}
+                {!hiddenHint && emptyHint && (
                   <p className="mt-[6px] text-ink-3">{emptyHint}</p>
                 )}
               </div>
@@ -387,6 +394,7 @@ export const ModelTable: React.FC<ModelTableProps> = ({
                   {s.after}
                 </section>
               ))}
+            {!empty && hiddenHint && <Note>{hiddenHint}</Note>}
             {!empty && footer && (
               <div className="-mx-[6px] mt-[6px] flex-none border-t border-line px-[6px] pt-[8px]">
                 {footer}
