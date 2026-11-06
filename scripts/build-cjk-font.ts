@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import subsetFont from "subset-font";
 import { LANGUAGE_METADATA } from "../src/i18n/languages";
-import { CHINESE_SCRIPTS } from "../src/components/onboarding/data/languages";
+import { CHINESE_SCRIPTS } from "../src/lib/utils/languageSuggestions";
 import { SAMPLES } from "../src/components/onboarding/data/samples";
 
 const SOURCE_URL =
