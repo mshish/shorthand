@@ -42,14 +42,16 @@ const ROOT = resolve(import.meta.dir, "..");
 const SRC = join(ROOT, "src");
 
 /**
- * Where the walk starts: everything the sidebar can render, plus `App.tsx`,
- * which renders the Debug section itself (it passes the section its handlers,
- * so `SECTIONS_CONFIG.debug.component` is `null`).
+ * Where the walk starts: everything the sidebar can render, plus the Debug
+ * section, which is not in `SECTIONS_CONFIG` (its `component` is `null`
+ * because `App.tsx` renders it with handlers). Starting from `DebugSettings`
+ * rather than `App.tsx` keeps unrelated app code, such as the onboarding
+ * screens, from making a settings control look reachable.
  */
 const ENTRY_POINTS = [
   join(SRC, "shorthand/sections.ts"),
   join(SRC, "components/Sidebar.tsx"),
-  join(SRC, "App.tsx"),
+  join(SRC, "components/settings/debug/DebugSettings.tsx"),
 ];
 
 /**
@@ -304,6 +306,8 @@ const enCatalogue = JSON.parse(
 );
 const { translation } = applyBranding(enCatalogue, "en");
 
+const PLURAL_SUFFIXES = ["zero", "one", "two", "few", "many", "other"];
+
 const unresolved = [...literalKeys]
   .filter((key) => {
     const value = key
@@ -323,7 +327,7 @@ const unresolved = [...literalKeys]
       );
     const leaf = key.split(".").pop()!;
     const plural = Object.keys(parent ?? {}).some((k) =>
-      k.startsWith(`${leaf}_`),
+      PLURAL_SUFFIXES.some((suffix) => k === `${leaf}_${suffix}`),
     );
     return !plural;
   })
