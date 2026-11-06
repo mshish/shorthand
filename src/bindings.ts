@@ -1139,10 +1139,17 @@ async deleteHistoryEntry(id: number) : Promise<Result<null, string>> {
 },
 /**
  * Queues the entry to be transcribed again with the current model. Its
- * progress and outcome arrive as `TranscriptionJob` events.
+ * progress and outcome arrive as `TranscriptionJob` events. Refused up
+ * front, with the reason, when the entry can't be transcribed again; the job
+ * checks again when it runs.
  */
-async retryHistoryEntryTranscription(id: number) : Promise<void> {
-    await TAURI_INVOKE("retry_history_entry_transcription", { id });
+async retryHistoryEntryTranscription(id: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_history_entry_transcription", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * Stops the entry's background transcription: a queued one is dropped, a
@@ -1599,7 +1606,7 @@ detail: string | null }
 /**
  * The frontend maps each code to its text in `src/lib/notices.ts`.
  */
-export type NoticeCode = "TranscriptionFailed" | "PasteFailed" | "NoMicrophone" | "MicPermissionDenied" | "RecordingFailed" | "ModelLoadFailed" | "PostProcessFailed" | "FileTranscriptionFailed" | "FilePostProcessFailed"
+export type NoticeCode = "TranscriptionFailed" | "PasteFailed" | "NoMicrophone" | "MicPermissionDenied" | "RecordingFailed" | "ModelLoadFailed" | "PostProcessFailed" | "FileTranscriptionFailed" | "FilePostProcessFailed" | "RetryTranscriptionFailed"
 export type NoticeLevel = 
 /**
  * Nothing came out, or Handy can't do its job.

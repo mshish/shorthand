@@ -42,6 +42,10 @@ const NOTICE_DISPLAY: Record<NoticeCode, NoticeDisplay> = {
   FileTranscriptionFailed: {
     title: "errors.fileTranscriptionFailedTitle",
   },
+  // Fork: an entry transcribed again, which is not a file.
+  RetryTranscriptionFailed: {
+    title: "errors.retryTranscriptionFailedTitle",
+  },
   FilePostProcessFailed: {
     title: "errors.filePostProcessFailedTitle",
     explanation: (t) => t("errors.filePostProcessFailed"),

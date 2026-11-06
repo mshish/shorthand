@@ -49,7 +49,7 @@ pub fn merged_transcript_retry_error_for_app(app: &AppHandle, text: &str) -> Opt
     is_merged_transcript(text).then_some(labels.retry_unavailable)
 }
 
-fn is_merged_transcript(text: &str) -> bool {
+pub(crate) fn is_merged_transcript(text: &str) -> bool {
     TRANSCRIPT_TRANSLATIONS.values().any(|strings| {
         let mic = format!("{}: ", strings.speaker_mic);
         let system = format!("{}: ", strings.speaker_system);

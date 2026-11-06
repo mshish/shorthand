@@ -1,4 +1,5 @@
 {
+  "errors.retryTranscriptionFailedTitle": "Transcribing again failed",
   "onboarding.model.noLiveNotes": "Live notes won't appear with the suggested model for your language.",
   "onboarding.telemetry.continue": "Continue",
   "onboarding.telemetry.intro": "Shorthand can send crash reports and a little usage info so problems get found and fixed. It is anonymous, and you can change this any time under Settings → App.",
@@ -137,5 +138,6 @@
   "sidebar.transcription": "Transcription",
   "transcript.retryUnavailable": "Retry is unavailable for transcripts containing system audio.",
   "transcript.speakerMic": "You",
-  "transcript.speakerSystem": "System"
+  "transcript.speakerSystem": "System",
+  "tray.retryTranscriptionFailedTitle": "Transcribing again failed"
 }

@@ -25,6 +25,7 @@ import {
   events,
   type HistoryEntry,
   type HistoryUpdatePayload,
+  type Result,
 } from "@/bindings";
 import { useOsType } from "@/hooks/useOsType";
 import { useSettings } from "@/hooks/useSettings";
@@ -388,7 +389,7 @@ interface HistoryEntryProps {
   onCopyText: () => Promise<boolean>;
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
-  retryTranscription: (id: number) => Promise<void>;
+  retryTranscription: (id: number) => Promise<Result<null, string>>;
   cancelTranscription: (id: number) => Promise<void>;
 }
 
@@ -535,7 +536,11 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             </IconButton>
           ) : (
             <IconButton
-              onClick={() => retryTranscription(entry.id)}
+              onClick={async () => {
+                // Refused up front when it can't be transcribed again.
+                const result = await retryTranscription(entry.id);
+                if (result.status === "error") notify({ title: result.error });
+              }}
               disabled={!hasAudio}
               title={t("settings.history.retranscribe")}
             >

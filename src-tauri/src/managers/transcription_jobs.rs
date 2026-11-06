@@ -226,13 +226,14 @@ impl TranscriptionJobManager {
 
     fn run_jobs(&self) {
         loop {
-            let (entry_id, cancelled) = {
+            let (entry_id, retry, cancelled) = {
                 let mut jobs = self.lock();
-                let entry_id = loop {
-                    if let Some(entry_id) =
-                        jobs.retries.pop_front().or_else(|| jobs.files.pop_front())
-                    {
-                        break entry_id;
+                let (entry_id, retry) = loop {
+                    if let Some(entry_id) = jobs.retries.pop_front() {
+                        break (entry_id, true);
+                    }
+                    if let Some(entry_id) = jobs.files.pop_front() {
+                        break (entry_id, false);
                     }
                     jobs = self
                         .wake
@@ -244,7 +245,7 @@ impl TranscriptionJobManager {
                     entry_id,
                     cancelled: Arc::clone(&cancelled),
                 });
-                (entry_id, cancelled)
+                (entry_id, retry, cancelled)
             };
             self.emit(entry_id, TranscriptionJobStatus::Running { percent: 0 });
 
@@ -272,7 +273,7 @@ impl TranscriptionJobManager {
                     warn!("Transcription of history entry {} failed: {}", entry_id, e);
                     notices::raise(
                         &self.app,
-                        Notice::new(NoticeCode::FileTranscriptionFailed, NoticeSource::File)
+                        Notice::new(failure_code(retry), NoticeSource::File)
                             .with_detail(e.to_string()),
                     );
                     TranscriptionJobStatus::Failed {
@@ -303,15 +304,9 @@ impl TranscriptionJobManager {
         let tm = Arc::clone(&self.app.state::<Arc<TranscriptionManager>>());
         let entry = tauri::async_runtime::block_on(hm.get_entry_by_id(entry_id))?
             .ok_or_else(|| anyhow!("History entry {} not found", entry_id))?;
-        // Fork: a retry is now queued rather than awaited, so the checks the
-        // old command made up front surface here, as the job's failure.
-        crate::commands::history::require_recording(&entry.file_name).map_err(|e| anyhow!(e))?;
-        if let Some(message) = crate::tray_i18n::merged_transcript_retry_error_for_app(
-            &self.app,
-            &entry.transcription_text,
-        ) {
-            return Err(anyhow!(message));
-        }
+        // Fork: the retry command refuses these up front. Checked again here
+        // as a backstop, for an entry that changed while it waited in the queue.
+        crate::commands::history::check_retryable(&self.app, &entry).map_err(|e| anyhow!(e))?;
         let samples = read_wav_samples(hm.get_audio_file_path(&entry.file_name))
             .map_err(|e| anyhow!("Failed to load audio: {}", e))?;
         if samples.is_empty() {
@@ -355,6 +350,15 @@ impl TranscriptionJobManager {
         Ok(JobEnd::Finished {
             post_process_failed,
         })
+    }
+}
+
+/// The notice for a job that failed: a retry says so, not "file".
+fn failure_code(retry: bool) -> NoticeCode {
+    if retry {
+        NoticeCode::RetryTranscriptionFailed
+    } else {
+        NoticeCode::FileTranscriptionFailed
     }
 }
 
@@ -411,5 +415,16 @@ impl ChunkControl for Control<'_> {
         }
         self.manager
             .emit(self.entry_id, TranscriptionJobStatus::Running { percent });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_retry_does_not_say_file() {
+        assert_eq!(failure_code(true), NoticeCode::RetryTranscriptionFailed);
+        assert_eq!(failure_code(false), NoticeCode::FileTranscriptionFailed);
     }
 }

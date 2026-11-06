@@ -17,6 +17,31 @@ pub(crate) fn require_recording(file_name: &str) -> Result<(), String> {
     }
 }
 
+/// Why an entry can't be transcribed again, if it can't: it has no recording,
+/// or its text merges two speakers (so a single pass would drop one).
+/// `retry_unavailable` is the user-facing line for the merged case.
+pub(crate) fn retry_blocker(
+    file_name: &str,
+    text: &str,
+    retry_unavailable: impl FnOnce() -> String,
+) -> Option<String> {
+    if let Err(message) = require_recording(file_name) {
+        return Some(message);
+    }
+    crate::tray_i18n::is_merged_transcript(text).then(retry_unavailable)
+}
+
+/// [`retry_blocker`] with the app's language for the merged-transcript line.
+pub(crate) fn check_retryable(app: &AppHandle, entry: &HistoryEntry) -> Result<(), String> {
+    match retry_blocker(&entry.file_name, &entry.transcription_text, || {
+        crate::tray_i18n::merged_transcript_retry_error_for_app(app, &entry.transcription_text)
+            .unwrap_or_default()
+    }) {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_history_entries(
@@ -73,11 +98,25 @@ pub async fn delete_history_entry(
 }
 
 /// Queues the entry to be transcribed again with the current model. Its
-/// progress and outcome arrive as `TranscriptionJob` events.
+/// progress and outcome arrive as `TranscriptionJob` events. Refused up
+/// front, with the reason, when the entry can't be transcribed again; the job
+/// checks again when it runs.
 #[tauri::command]
 #[specta::specta]
-pub fn retry_history_entry_transcription(jobs: State<'_, Arc<TranscriptionJobManager>>, id: i64) {
+pub async fn retry_history_entry_transcription(
+    app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    jobs: State<'_, Arc<TranscriptionJobManager>>,
+    id: i64,
+) -> Result<(), String> {
+    let entry = history_manager
+        .get_entry_by_id(id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("History entry {id} not found"))?;
+    check_retryable(&app, &entry)?;
     jobs.retry(id);
+    Ok(())
 }
 
 /// Stops the entry's background transcription: a queued one is dropped, a
@@ -164,5 +203,28 @@ mod tests {
     #[test]
     fn require_recording_accepts_non_empty_file_name() {
         assert!(require_recording("handy-123.wav").is_ok());
+    }
+
+    #[test]
+    fn retry_blocker_refuses_an_entry_without_a_recording() {
+        let message = retry_blocker("", "hello", || "merged".to_string());
+        assert_eq!(
+            message.as_deref(),
+            Some("This entry has no saved recording to re-transcribe")
+        );
+    }
+
+    #[test]
+    fn retry_blocker_refuses_a_merged_two_speaker_transcript() {
+        let message = retry_blocker("a.wav", "You: hi\nSystem: hello", || "merged".to_string());
+        assert_eq!(message.as_deref(), Some("merged"));
+    }
+
+    #[test]
+    fn retry_blocker_allows_a_plain_entry_with_a_recording() {
+        assert_eq!(
+            retry_blocker("a.wav", "hello", || unreachable!("not merged")),
+            None
+        );
     }
 }
