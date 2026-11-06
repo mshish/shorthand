@@ -90,11 +90,7 @@ static RECORDING_SESSION: AtomicU64 = AtomicU64::new(0);
 /// the `--follow-stream` `start_failed` code, the overlay error and telemetry.
 /// Derived from upstream's notice classification so the two cannot disagree.
 fn recording_error_type(error: &anyhow::Error) -> &'static str {
-    match recording_notice_code(error) {
-        NoticeCode::MicPermissionDenied => "microphone_permission_denied",
-        NoticeCode::NoMicrophone => "no_input_device",
-        _ => "unknown",
-    }
+    crate::shorthand::overlay_error::start_failure_error_type(recording_notice_code(error))
 }
 
 /// Classifies the errors `try_start_recording` can return for
@@ -1296,36 +1292,87 @@ impl ShortcutAction for TranscribeAction {
                                 }
                             }
 
-                            // The user's hook only changes what gets pasted; history
-                            // above and the follow-stream transcript keep the text as
-                            // produced.
-                            let produced_text = processed.final_text.clone();
-                            let Some(final_text) = complete_unless_cancelled(
-                                crate::transcription_hook::apply(&ah, processed.final_text),
-                                || rm.was_cancelled_since(cancel_generation),
-                            )
-                            .await
-                            else {
-                                debug!("Transcription operation cancelled during hook");
+                            if rm.was_cancelled_since(cancel_generation) {
+                                debug!("Transcription operation cancelled before paste");
                                 utils::hide_recording_overlay(&ah);
                                 set_tray_state(&ah, TrayIconState::Idle);
                                 return;
+                            }
+
+                            // Publish the terminal here, synchronously, before the
+                            // hook runs and before this async block returns — not from
+                            // inside the paste closure queued below. `_guard`
+                            // (`FinishGuard`) is what tells the coordinator the pipeline
+                            // is free to admit a new capture, and it only drops once
+                            // this async block actually returns. `run_on_main_thread`
+                            // only *queues* the paste closure; when `hub.finish` ran
+                            // inside it, the guard could drop — and a rapid next
+                            // capture's `hub.begin` could run — before the closure ever
+                            // executed. `begin` would then find this session's
+                            // `ActiveSession` still open, treat it as orphaned, and
+                            // force-cancel it: the delayed `hub.finish` then found the
+                            // session already replaced and silently dropped as stale
+                            // (see `finish_with`), so a transcript that actually
+                            // completed reached the wire as `cancel` instead of `final`.
+                            // Calling it here closes the session before the guard can
+                            // drop and a next capture can ever be admitted.
+                            //
+                            // It also goes ahead of the hook. A hook can run for 30
+                            // seconds, longer than a follower waits for the terminal
+                            // (shorthand-core's `drainTimeoutMs` is 10), and followers
+                            // get the text as produced, so the hook has nothing to add.
+                            // Publishing first also means a cancel during the hook
+                            // finds the session already final.
+                            let produced_text = processed.final_text.clone();
+                            if let (Some(hub), Some(session)) =
+                                (crate::follow_stream::hub(&ah), follow_stream_session)
+                            {
+                                if produced_text.is_empty() {
+                                    hub.no_speech(session);
+                                } else {
+                                    let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
+                                    hub.finish(session, speaker, &produced_text);
+                                }
+                            }
+
+                            // The mode cell records "the mode of the most recently
+                            // started capture" and is never cleared (see
+                            // shorthand::mode), so it is only guaranteed correct for
+                            // the capture in flight at the moment it is read. The
+                            // paste thread below can run after a new capture has begun
+                            // and overwritten the cell, so resolve settings now, while
+                            // the cell still reflects this capture, and move the
+                            // snapshot into the thread instead of letting `paste()`
+                            // re-read a cell that may by then belong to a different
+                            // capture.
+                            let paste_settings = crate::shorthand::dictation::resolve_settings(&ah);
+
+                            // The user's hook only changes what gets pasted; history
+                            // above and the follow-stream transcript keep the text as
+                            // produced. With no paste method nothing is pasted, so the
+                            // hook would only delay the pipeline.
+                            let final_text = if paste_settings.paste_method
+                                == crate::settings::PasteMethod::None
+                            {
+                                processed.final_text
+                            } else {
+                                let Some(hooked) = complete_unless_cancelled(
+                                    crate::transcription_hook::apply(&ah, processed.final_text),
+                                    || rm.was_cancelled_since(cancel_generation),
+                                )
+                                .await
+                                else {
+                                    debug!("Transcription operation cancelled during hook");
+                                    utils::hide_recording_overlay(&ah);
+                                    set_tray_state(&ah, TrayIconState::Idle);
+                                    return;
+                                };
+                                hooked
                             };
 
                             if final_text.is_empty() {
-                                if let (Some(hub), Some(session)) =
-                                    (crate::follow_stream::hub(&ah), follow_stream_session)
-                                {
-                                    // Nothing to paste, but followers still get
-                                    // the transcript as produced: a hook that
-                                    // returns nothing only cancels the paste.
-                                    if produced_text.is_empty() {
-                                        hub.no_speech(session);
-                                    } else {
-                                        let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
-                                        hub.finish(session, speaker, &produced_text);
-                                    }
-                                }
+                                // Nothing to paste. A hook that returns nothing only
+                                // cancels the paste; followers already have the text.
                                 utils::hide_recording_overlay(&ah);
                                 set_tray_state(&ah, TrayIconState::Idle);
                                 emit_transcription_complete(
@@ -1335,50 +1382,6 @@ impl ShortcutAction for TranscribeAction {
                                     stop_time,
                                 );
                             } else {
-                                // Publish the terminal here, synchronously, before this
-                                // async block returns — not from inside the paste closure
-                                // queued below. `_guard` (`FinishGuard`) is what tells the
-                                // coordinator the pipeline is free to admit a new capture,
-                                // and it only drops once this async block actually returns.
-                                // `run_on_main_thread` below only *queues* the paste
-                                // closure; before this fix `hub.finish` ran inside that
-                                // closure, so the guard could drop — and a rapid next
-                                // capture's `hub.begin` could run — before the closure ever
-                                // executed. `begin` would then find this session's
-                                // `ActiveSession` still open, treat it as orphaned, and
-                                // force-cancel it: the eventual, delayed `hub.finish` call
-                                // then found the session already replaced and silently
-                                // dropped as stale (see `finish_with`), so a transcript
-                                // that actually completed reached the wire as `cancel`
-                                // instead of `final`. Calling it here closes the session
-                                // before the guard can drop and a next capture can ever be
-                                // admitted, so `begin`'s orphan check never has a cleanly
-                                // finished session left to find.
-                                if rm.was_cancelled_since(cancel_generation) {
-                                    debug!("Transcription operation cancelled before paste");
-                                    utils::hide_recording_overlay(&ah);
-                                    set_tray_state(&ah, TrayIconState::Idle);
-                                    return;
-                                }
-                                if let (Some(hub), Some(session)) =
-                                    (crate::follow_stream::hub(&ah), follow_stream_session)
-                                {
-                                    let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
-                                    hub.finish(session, speaker, &produced_text);
-                                }
-
-                                // The mode cell records "the mode of the most recently
-                                // started capture" and is never cleared (see
-                                // shorthand::mode), so it is only guaranteed correct for
-                                // the capture in flight at the moment it is read. The
-                                // paste thread below can run after a new capture has begun
-                                // and overwritten the cell, so resolve settings now, while
-                                // the cell still reflects this capture, and move the
-                                // snapshot into the thread instead of letting `paste()`
-                                // re-read a cell that may by then belong to a different
-                                // capture.
-                                let paste_settings =
-                                    crate::shorthand::dictation::resolve_settings(&ah);
                                 let ah_clone = ah.clone();
                                 let paste_time = Instant::now();
                                 let post_process_failed = processed.post_process_failed;
@@ -1781,7 +1784,8 @@ mod tests {
     fn recording_start_failures_without_a_microphone_kind_are_capture_failures() {
         // A recorder error the wire has no code for: the request is rejected
         // before any device opens. Permission and missing-device kinds map
-        // through `recording_error_type`, which is tested beside it.
+        // through `recording_error_type`, whose notice-code mapping is tested in
+        // `shorthand::overlay_error`: those kinds can't be built without a device.
         let config = handy_recorder::RecorderConfig {
             sample_rate: Some(0),
             ..handy_recorder::RecorderConfig::speech()

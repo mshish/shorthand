@@ -56,10 +56,75 @@ async fn run(hook: &Path, text: &str) -> anyhow::Result<String> {
         output.status.success(),
         "exited with {}: {}",
         output.status,
-        stderr.trim()
+        // A hook is handed the transcript, and a script that fails often
+        // echoes its input to stderr.
+        crate::utils::redact_text(stderr.trim())
     );
 
     // Drop one trailing newline so `echo` output doesn't submit a terminal line.
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.strip_suffix('\n').unwrap_or(&stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hook script that prints `body` and exits with `code`, in a fresh
+    /// directory so concurrent tests don't share a file.
+    fn script(name: &str, body: &str, code: i32) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shorthand-hook-test-{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(windows)]
+        {
+            let path = dir.join("hook.cmd");
+            let echo = if body.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "@echo {body}
+"
+                )
+            };
+            std::fs::write(
+                &path,
+                format!(
+                    "@echo off
+{echo}exit /b {code}
+"
+                ),
+            )
+            .unwrap();
+            path
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("hook");
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh
+printf '%s' '{body}'
+exit {code}
+"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_prints_nothing_gives_empty_text() {
+        let hook = script("empty", "", 0);
+        assert_eq!(run(&hook, "hello").await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn a_hook_failure_is_an_error() {
+        let hook = script("fails", "", 3);
+        assert!(run(&hook, "hello").await.is_err());
+    }
 }
