@@ -61,5 +61,14 @@
   "settings.sound.channel.title": "Input channel",
   "settings.sound.outputDevice.title": "Output device",
   "theme.title": "Application theme",
-  "tray.otherLanguages": "Other languages"
+  "tray.filePostProcessFailedTitle": "Transcribed without AI cleanup",
+  "tray.fileTranscriptionFailedTitle": "File transcription failed",
+  "tray.micPermissionDeniedTitle": "Microphone access denied",
+  "tray.modelLoadFailedTitle": "Failed to load model",
+  "tray.noInputDeviceTitle": "No microphone found",
+  "tray.otherLanguages": "Other languages",
+  "tray.pasteFailedTitle": "Failed to paste text",
+  "tray.postProcessFailedTitle": "Pasted without AI cleanup",
+  "tray.recordingFailedTitle": "Failed to start recording",
+  "tray.transcriptionFailedTitle": "Transcription failed"
 }
