@@ -70,7 +70,7 @@ export const SystemAudioPermissionNotice: React.FC<
             void openPrivacySettings();
           }}
         >
-          {t("accessibility.openSettings")}
+          {t("onboarding.permissions.openSettings")}
         </Button>
         <Button
           variant="secondary"
