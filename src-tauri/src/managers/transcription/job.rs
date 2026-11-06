@@ -49,6 +49,11 @@ impl TranscriptionManager {
             }));
         }
 
+        // Before the model load: with a Meeting running, a load here would swap
+        // or reload the engine under the live capture. `proceed` waits it out.
+        if !control.proceed() {
+            return Ok(None);
+        }
         self.touch_activity();
         self.initiate_model_load(false);
         // Read once: the model can't change until the job ends.
