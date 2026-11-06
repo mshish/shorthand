@@ -137,12 +137,15 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
   - `model.rs` - Model downloading and management
   - `transcription.rs` - Speech-to-text processing pipeline
   - `history.rs` - Transcription history storage
+  - `transcription_jobs.rs` - Background transcription of dropped files and re-transcribed History entries: one job at a time, in chunks that yield to dictation
 - `audio_toolkit/` - Low-level audio processing:
   - `audio/` - Recording sink (VAD, levels, live streaming feed), output devices, WAV I/O
   - `vad/` - Voice Activity Detection (Silero VAD)
 - `commands/` - Tauri command handlers for frontend communication
 - `cli.rs` - CLI argument definitions (clap derive)
 - `shortcut.rs` - Global keyboard shortcut handling
+- `transcription_hook.rs` - The optional `hooks/transcription` script that rewrites text just before it is pasted
+- `language_detection/` - Spoken-language detection for the Auto language setting (a small detector model, run before transcription)
 - `settings.rs` - Application settings management
 - `notices.rs` - Reports background errors to the user (see [Error notices](#error-notices))
 - `overlay.rs` - Recording overlay window (platform-specific)
@@ -216,7 +219,7 @@ The app enforces single instance behavior — launching when already running bri
 **Adding a new error:**
 
 1. Add a `NoticeCode` in `src-tauri/src/notices.rs`, with its level in `NoticeCode::level` and its title in `NoticeCode::tray_title`. **Error** means nothing came out, or Handy can't do its job. **Warning** means the user got a result, but not the one they set up.
-2. Add the title as `errors.<name>Title` in `src/i18n/locales/en/translation.json`, in Title Case and using the app's terms, then add the key to the other locales (`bun run check:translations` fails otherwise). The `Title` suffix is what makes `build.rs` give the tray `strings.<name>_title`. A dictation title has to fit the overlay pill, at most 215px of 12px text.
+2. Add the title as `errors.<name>Title` in `src/i18n/locales/en/translation.json` (upstream writes it in Title Case), then add the key to the other locales (`bun run check:translations` fails otherwise). The fork's English is sentence case and uses the app's terms, so also add the sentence-case title to `src/shorthand/english-copy.json` as both `errors.<name>Title` and `tray.<name>Title`; the tray is built from `tray.*`, which the `errors.*` override does not reach. A code that exists only in the fork puts both keys in `src/shorthand/locales/en.json` instead of upstream's catalogue. The `Title` suffix is what makes `build.rs` give the tray `strings.<name>_title`. A dictation title has to fit the overlay pill, at most 215px of 12px text.
 3. Map the code to its title and optional explanation in `NOTICE_DISPLAY` in `src/lib/notices.ts`. TypeScript won't compile until you do.
 4. Call `notices::raise` where the failure happens, and regenerate `bindings.ts` by running the app in debug:
 

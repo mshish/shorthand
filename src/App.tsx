@@ -198,7 +198,7 @@ function App() {
             }
           } catch (e) {
             console.warn("Failed to check macOS permissions:", e);
-            // If we can't check, proceed to main app and let them fix it there
+            // If we can't check, skip this screen rather than block the app
           }
         }
 
@@ -216,7 +216,7 @@ function App() {
             }
           } catch (e) {
             console.warn("Failed to check Windows microphone permissions:", e);
-            // If we can't check, proceed to main app and let them fix it there
+            // If we can't check, skip this screen rather than block the app
           }
         }
 
