@@ -1214,6 +1214,13 @@ async dismissNotice(source: NoticeSource, code: NoticeCode) : Promise<void> {
  */
 async dismissOverlayNotice() : Promise<void> {
     await TAURI_INVOKE("dismiss_overlay_notice");
+},
+/**
+ * The overlay reports its card's border-box size in CSS pixels. Window changes
+ * run on the main thread, as in `overlay.rs`.
+ */
+async fitOverlay(width: number, height: number) : Promise<void> {
+    await TAURI_INVOKE("fit_overlay", { width, height });
 }
 }
 

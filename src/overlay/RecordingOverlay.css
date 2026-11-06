@@ -46,8 +46,9 @@
   --ov-open-w: 392px; /* Live panel, expanded */
   --ov-base-h: 40px; /* control-row height (.sbase) */
   --ov-cap-max-h: 64px; /* max height of the single-lane live-text region */
-  --ov-dual-cap-max-h: 104px; /* two-lane (Meeting) live-text region; the
-     window grows to fit it (OVERLAY_DUAL_STREAM_HEIGHT in overlay.rs) */
+  --ov-dual-cap-max-h: 104px; /* two-lane (Meeting) live-text region */
+  --ov-max-w: 400px; /* widest a card may be (Live panel: 392 + 2 border) */
+  --ov-error-max-w: 360px; /* error card wraps at this width */
 }
 /* ============================================================
    Unified overlay stage — one fixed, transparent container shared by the compact
@@ -116,9 +117,10 @@
 /* Shared base card. Flat: theme surface + hairline border, no shadow or blur. */
 .scard {
   width: var(--ov-pill-w);
-  /* Never wider than the window: an unaccounted content zoom degrades to a
-     narrower card instead of clipping. 2px = our border (no border-box reset). */
-  max-width: calc(100vw - 2px);
+  /* The window is sized to this card (useOverlayFit), so the card can't be
+     clamped to the window: that would shrink the window, then the card, and
+     again. This is only a bound on a runaway layout. */
+  max-width: var(--ov-max-w);
   border-radius: 24px;
   overflow: hidden;
   display: flex;
@@ -243,9 +245,9 @@
   min-height: 0;
 }
 .stext-cap {
-  /* Vertical counterpart of the .scard clamp: show fewer lines rather than clip.
-     20px = cap padding (12) + card borders (2) + 6px slack for zoom rounding. */
-  max-height: min(var(--ov-cap-max-h), calc(100vh - var(--ov-base-h) - 20px));
+  /* Scrolls past this height. Not clamped to the window, which is sized to the
+     card (see .scard). */
+  max-height: var(--ov-cap-max-h);
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -265,13 +267,7 @@
   -ms-overflow-style: none; /* legacy Edge */
 }
 .stext-cap.dual-lane {
-  /* The same window clamp as the single lane: a cap the window can't hold
-     clips the card's bottom edge (its last line and padding) instead of
-     scrolling. */
-  max-height: min(
-    var(--ov-dual-cap-max-h),
-    calc(100vh - var(--ov-base-h) - 20px)
-  );
+  max-height: var(--ov-dual-cap-max-h);
 }
 /* Hide the scrollbar (WebKit/Chromium) — scroll-back is signalled by the fade. */
 .stext-cap::-webkit-scrollbar {
@@ -511,6 +507,7 @@
    top placement's column-reverse, which would stack the dot under the text. */
 .ov-stage .scard.overlay-error {
   width: auto;
+  max-width: var(--ov-error-max-w);
   animation: none;
   flex-direction: row;
   align-items: center;

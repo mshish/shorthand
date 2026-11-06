@@ -17,6 +17,7 @@ import { noticeDisplay } from "@/lib/notices";
 import type { ModelStateEvent } from "@/lib/types/events";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 import { overlayErrorKeys } from "@/shorthand/overlayError";
+import { useOverlayFit } from "@/shorthand/useOverlayFit";
 
 type OverlayState =
   | "recording"
@@ -95,6 +96,9 @@ const RecordingOverlay: React.FC = () => {
   const [noticeWidth, setNoticeWidth] = useState<number>();
   const noticeProbeRef = useRef<HTMLSpanElement>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  // Counts native shows, so the window is fitted again after each one resets it.
+  const [showCount, setShowCount] = useState(0);
+  const fitRef = useOverlayFit(showCount);
 
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   // Live-text scroll-back: the text region "sticks" to the newest line while the
@@ -148,6 +152,7 @@ const RecordingOverlay: React.FC = () => {
           setSession((s) => s + 1); // remount the card fresh for this session
         }
         setIsVisible(true);
+        setShowCount((n) => n + 1);
       });
 
       const unlistenHide = await listen("hide-overlay", () => {
@@ -412,6 +417,7 @@ const RecordingOverlay: React.FC = () => {
       <div dir={direction} className={`ov-stage ${position}`}>
         {noticeProbe}
         <div
+          ref={fitRef}
           key={session}
           className={`scard ${open ? "open" : ""} ${collapsed ? "working" : ""} ${
             isVisible ? "" : "leaving"
@@ -510,7 +516,7 @@ const RecordingOverlay: React.FC = () => {
     const [message, ...details] = errorLines;
     return (
       <div dir={direction} className={`ov-stage ${position} ov-fade show`}>
-        <div className="scard overlay-error" role="alert">
+        <div ref={fitRef} className="scard overlay-error" role="alert">
           <span className="overlay-error-dot" />
           <div className="overlay-error-lines">
             {message && (
@@ -541,6 +547,7 @@ const RecordingOverlay: React.FC = () => {
     >
       {noticeProbe}
       <div
+        ref={fitRef}
         className={`scard compact ${working && isVisible ? "cworking" : ""} ${noticeClass}`}
         style={shownNotice ? { width: noticeWidth } : undefined}
         onClick={dismissNotice}

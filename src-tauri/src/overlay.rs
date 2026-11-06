@@ -34,6 +34,11 @@ tauri_panel! {
     })
 }
 
+// These are only the window's first size on each show: once the overlay has
+// rendered it reports its card's measured size and the window is fitted to it
+// (shorthand/overlay_fit.rs), because the transparent remainder of a larger
+// window would take clicks meant for the app beneath.
+//
 // Native overlay window sizes (logical points). One window is reused for every
 // state and resized in `show_overlay_state`; each size need only be at least as
 // large as the card it hosts (the `--ov-*` vars in RecordingOverlay.css). The
@@ -167,7 +172,7 @@ fn configure_layer_shell_position(gtk_window: &gtk::ApplicationWindow, position:
 /// derive their dimensions from GTK's size request. gtk-layer-shell documents
 /// the `set_size_request` + `resize(1, 1)` sequence for forcing a new size.
 #[cfg(target_os = "linux")]
-fn configure_layer_shell_surface(
+pub(crate) fn configure_layer_shell_surface(
     gtk_window: &gtk::ApplicationWindow,
     position: OverlayPosition,
     width: f64,
@@ -312,7 +317,7 @@ fn is_mouse_within_monitor(
 /// converts PhysicalPosition using the scale factor of the monitor the window
 /// is *currently* on, which is wrong when moving cross-monitor. Windows uses
 /// `place_windows_overlay` instead (no single logical space across mixed DPI).
-fn calculate_overlay_position(
+pub(crate) fn calculate_overlay_position(
     app_handle: &AppHandle,
     width: f64,
     height: f64,
@@ -361,7 +366,7 @@ static WINDOWS_OVERLAY_IS_STREAMING: AtomicBool = AtomicBool::new(false);
 /// Windows accessibility text size (Settings > Accessibility > Text size), a
 /// separate axis from display scaling that WebView2 applies as a document zoom.
 #[cfg(target_os = "windows")]
-fn windows_text_scale_factor() -> f64 {
+pub(crate) fn windows_text_scale_factor() -> f64 {
     // Absent until the user moves the slider off 100%; stored as a percentage.
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Accessibility")
@@ -674,6 +679,7 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
             );
         }
 
+        crate::shorthand::overlay_fit::on_shown(&overlay_window);
         let _ = overlay_window.emit("show-overlay", state);
     }
 }
@@ -826,6 +832,8 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
                     .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
             }
         }
+
+        crate::shorthand::overlay_fit::on_position_changed(&overlay_window);
     }
 }
 
@@ -906,7 +914,7 @@ static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Tracks whether gtk-layer-shell was successfully initialized (Linux only).
 /// Used to skip layer-shell calls when the window is a regular fallback.
 #[cfg(target_os = "linux")]
-static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub(crate) static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Pure predicate behind `set_capture_overlay_events_enabled`'s call sites:
 /// only `OverlayStyle::None` disables the active capture's overlay events.
