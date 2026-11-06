@@ -85,6 +85,7 @@
   "settings.general.shortcut.bindings.transcribe_with_post_process.name": "AI cleanup shortcut",
   "settings.history.source.assistedNotes": "Assisted notes",
   "settings.history.source.dictation": "Dictation",
+  "settings.history.source.file": "File",
   "settings.history.source.meeting": "Meeting",
   "settings.history.transcriptNotSaved": "Transcript not saved.",
   "settings.model.groups.output": "How transcripts read",

@@ -97,6 +97,31 @@ fn source_for_mode(mode: Mode) -> &'static str {
     }
 }
 
+/// `transcription_history.source` of an entry made from a dropped file. A
+/// file is not a capture, so it has no mode to take the value from. Rows
+/// written before this value existed keep their mode's, and a client that
+/// doesn't know it shows the column's default, Meeting.
+const FILE_SOURCE: &str = "file";
+
+/// The entry for a file whose audio is already at `file_name`.
+fn file_entry(file_name: String, source_name: String, timestamp: i64) -> HistoryEntry {
+    HistoryEntry {
+        id: 0,
+        file_name,
+        timestamp,
+        saved: false,
+        title: String::new(),
+        transcription_text: String::new(),
+        post_processed_text: None,
+        post_process_prompt: None,
+        post_process_requested: false,
+        source: FILE_SOURCE.to_string(),
+        source_name: Some(source_name),
+        language: None,
+        language_source: None,
+    }
+}
+
 pub struct HistoryManager {
     app_handle: AppHandle,
     recordings_dir: PathBuf,
@@ -350,21 +375,7 @@ impl HistoryManager {
     /// Retention never removes it (only deleting it does); never
     /// post-processed.
     pub fn save_file_entry(&self, file_name: String, source_name: String) -> Result<HistoryEntry> {
-        self.insert_entry(HistoryEntry {
-            id: 0,
-            file_name,
-            timestamp: Utc::now().timestamp(),
-            saved: false,
-            title: String::new(),
-            transcription_text: String::new(),
-            post_processed_text: None,
-            post_process_prompt: None,
-            post_process_requested: false,
-            source: source_for_mode(active(&self.app_handle)).to_string(),
-            source_name: Some(source_name),
-            language: None,
-            language_source: None,
-        })
+        self.insert_entry(file_entry(file_name, source_name, Utc::now().timestamp()))
     }
 
     /// Insert `entry`, filling in its id and title, and announce it.
@@ -975,6 +986,20 @@ mod tests {
         assert_eq!(source_for_mode(Mode::Meeting), "meeting");
         assert_eq!(source_for_mode(Mode::Dictation), "dictation");
         assert_eq!(source_for_mode(Mode::AssistedNotes), "assisted_notes");
+    }
+
+    #[test]
+    fn a_file_entry_is_sourced_as_a_file_whatever_mode_was_last_active() {
+        let entry = file_entry("handy-file-1.wav".into(), "talk.mp3".into(), 5);
+        assert_eq!(entry.source, "file");
+        assert_eq!(entry.source_name.as_deref(), Some("talk.mp3"));
+
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 5, "text", &entry.source);
+        let stored = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+        assert_eq!(stored.source, "file");
     }
 
     #[test]

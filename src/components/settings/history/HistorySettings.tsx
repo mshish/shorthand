@@ -34,6 +34,7 @@ import {
   type ActiveJobStatus,
 } from "@/stores/transcriptionJobsStore";
 import { formatDateTime } from "@/utils/dateFormat";
+import { historySourceLabelKey } from "@/shorthand/historySource";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
 import { copyToClipboard } from "./clipboard";
@@ -480,11 +481,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         <div className="flex items-center gap-2 min-w-0">
           <p className="text-sm font-medium shrink-0">{formattedDate}</p>
           <span className="text-xs px-1.5 py-0.5 rounded-full bg-mid-gray/10 text-mid-gray uppercase tracking-wide shrink-0">
-            {entry.source === "dictation"
-              ? t("settings.history.source.dictation")
-              : entry.source === "assisted_notes"
-                ? t("settings.history.source.assistedNotes")
-                : t("settings.history.source.meeting")}
+            {t(historySourceLabelKey(entry.source))}
           </span>
           {entry.source_name && (
             <span
