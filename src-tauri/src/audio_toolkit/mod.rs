@@ -11,8 +11,8 @@ pub mod vad;
 pub use audio::resolve_linux_system_audio_device;
 pub use audio::{
     decode_audio_file, device_display_name, list_output_devices, list_system_audio_devices,
-    read_wav_samples, save_wav_file, verify_wav_file, CaptureSink, CaptureVad,
-    LoopbackOpenOutcome, SystemAudioDeviceInfo, VadPolicy,
+    read_wav_samples, save_wav_file, verify_wav_file, CaptureSink, CaptureVad, LoopbackOpenOutcome,
+    SystemAudioDeviceInfo, VadPolicy,
 };
 pub use lang_id::detect_output_language;
 pub use text::{

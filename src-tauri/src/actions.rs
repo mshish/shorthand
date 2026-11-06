@@ -1322,8 +1322,7 @@ impl ShortcutAction for TranscribeAction {
                                     if produced_text.is_empty() {
                                         hub.no_speech(session);
                                     } else {
-                                        let speaker =
-                                            (!merged_dual_speaker).then_some(Speaker::Me);
+                                        let speaker = (!merged_dual_speaker).then_some(Speaker::Me);
                                         hub.finish(session, speaker, &produced_text);
                                     }
                                 }
@@ -1405,39 +1404,42 @@ impl ShortcutAction for TranscribeAction {
                                         // UI while this paste ran.
                                         let owns_ui =
                                             || RECORDING_SESSION.load(Ordering::SeqCst) == session;
-                                        let (outcome, notice) =
-                                            match utils::paste(final_text, ah_clone.clone(), paste_settings) {
-                                                Ok(()) => {
-                                                    debug!(
-                                                        "Text pasted successfully in {:?}",
-                                                        paste_time.elapsed()
+                                        let (outcome, notice) = match utils::paste(
+                                            final_text,
+                                            ah_clone.clone(),
+                                            paste_settings,
+                                        ) {
+                                            Ok(()) => {
+                                                debug!(
+                                                    "Text pasted successfully in {:?}",
+                                                    paste_time.elapsed()
+                                                );
+                                                // Leave a newer session's notice alone.
+                                                if owns_ui() {
+                                                    notices::clear(
+                                                        &ah_clone,
+                                                        NoticeSource::Dictation,
                                                     );
-                                                    // Leave a newer session's notice alone.
-                                                    if owns_ui() {
-                                                        notices::clear(
-                                                            &ah_clone,
-                                                            NoticeSource::Dictation,
-                                                        );
-                                                    }
-                                                    let notice = post_process_failed.then(|| {
-                                                        Notice::new(
-                                                            NoticeCode::PostProcessFailed,
-                                                            NoticeSource::Dictation,
-                                                        )
-                                                    });
-                                                    (TranscriptionOutcome::Typed, notice)
                                                 }
-                                                Err(e) => {
-                                                    error!("Failed to paste transcription: {}", e);
-                                                    (
-                                                        TranscriptionOutcome::Failed,
-                                                        Some(Notice::new(
-                                                            NoticeCode::PasteFailed,
-                                                            NoticeSource::Dictation,
-                                                        )),
+                                                let notice = post_process_failed.then(|| {
+                                                    Notice::new(
+                                                        NoticeCode::PostProcessFailed,
+                                                        NoticeSource::Dictation,
                                                     )
-                                                }
-                                            };
+                                                });
+                                                (TranscriptionOutcome::Typed, notice)
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to paste transcription: {}", e);
+                                                (
+                                                    TranscriptionOutcome::Failed,
+                                                    Some(Notice::new(
+                                                        NoticeCode::PasteFailed,
+                                                        NoticeSource::Dictation,
+                                                    )),
+                                                )
+                                            }
+                                        };
                                         match (owns_ui(), notice) {
                                             (true, Some(notice)) => {
                                                 notices::raise(&ah_clone, notice)
@@ -1672,8 +1674,8 @@ mod tests {
     use super::{
         combine_finalize_results, complete_unless_cancelled, gated_post_processed_fields,
         is_blank_transcription, non_blank_post_processed_text, post_process_with_key,
-        should_use_streaming_overlay, start_failure_code, strip_invisible_chars,
-        strip_think_block, PostProcessOutcome,
+        should_use_streaming_overlay, start_failure_code, strip_invisible_chars, strip_think_block,
+        PostProcessOutcome,
     };
     use crate::follow_stream::StartFailureCode;
     use crate::settings::{get_default_settings, AppSettings, OverlayStyle};

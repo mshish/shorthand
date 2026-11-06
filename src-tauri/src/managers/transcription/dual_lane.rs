@@ -17,9 +17,9 @@ use tauri::{AppHandle, Manager};
 
 use super::{post_process_transcription_text, TranscriptionManager};
 use crate::audio_toolkit::OutputLanguageEvidence;
+use crate::language_detection::LanguageDecision;
 use crate::managers::model::ModelManager;
 use crate::settings::AppSettings;
-use crate::language_detection::LanguageDecision;
 
 const STREAM_TURN_GAP: Duration = Duration::from_millis(1500);
 const SUBSTANTIAL_TURN_CHARS: usize = 20;
