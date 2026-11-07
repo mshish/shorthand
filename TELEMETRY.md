@@ -29,7 +29,8 @@ against each other.
 
 - `capture.completed`: one count per finished capture, with the mode
   (meeting, dictation, assisted notes), the transcription model's catalogue
-  id (or `custom` for a model you added yourself), and whether it succeeded.
+  id (or `custom` for any model not in the catalogue, including ones you
+  added yourself), and whether it succeeded.
 - `capture.duration_seconds`: how long the capture ran, with the mode.
 - Sessions: that the app started and ended, and whether it crashed. This is
   what gives an active-install count and a crash-free rate per version.
