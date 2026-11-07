@@ -232,22 +232,41 @@ pub fn change_telemetry_enabled_setting(app: AppHandle, enabled: bool) -> Result
     Ok(())
 }
 
-/// The `model` attribute: the catalogue id, or `custom` so user-named
-/// models never reach Sentry.
+/// Whether `model_id` names a file the bundled catalogue publishes. Catalogue
+/// model ids are `{repo_id}/{filename}` (see `ModelDescriptor::to_model_info_for_file`),
+/// so the id is split back into those two parts and resolved with
+/// `crate::catalog::file_in_catalog`, the lookup the model manager itself uses.
+/// That covers alternate quants of a catalogue model and rejects a foreign
+/// repo that reuses a catalogue filename. Ids with no `/` (the built-in
+/// Whisper table's `small`, `medium`, ...) never resolve.
+fn in_catalogue(model_id: &str) -> bool {
+    model_id
+        .rsplit_once('/')
+        .is_some_and(|(repo, file)| crate::catalog::file_in_catalog(file, Some(repo)).is_some())
+}
+
+/// The `model` attribute: the id if, and only if, it resolves in the bundled
+/// catalogue; `custom` for everything else.
+///
+/// `is_custom` alone is not enough. Hugging Face cache discovery registers
+/// models the catalogue doesn't know with `is_custom = false` and an id built
+/// from the repo and file name (`org/repo/file.gguf`), which can name a
+/// client or project. The catalogue is the allow-list, so the id has to
+/// resolve there regardless of the flag. `is_custom` is still checked first
+/// as a cheap short-circuit.
 fn model_attribute(model_id: &str, is_custom: bool) -> String {
-    if is_custom {
+    if is_custom || !in_catalogue(model_id) {
         "custom".to_string()
     } else {
         model_id.to_string()
     }
 }
 
-/// Resolves `model_attribute` from a catalogue lookup that may have found
-/// nothing. Fails closed: `None` (the model manager wasn't in `AppHandle`
-/// state, or the selected id has no catalogue entry) is treated the same
-/// as `is_custom = true`, so an id the catalogue doesn't recognise — which
-/// is exactly the shape of a user-named custom model — never reaches
-/// Sentry verbatim just because the lookup came back empty.
+/// Resolves `model_attribute` from a model-registry lookup that may have
+/// found nothing. Fails closed: `None` (the model manager wasn't in
+/// `AppHandle` state, or the selected id isn't registered) is treated the
+/// same as `is_custom = true`. Even `Some(false)` is not trusted on its own:
+/// see `model_attribute`.
 fn model_attribute_for(is_custom: Option<bool>, model_id: &str) -> String {
     model_attribute(model_id, is_custom.unwrap_or(true))
 }
@@ -415,12 +434,13 @@ mod tests {
         assert_eq!(*inner.0.lock().unwrap(), 1, "closing again must drop");
     }
 
+    /// A real catalogue model id (`repo_id/filename`), as the registry uses it.
+    const CATALOGUE_ID: &str =
+        "handy-computer/parakeet-tdt-0.6b-v3-gguf/parakeet-tdt-0.6b-v3-Q8_0.gguf";
+
     #[test]
     fn model_attribute_hides_custom_model_names() {
-        assert_eq!(
-            model_attribute("parakeet-tdt-0.6b-v3", false),
-            "parakeet-tdt-0.6b-v3"
-        );
+        assert_eq!(model_attribute(CATALOGUE_ID, false), CATALOGUE_ID);
         assert_eq!(model_attribute("my-private-finetune", true), "custom");
     }
 
@@ -432,11 +452,60 @@ mod tests {
             "an absent model manager or unmatched catalogue entry must not leak the raw id"
         );
         assert_eq!(
-            model_attribute_for(Some(false), "parakeet-tdt-0.6b-v3"),
-            "parakeet-tdt-0.6b-v3"
+            model_attribute_for(None, CATALOGUE_ID),
+            "custom",
+            "an unresolved lookup is custom even for a catalogue-shaped id"
         );
+        assert_eq!(model_attribute_for(Some(false), CATALOGUE_ID), CATALOGUE_ID);
         assert_eq!(
             model_attribute_for(Some(true), "my-private-finetune"),
+            "custom"
+        );
+        assert_eq!(
+            model_attribute_for(Some(true), CATALOGUE_ID),
+            "custom",
+            "is_custom wins even over a catalogue id"
+        );
+    }
+
+    #[test]
+    fn catalogue_ids_resolve_and_lookalikes_do_not() {
+        assert!(in_catalogue(CATALOGUE_ID));
+        let default_ids: Vec<String> = crate::catalog::CATALOG
+            .iter()
+            .map(|d| d.id.clone())
+            .collect();
+        assert!(!default_ids.is_empty());
+        for id in &default_ids {
+            assert_eq!(model_attribute_for(Some(false), id), *id);
+        }
+        // Legacy built-in table ids and retired ids carry no repo part.
+        for id in [
+            "small",
+            "medium",
+            "turbo",
+            "large",
+            "breeze-asr",
+            "parakeet-tdt-0.6b-v3",
+        ] {
+            assert_eq!(model_attribute_for(Some(false), id), "custom");
+        }
+        // A foreign repo that reuses a catalogue filename is not ours.
+        assert_eq!(
+            model_attribute_for(
+                Some(false),
+                "acme/private-asr/parakeet-tdt-0.6b-v3-Q8_0.gguf"
+            ),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn model_attribute_for_hides_non_catalogue_cache_ids_flagged_not_custom() {
+        // Hugging Face cache discovery registers unknown models with
+        // `is_custom = false` and an id built from repo and file name.
+        assert_eq!(
+            model_attribute_for(Some(false), "acme/private-asr/client-x.gguf"),
             "custom"
         );
     }
