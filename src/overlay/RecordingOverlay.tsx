@@ -17,7 +17,8 @@ import { noticeDisplay } from "@/lib/notices";
 import type { ModelStateEvent } from "@/lib/types/events";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 import { overlayErrorKeys } from "@/shorthand/overlayError";
-import { useOverlayFit } from "@/shorthand/useOverlayFit";
+import { tailStart } from "@/shorthand/overlayTail";
+import { FIT_IGNORE_ATTR, useOverlayFit } from "@/shorthand/useOverlayFit";
 
 type OverlayState =
   | "recording"
@@ -100,6 +101,12 @@ const RecordingOverlay: React.FC = () => {
   const [showCount, setShowCount] = useState(0);
   const fitRef = useOverlayFit(showCount);
 
+  // Where each lane's shown text starts in its committed text (see tailStart).
+  const tailStartRef = useRef<Record<StreamSource, number>>({
+    mic: 0,
+    system: 0,
+  });
+
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   // Live-text scroll-back: the text region "sticks" to the newest line while the
   // user is at the bottom; if they scroll up to read history, auto-follow pauses
@@ -126,6 +133,7 @@ const RecordingOverlay: React.FC = () => {
           setCaptureReady(false);
           smoothedLevelsRef.current = Array(16).fill(0);
           setLevels(Array(WAVE_BARS).fill(0));
+          tailStartRef.current = { mic: 0, system: 0 };
           setMicStreamText(emptyStreamText("mic"));
           setSystemStreamText(emptyStreamText("system"));
         }
@@ -186,10 +194,14 @@ const RecordingOverlay: React.FC = () => {
       });
 
       const unlistenStream = await events.streamTextEvent.listen((event) => {
-        if (event.payload.source === "mic") {
-          setMicStreamText(event.payload);
+        const { source, committed, tentative } = event.payload;
+        const start = tailStart(committed, tailStartRef.current[source]);
+        tailStartRef.current[source] = start;
+        const text = { source, committed: committed.slice(start), tentative };
+        if (source === "mic") {
+          setMicStreamText(text);
         } else {
-          setSystemStreamText(event.payload);
+          setSystemStreamText(text);
         }
       });
 
@@ -315,7 +327,10 @@ const RecordingOverlay: React.FC = () => {
 
   // ---- Shared building blocks (one visual language for every overlay form) ----
   const waveform = (
-    <div className={`swave ${captureReady ? "ready" : "arming"}`}>
+    <div
+      className={`swave ${captureReady ? "ready" : "arming"}`}
+      {...{ [FIT_IGNORE_ATTR]: "" }}
+    >
       {levels.map((v, i) => (
         <i
           key={i}
