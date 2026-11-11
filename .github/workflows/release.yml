@@ -102,3 +102,34 @@ jobs:
       # stale cached native lib can never be linked into a shipped artifact.
       no-cache: true
     secrets: inherit
+
+  # Tells Sentry which commits each release contains. Without it a Sentry issue
+  # fixed by a commit ("Fixes SHORTHAND-APP-N") is never marked resolved in the
+  # release that ships the fix, and events from older installs read as a
+  # regression.
+  sentry-release:
+    needs: [create-release, publish-tauri]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # set_commits needs the history back to the previous release.
+          fetch-depth: 0
+
+      - name: Create Sentry release
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: shorthand-f4
+          SENTRY_PROJECT: shorthand-app
+        with:
+          # Must equal the release the app reports, `shorthand@` plus the crate
+          # version (src-tauri/src/shorthand/telemetry.rs). The version here is
+          # read from tauri.conf.json, which is kept equal to Cargo.toml.
+          release: shorthand@${{ needs.create-release.outputs.version }}
+          # The releases Sentry already has were created by the app's own
+          # events, with no commits attached, so the first run finds no
+          # previous release commit. This makes it fall back to a default commit
+          # count instead of failing.
+          ignore_missing: true
