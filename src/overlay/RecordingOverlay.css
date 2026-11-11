@@ -353,6 +353,7 @@
   border-radius: 50%;
   flex: none;
   box-sizing: border-box;
+  position: relative;
   transition:
     background-color 180ms ease,
     opacity 180ms ease;
@@ -360,6 +361,17 @@
 .sdot.ready {
   background: var(--s-accent);
   opacity: 1;
+}
+/* The pulse is a ring behind the dot, animated by transform and opacity only:
+   an animated box-shadow repaints on every frame for as long as a capture
+   runs. */
+.sdot.ready::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 50%;
+  background: var(--s-accent-soft);
   animation: sdot-pulse 1.9s infinite;
 }
 /* A quiet neutral dot while the host has not delivered its first sample yet. */
@@ -370,10 +382,14 @@
 }
 @keyframes sdot-pulse {
   0% {
-    box-shadow: 0 0 0 0 var(--s-accent-soft);
+    transform: scale(1);
+    opacity: 1;
   }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
+  /* 7px dot + 7px ring on each side */
+  70%,
+  100% {
+    transform: scale(3);
+    opacity: 0;
   }
 }
 .stimer {

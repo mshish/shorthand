@@ -9,6 +9,19 @@ const sameSize = (a: Size | null, b: Size) =>
 const SETTLE_TIMEOUT_MS = 700;
 
 /**
+ * Marks a subtree whose changes never resize the card. The waveform's bars are
+ * restyled about 30 times a second; measuring the card for each one copies and
+ * lays out the whole card, transcript included, at that rate.
+ */
+export const FIT_IGNORE_ATTR = "data-fit-ignore";
+
+const ignored = (node: EventTarget | null) => {
+  if (!(node instanceof Node)) return false;
+  const element = node instanceof Element ? node : node.parentElement;
+  return !!element?.closest(`[${FIT_IGNORE_ATTR}]`);
+};
+
+/**
  * The size the card is heading for. Its drawn size is mid-transition, so this
  * measures a copy of it, inserted beside it with its own transitions and
  * animation off: a copy has no earlier style to transition from, so it lays
@@ -140,14 +153,18 @@ export function useOverlayFit(showCount: number) {
       });
       resize.observe(element, { box: "border-box" });
       // A new state sets a new target before the card moves toward it.
-      const mutation = new MutationObserver(() => evaluate());
+      const mutation = new MutationObserver((records) => {
+        if (records.some((record) => !ignored(record.target))) evaluate();
+      });
       mutation.observe(element, {
         attributes: true,
         childList: true,
         subtree: true,
         characterData: true,
       });
-      const onTransitionEnd = () => evaluate();
+      const onTransitionEnd = (event: Event) => {
+        if (!ignored(event.target)) evaluate();
+      };
       element.addEventListener("transitionend", onTransitionEnd);
       element.addEventListener("transitioncancel", onTransitionEnd);
       cleanupRef.current = () => {
