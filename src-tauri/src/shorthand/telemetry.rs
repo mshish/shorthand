@@ -395,6 +395,34 @@ pub fn transcription_reason(err: &str) -> &'static str {
     }
 }
 
+/// Maps a failed model load to a fixed reason code, for the same reason as
+/// [`transcription_reason`]: the error text names the model, and an engine
+/// error can carry the file's path. An engine failure is matched by its type;
+/// the others by the fixed messages in `managers/transcription.rs` and
+/// `ModelManager::get_model_path`.
+pub fn model_load_reason(err: &anyhow::Error) -> &'static str {
+    if let Some(engine) = err.downcast_ref::<crate::engine_supervisor::EngineError>() {
+        return match engine {
+            crate::engine_supervisor::EngineError::Cancelled => "cancelled",
+            crate::engine_supervisor::EngineError::Failed(_) => "engine_failed",
+        };
+    }
+    let err = err.to_string().to_lowercase();
+    if err.contains("currently downloading") {
+        "downloading"
+    } else if err.contains("complete model file not found") {
+        "file_missing"
+    } else if err.contains("model file is incomplete") {
+        "file_incomplete"
+    } else if err.contains("model not downloaded") || err.contains("model not available") {
+        "not_downloaded"
+    } else if err.contains("model not found") {
+        "not_in_catalogue"
+    } else {
+        "other"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,6 +615,46 @@ mod tests {
             "model_not_loaded"
         );
         assert_eq!(transcription_reason("something else entirely"), "other");
+    }
+
+    #[test]
+    fn model_load_reason_maps_each_load_failure_and_falls_back_to_other() {
+        use crate::engine_supervisor::EngineError;
+        let reason = |message: &str| model_load_reason(&anyhow::anyhow!(message.to_string()));
+        assert_eq!(reason("Model not found: whisper-small"), "not_in_catalogue");
+        assert_eq!(reason("Model not downloaded"), "not_downloaded");
+        assert_eq!(
+            reason("Model not available: whisper-small"),
+            "not_downloaded"
+        );
+        assert_eq!(
+            reason("Model is currently downloading: whisper-small"),
+            "downloading"
+        );
+        assert_eq!(
+            reason("Complete model file not found in HF cache or models dir: whisper-small"),
+            "file_missing"
+        );
+        assert_eq!(
+            reason("Complete model file not found: whisper-small"),
+            "file_missing"
+        );
+        assert_eq!(
+            reason("Model file is incomplete: whisper-small"),
+            "file_incomplete"
+        );
+        assert_eq!(
+            model_load_reason(&anyhow::Error::new(EngineError::Failed(
+                "failed to load model C:\\Users\\someone\\model not found.gguf".to_string()
+            ))),
+            "engine_failed",
+            "an engine error is matched by its type, never by text that can hold a path"
+        );
+        assert_eq!(
+            model_load_reason(&anyhow::Error::new(EngineError::Cancelled)),
+            "cancelled"
+        );
+        assert_eq!(reason("something else entirely"), "other");
     }
 
     #[test]

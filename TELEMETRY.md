@@ -17,7 +17,9 @@ against each other.
 
 - A Rust panic: the panic message and stack frames.
 - One of five named failures, with a short kind and, where the text cannot
-  contain a path, a fixed detail: `model_load` (kind only), `transcription`
+  contain a path, a fixed detail: `model_load` (a fixed reason code: model
+  not in the catalogue, not downloaded, still downloading, file missing, file
+  incomplete, engine failed, cancelled, or other), `transcription`
   (a fixed reason code: engine error, engine panic, finalize timeout,
   engine busy, model not loaded, or other), `follow_stream_listen` and `request_socket_listen` (the I/O error
   kind only), and `mic_open` (a fixed reason: microphone permission denied,

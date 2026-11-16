@@ -549,9 +549,13 @@ impl TranscriptionManager {
         device_index: Option<usize>,
     ) -> Result<()> {
         let result = self.load_model_with_device_inner(model_id, device_index);
-        if result.is_err() {
-            // Kind only: load errors name the model file on disk.
-            crate::shorthand::telemetry::report_error("model_load", None);
+        if let Err(error) = &result {
+            // A fixed code, never the text: load errors name the model file
+            // on disk.
+            crate::shorthand::telemetry::report_error(
+                "model_load",
+                Some(crate::shorthand::telemetry::model_load_reason(error)),
+            );
         }
         result
     }
@@ -657,7 +661,7 @@ impl TranscriptionManager {
                 // The worker's error already says it failed to load.
                 let error_msg = e.to_string();
                 emit_loading_failed(&error_msg);
-                anyhow::anyhow!(error_msg)
+                anyhow::Error::new(e)
             })?;
         // Reconcile the registry's advertised capabilities with the
         // loaded model's real ones (GGUF metadata) so badges/gating
