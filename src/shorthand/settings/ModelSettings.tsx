@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ModelsSettings } from "@/components/settings/models/ModelsSettings";
 import { ModelSettingsCard } from "@/components/settings/general/ModelSettingsCard";
@@ -13,6 +13,7 @@ import { AccelerationSelector } from "@/components/settings/AccelerationSelector
 import { VadBackendSelector } from "@/components/settings/VadBackendSelector";
 import { Sheet } from "@/shorthand/ui/Sheet";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
+import { TabPanel, Tabs } from "@/shorthand/ui/Tabs";
 
 /**
  * Fork-only "Model" section: which model does the transcribing, and how its
@@ -35,31 +36,68 @@ import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
  * `ModelSettingsCard` self-hides when the active model supports neither
  * language selection nor translation; that behaviour is untouched here.
  *
- * The catalog comes last: it is the long part, and the settings above it are
- * what a user changes most, so they should not sit under a screenful of models.
+ * The catalog has its own tab, the same `Tabs` bar the Modes page uses: it is
+ * the long part, and the settings are what a user changes most, so they open
+ * first rather than sitting above a screenful of models. The active tab is
+ * view state, not a preference, so it is not persisted.
  */
+
+type ModelTab = "settings" | "models";
+
 export const ModelSettings: React.FC = () => {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState<ModelTab>("settings");
+
+  const tabs = [
+    { id: "settings" as const, label: t("settings.model.tabs.settings") },
+    { id: "models" as const, label: t("settings.models.title") },
+  ];
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-8">
-      <ModelSettingsCard />
-      <Sheet title={t("settings.languages.title")}>
-        <PreferredLanguages descriptionMode="tooltip" grouped={true} />
-      </Sheet>
-      <Sheet title={t("settings.model.groups.output")}>
-        <CustomWords descriptionMode="inline" grouped={true} />
-        <FillerWordRemoval descriptionMode="inline" grouped={true} />
-        <ChineseScriptSetting descriptionMode="inline" grouped={true} />
-        <AdvancedOnly>
-          <ModelUnloadTimeoutSetting descriptionMode="tooltip" grouped={true} />
-          <AccelerationSelector descriptionMode="tooltip" grouped={true} />
-          <VadBackendSelector descriptionMode="tooltip" grouped={true} />
-          <LongFormChunking descriptionMode="tooltip" grouped={true} />
-          <LanguageDetection descriptionMode="tooltip" grouped={true} />
-        </AdvancedOnly>
-      </Sheet>
-      <ModelsSettings />
+    // No `space-y-8` on this element: TabPanel is a sibling of the tab bar,
+    // and the gap would land on top of TabPanel's own (see ModesSettings).
+    <div className="max-w-3xl w-full mx-auto">
+      <Tabs
+        tabs={tabs}
+        active={activeTab}
+        onChange={setActiveTab}
+        label={t("settings.model.tabs.label")}
+      />
+
+      {activeTab === "settings" && (
+        <TabPanel id="settings">
+          <div className="space-y-8">
+            <ModelSettingsCard />
+            <Sheet title={t("settings.languages.title")}>
+              <PreferredLanguages descriptionMode="tooltip" grouped={true} />
+            </Sheet>
+            <Sheet title={t("settings.model.groups.output")}>
+              <CustomWords descriptionMode="inline" grouped={true} />
+              <FillerWordRemoval descriptionMode="inline" grouped={true} />
+              <ChineseScriptSetting descriptionMode="inline" grouped={true} />
+              <AdvancedOnly>
+                <ModelUnloadTimeoutSetting
+                  descriptionMode="tooltip"
+                  grouped={true}
+                />
+                <AccelerationSelector
+                  descriptionMode="tooltip"
+                  grouped={true}
+                />
+                <VadBackendSelector descriptionMode="tooltip" grouped={true} />
+                <LongFormChunking descriptionMode="tooltip" grouped={true} />
+                <LanguageDetection descriptionMode="tooltip" grouped={true} />
+              </AdvancedOnly>
+            </Sheet>
+          </div>
+        </TabPanel>
+      )}
+
+      {activeTab === "models" && (
+        <TabPanel id="models">
+          <ModelsSettings />
+        </TabPanel>
+      )}
     </div>
   );
 };
