@@ -150,7 +150,6 @@ struct StreamSession<'a> {
     /// Converts the final frame for the overlay, as the progress callback
     /// does for the others.
     preview_script: Arc<Mutex<PreviewScript>>,
-    languages: Vec<String>,
     /// In auto mode the model's own LID is the best remaining evidence; the
     /// snapshot is only materialized when it can change the outcome.
     want_language: bool,
@@ -178,7 +177,6 @@ impl<'a> StreamSession<'a> {
             let app_handle = tm.app_handle.clone();
             let source = tm.source;
             let stream_active = Arc::clone(&tm.stream_active);
-            let languages = setup.languages.clone();
             let preview_script = Arc::clone(&preview_script);
             move |progress: StreamProgress| {
                 let mut perf = lock_perf(&perf);
@@ -186,8 +184,8 @@ impl<'a> StreamSession<'a> {
                 perf.record_update(&progress.update);
                 if let Some(text) = progress.text {
                     perf.record_emit();
-                    let mut preview_script = lock_preview(&preview_script);
-                    let frame = preview_script.frame(&text.committed, &text.tentative, &languages);
+                    let frame =
+                        lock_preview(&preview_script).frame(&text.committed, &text.tentative);
                     emit_stream_text(
                         &app_handle,
                         source,
@@ -229,7 +227,6 @@ impl<'a> StreamSession<'a> {
             stream,
             perf,
             preview_script,
-            languages: setup.languages.clone(),
             want_language: matches!(output_language, OutputLanguageEvidence::Unknown),
         })
     }
@@ -251,11 +248,8 @@ impl<'a> StreamSession<'a> {
                 // Finalize can commit the last volatile suffix. Emit and
                 // record it before replying so the merge cannot lose the tail
                 // of either lane.
-                let frame = lock_preview(&self.preview_script).frame(
-                    &finalized.text.committed,
-                    &finalized.text.tentative,
-                    &self.languages,
-                );
+                let frame = lock_preview(&self.preview_script)
+                    .frame(&finalized.text.committed, &finalized.text.tentative);
                 emit_stream_text(
                     &self.tm.app_handle,
                     self.tm.source,
