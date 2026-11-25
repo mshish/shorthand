@@ -9,6 +9,11 @@
 //! The doc tab takes the same name. That folder also holds core's transcript
 //! sidecars.
 //!
+//! With "a doc per meeting" (`GoogleDocsLayout::DocPerMeeting`) the app
+//! first creates that meeting's own doc in the meeting notes folder, named
+//! the same way, and hands core its id (`--google-document`, in the core
+//! release after 0.24.4), so core writes into the doc's one tab instead of adding a tab.
+//!
 //! The engine is the `shorthand-notes` binary bundled next to the app (see
 //! `scripts/build-notes-engine.sh`), or whatever `SHORTHAND_NOTES_BIN` names
 //! (a `.mjs`/`.js` file runs under `node`), for development.
@@ -21,7 +26,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use tauri::AppHandle;
 
-use super::NotesTarget;
+use super::{GoogleDocsLayout, NotesTarget};
 use crate::shorthand::mode::Mode;
 
 const ENGINE_NAME: &str = "shorthand-notes";
@@ -124,7 +129,13 @@ fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>) -> Stri
         .expect("an unused title always exists")
 }
 
-fn capture_args(folder: &Path, note: &str, app_exe: &Path, agent_args: &[String]) -> Vec<String> {
+fn capture_args(
+    folder: &Path,
+    note: &str,
+    app_exe: &Path,
+    agent_args: &[String],
+    own_document: Option<&str>,
+) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "capture".into(),
         "--vault".into(),
@@ -134,9 +145,12 @@ fn capture_args(folder: &Path, note: &str, app_exe: &Path, agent_args: &[String]
         "--enhance".into(),
         "--sink".into(),
         "google".into(),
-        "--shorthand".into(),
-        app_exe.to_string_lossy().into_owned(),
     ];
+    if let Some(document) = own_document {
+        args.push(format!("--google-document={document}"));
+    }
+    args.push("--shorthand".to_string());
+    args.push(app_exe.to_string_lossy().into_owned());
     args.extend(agent_args.iter().cloned());
     args.push("--exit-after-session".into());
     args
@@ -178,16 +192,28 @@ fn run_meeting(app: &AppHandle) {
     };
     let fallback_title = format!("Meeting {}", started.format("%Y-%m-%d %H%M"));
 
-    let connected = super::credentials::credentials_path()
+    let layout = crate::settings::get_settings(app).google_docs_layout;
+    let saved = super::credentials::credentials_path()
         .ok()
-        .and_then(|path| super::credentials::read(&path))
-        .is_some_and(|c| c.document_id.is_some());
-    if !connected {
+        .and_then(|path| super::credentials::read(&path));
+    let connected = saved.as_ref().is_some_and(|c| match layout {
+        GoogleDocsLayout::TabPerMeeting => c.document_id.is_some(),
+        GoogleDocsLayout::DocPerMeeting => c.folder_id.is_some(),
+    });
+    let Some(saved) = saved.filter(|_| connected) else {
         return fail(
             fallback_title,
-            "Google Docs isn't connected. Connect it in Settings, Notes.".into(),
+            match layout {
+                GoogleDocsLayout::TabPerMeeting => {
+                    "Google Docs isn't connected. Connect it in Settings, Notes."
+                }
+                GoogleDocsLayout::DocPerMeeting => {
+                    "The meeting notes folder isn't set up. Set it up in Settings, Notes."
+                }
+            }
+            .into(),
         );
-    }
+    };
     let agent_args = match crate::settings::get_settings(app)
         .google_notes_agent
         .capture_args()
@@ -234,6 +260,17 @@ fn run_meeting(app: &AppHandle) {
         },
     );
 
+    let own_document = match (layout, saved.folder_id.as_deref()) {
+        (GoogleDocsLayout::DocPerMeeting, Some(folder_id)) => {
+            match tauri::async_runtime::block_on(create_meeting_doc(app, &saved, folder_id, &title))
+            {
+                Ok(id) => Some(id),
+                Err(message) => return fail(title, message),
+            }
+        }
+        _ => None,
+    };
+
     let init = engine
         .command()
         .args(["init-note", "--vault"])
@@ -255,7 +292,13 @@ fn run_meeting(app: &AppHandle) {
 
     let child = engine
         .command()
-        .args(capture_args(&folder, &note, &app_exe, &agent_args))
+        .args(capture_args(
+            &folder,
+            &note,
+            &app_exe,
+            &agent_args,
+            own_document.as_deref(),
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -279,6 +322,28 @@ fn run_meeting(app: &AppHandle) {
         Ok(status) => fail(title, failure_message(&tail, status.code())),
         Err(e) => fail(title, format!("Lost track of the notes engine: {e}")),
     }
+}
+
+/// The meeting's own doc, made in the folder before core starts. Reads the
+/// folder's name again on the way, so a folder renamed in Drive shows its
+/// new name in settings.
+async fn create_meeting_doc(
+    app: &AppHandle,
+    saved: &super::credentials::Credentials,
+    folder_id: &str,
+    title: &str,
+) -> Result<String, String> {
+    let http = reqwest::Client::new();
+    let pair = super::oauth::ClientCredentials {
+        client_id: &saved.client_id,
+        client_secret: &saved.client_secret,
+    };
+    let access_token =
+        super::oauth::refresh_access_token(&http, &pair, &saved.refresh_token).await?;
+    let id =
+        super::container_doc::create_meeting_doc(&http, &access_token, folder_id, title).await?;
+    super::remember_folder_name(app, &http, &access_token, folder_id).await;
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -343,12 +408,28 @@ mod tests {
             "Meeting.md",
             Path::new("/app/shorthand"),
             &["--backend".into(), "cursor".into()],
+            None,
         );
         let joined = args.join(" ");
         assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
-        assert!(joined.contains("--sink google"));
+        assert!(joined.contains("--sink google --shorthand"));
         assert!(joined.contains("--shorthand /app/shorthand --backend cursor"));
         assert!(joined.ends_with("--exit-after-session"));
+        assert!(!joined.contains("--google-document"));
+    }
+
+    #[test]
+    fn a_doc_per_meeting_hands_core_that_doc() {
+        let args = capture_args(
+            Path::new("/notes"),
+            "Meeting.md",
+            Path::new("/app/shorthand"),
+            &[],
+            Some("meeting-doc"),
+        );
+        assert!(args
+            .join(" ")
+            .contains("--sink google --google-document=meeting-doc --shorthand"));
     }
 
     #[test]

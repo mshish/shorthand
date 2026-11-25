@@ -14,6 +14,9 @@
  * picture would otherwise hide.
  *
  *   notes-claude.png          Google Docs chosen, Claude as the note taker
+ *   notes-layout-menu.png     the "Each meeting gets" menu open on its two
+ *                             choices
+ *   notes-folder.png          a doc per meeting, in the folder Shorthand made
  *   notes-agent-menu.png      the note taker menu open on its five choices
  *   notes-codex.png           ChatGPT (Codex), with its optional model
  *   notes-acp.png             another ACP app, its program still missing
@@ -92,6 +95,23 @@ await expectRow("Write meeting notes to");
 await choose("Write meeting notes to", "Google Docs");
 await expectRow("Note taker");
 await shoot("notes-claude");
+
+await openMenu("Each meeting gets");
+await row("Each meeting gets")
+  .getByRole("button", { name: "Its own doc", exact: true })
+  .waitFor();
+await shoot("notes-layout-menu");
+await row("Each meeting gets")
+  .getByRole("button", { name: "Its own doc", exact: true })
+  .click();
+await expectRow("Meeting folder");
+await page
+  .getByText('Meetings go into "Shorthand Meeting Notes"')
+  .waitFor({ timeout: 5000 });
+await shoot("notes-folder");
+// Back to one doc, so the note taker shots match the earlier ones.
+await choose("Each meeting gets", "A tab in one doc");
+await expectRow("Meeting doc");
 
 await openMenu("Note taker");
 await row("Note taker")

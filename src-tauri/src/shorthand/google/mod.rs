@@ -60,6 +60,17 @@ pub enum NotesTarget {
     GoogleDocs,
 }
 
+/// How the Google Docs target lays meetings out: a new tab in one doc (the
+/// default, and the only layout before this setting), or a new doc for each
+/// meeting in the "Shorthand Meeting Notes" folder.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum GoogleDocsLayout {
+    #[default]
+    TabPerMeeting,
+    DocPerMeeting,
+}
+
 struct OAuthClient {
     id: String,
     secret: String,
@@ -113,6 +124,12 @@ pub struct GoogleDocsStatus {
     pub document_url: Option<String>,
     /// Its name in Google Drive, when it could be read at sign-in.
     pub document_name: Option<String>,
+    /// Signed in to Google, whether or not a doc or folder is chosen yet.
+    pub signed_in: bool,
+    /// The folder that "a doc per meeting" puts each meeting's doc in.
+    pub folder_url: Option<String>,
+    /// Its name in Google Drive, as last read.
+    pub folder_name: Option<String>,
     /// The notes engine (shorthand-core) was found next to the app.
     pub engine_found: bool,
     pub last_run: Option<runner::LastRun>,
@@ -126,6 +143,10 @@ pub struct GoogleDocsStatus {
     pub notes_llm_key: CredentialStatus,
 }
 
+pub fn folder_url(folder_id: &str) -> String {
+    format!("https://drive.google.com/drive/folders/{folder_id}")
+}
+
 pub fn document_url(document_id: &str) -> String {
     format!("https://docs.google.com/document/d/{document_id}/edit")
 }
@@ -136,14 +157,47 @@ fn document_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| document_info::info_path(&dir))
 }
 
-fn current_status(app: &AppHandle) -> GoogleDocsStatus {
-    let document_id = credentials::credentials_path()
+fn folder_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    crate::portable::app_data_dir(app)
         .ok()
-        .and_then(|path| credentials::read(&path))
-        .and_then(|c| c.document_id);
+        .map(|dir| document_info::folder_info_path(&dir))
+}
+
+/// Remembers the folder's name for the settings row. Only a label: a
+/// failure leaves the row saying "your folder" instead.
+pub(crate) async fn remember_folder_name(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    access_token: &str,
+    folder_id: &str,
+) {
+    let (Some(path), Some(name)) = (
+        folder_info_path(app),
+        document_info::fetch_name(http, access_token, folder_id).await,
+    ) else {
+        return;
+    };
+    let _ = document_info::write(
+        &path,
+        &document_info::DocumentInfo {
+            document_id: folder_id.to_string(),
+            name,
+        },
+    );
+}
+
+fn current_status(app: &AppHandle) -> GoogleDocsStatus {
+    let saved = credentials::credentials_path()
+        .ok()
+        .and_then(|path| credentials::read(&path));
+    let document_id = saved.as_ref().and_then(|c| c.document_id.clone());
+    let folder_id = saved.as_ref().and_then(|c| c.folder_id.clone());
     let document_name = document_id.as_deref().and_then(|id| {
         document_info_path(app).and_then(|path| document_info::read_name(&path, id))
     });
+    let folder_name = folder_id
+        .as_deref()
+        .and_then(|id| folder_info_path(app).and_then(|path| document_info::read_name(&path, id)));
     let custom_client_id = crate::settings::get_settings(app)
         .google_oauth_client_id
         .filter(|id| !id.trim().is_empty());
@@ -166,6 +220,9 @@ fn current_status(app: &AppHandle) -> GoogleDocsStatus {
         connected: document_id.is_some(),
         document_url: document_id.as_deref().map(document_url),
         document_name,
+        signed_in: saved.is_some(),
+        folder_url: folder_id.as_deref().map(folder_url),
+        folder_name,
         engine_found: runner::engine_command().is_some(),
         last_run: runner::last_run(),
         custom_client_id,
@@ -199,9 +256,20 @@ impl Drop for SignInGuard {
     }
 }
 
+/// What a sign-in sets up once Google says yes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignInFor {
+    /// An existing doc, chosen on Google's consent page.
+    PickedDoc,
+    /// A new "Shorthand Meeting Notes" doc, in a folder of the same name.
+    NewDoc,
+    /// Only the folder, for "a doc per meeting".
+    Folder,
+}
+
 /// PKCE, consent in the browser, the loopback redirect, token exchange, then
-/// pick or create the document, then write the credentials file.
-async fn sign_in(app: &AppHandle, create_new: bool) -> Result<(), String> {
+/// pick or create the document or folder, then write the credentials file.
+async fn sign_in(app: &AppHandle, purpose: SignInFor) -> Result<(), String> {
     let client = oauth_client(app).ok_or(
         "Google sign-in isn't set up in this build of Shorthand. It needs a Google OAuth client ID.",
     )?;
@@ -217,7 +285,7 @@ async fn sign_in(app: &AppHandle, create_new: bool) -> Result<(), String> {
         redirect_uri: &redirect_uri,
         code_challenge: &challenge.code_challenge,
         scope: GOOGLE_DOCS_SCOPE,
-        use_picker: !create_new,
+        use_picker: purpose == SignInFor::PickedDoc,
     });
     let listener = oauth::bind_loopback(REDIRECT_PORT).await?;
     app.opener()
@@ -252,25 +320,42 @@ async fn sign_in(app: &AppHandle, create_new: bool) -> Result<(), String> {
     let path = credentials::credentials_path()
         .map_err(|e| format!("Couldn't find Shorthand's config folder: {e}"))?;
     let access_token = oauth::refresh_access_token(&http, &pair, &refresh_token).await?;
-    let (document_id, folder_id) = if create_new {
-        let existing = credentials::read(&path)
-            .map(|c| container_doc::ExistingTarget {
-                folder_id: c.folder_id,
-                document_id: c.document_id,
-            })
-            .unwrap_or_default();
-        let doc = container_doc::ensure_container_doc(&http, &access_token, existing).await?;
-        (doc.document_id, Some(doc.folder_id))
-    } else {
-        let picked = redirect
-            .picked_file_ids
-            .into_iter()
-            .next()
-            .ok_or("No document was picked. Connect again and choose a Google Doc.")?;
-        (picked, None)
+    // Ids from an earlier connection, which stay usable under the same
+    // client: switching layouts shouldn't lose the other one's doc or folder.
+    let previous = credentials::read(&path)
+        .filter(|c| c.client_id == client.id)
+        .map(|c| container_doc::ExistingTarget {
+            folder_id: c.folder_id,
+            document_id: c.document_id,
+        })
+        .unwrap_or_default();
+    let (document_id, folder_id) = match purpose {
+        SignInFor::NewDoc => {
+            let doc = container_doc::ensure_container_doc(&http, &access_token, previous).await?;
+            (Some(doc.document_id), Some(doc.folder_id))
+        }
+        SignInFor::PickedDoc => {
+            let picked = redirect
+                .picked_file_ids
+                .into_iter()
+                .next()
+                .ok_or("No document was picked. Connect again and choose a Google Doc.")?;
+            (Some(picked), previous.folder_id)
+        }
+        SignInFor::Folder => {
+            let (folder, _) =
+                container_doc::ensure_folder(&http, &access_token, previous.folder_id).await?;
+            (previous.document_id, Some(folder))
+        }
     };
 
-    let name = document_info::fetch_name(&http, &access_token, &document_id).await;
+    let name = match &document_id {
+        Some(id) => document_info::fetch_name(&http, &access_token, id).await,
+        None => None,
+    };
+    if let Some(folder) = &folder_id {
+        remember_folder_name(app, &http, &access_token, folder).await;
+    }
 
     credentials::write(
         &path,
@@ -278,7 +363,7 @@ async fn sign_in(app: &AppHandle, create_new: bool) -> Result<(), String> {
             client_id: client.id,
             client_secret: client.secret,
             refresh_token,
-            document_id: Some(document_id.clone()),
+            document_id: document_id.clone(),
             folder_id,
         },
     )
@@ -286,15 +371,46 @@ async fn sign_in(app: &AppHandle, create_new: bool) -> Result<(), String> {
 
     // The name is only a label; a doc that connects without one still works.
     if let Some(info_path) = document_info_path(app) {
-        let _ = match name {
-            Some(name) => document_info::write(
+        let _ = match (document_id, name) {
+            (Some(document_id), Some(name)) => document_info::write(
                 &info_path,
                 &document_info::DocumentInfo { document_id, name },
             ),
-            None => document_info::remove(&info_path),
+            _ => document_info::remove(&info_path),
         };
     }
     Ok(())
+}
+
+/// Makes the meeting notes folder with the Google account already signed
+/// in, so choosing "a doc per meeting" after connecting a doc needs no
+/// second trip to the browser. `Ok(false)` when there is no account to use.
+async fn add_folder_to_connection(app: &AppHandle) -> Result<bool, String> {
+    let path = credentials::credentials_path()
+        .map_err(|e| format!("Couldn't find Shorthand's config folder: {e}"))?;
+    let Some(saved) = credentials::read(&path) else {
+        return Ok(false);
+    };
+    if saved.folder_id.is_some() {
+        return Ok(true);
+    }
+    let http = reqwest::Client::new();
+    let pair = oauth::ClientCredentials {
+        client_id: &saved.client_id,
+        client_secret: &saved.client_secret,
+    };
+    let access_token = oauth::refresh_access_token(&http, &pair, &saved.refresh_token).await?;
+    let (folder, _) = container_doc::ensure_folder(&http, &access_token, None).await?;
+    credentials::write(
+        &path,
+        &credentials::Credentials {
+            folder_id: Some(folder.clone()),
+            ..saved
+        },
+    )
+    .map_err(|e| format!("Couldn't save the Google connection: {e}"))?;
+    remember_folder_name(app, &http, &access_token, &folder).await;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -311,7 +427,26 @@ pub async fn connect_google_docs(
     app: AppHandle,
     create_new: bool,
 ) -> Result<GoogleDocsStatus, String> {
-    let result = sign_in(&app, create_new).await;
+    let purpose = if create_new {
+        SignInFor::NewDoc
+    } else {
+        SignInFor::PickedDoc
+    };
+    let result = sign_in(&app, purpose).await;
+    notify_status_changed(&app);
+    result.map(|()| current_status(&app))
+}
+
+/// Sets up the folder for "a doc per meeting": with the account already
+/// signed in when there is one, otherwise through Google's sign-in.
+#[tauri::command]
+#[specta::specta]
+pub async fn connect_google_folder(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let result = match add_folder_to_connection(&app).await {
+        Ok(true) => Ok(()),
+        Ok(false) => sign_in(&app, SignInFor::Folder).await,
+        Err(message) => Err(message),
+    };
     notify_status_changed(&app);
     result.map(|()| current_status(&app))
 }
@@ -336,7 +471,10 @@ pub fn disconnect_google_docs(app: AppHandle) -> Result<GoogleDocsStatus, String
     let path = credentials::credentials_path().map_err(|e| e.to_string())?;
     credentials::remove(&path)
         .map_err(|e| format!("Couldn't remove the Google connection: {e}"))?;
-    if let Some(info_path) = document_info_path(&app) {
+    for info_path in [document_info_path(&app), folder_info_path(&app)]
+        .into_iter()
+        .flatten()
+    {
         let _ = document_info::remove(&info_path);
     }
     notify_status_changed(&app);
@@ -352,6 +490,42 @@ pub fn open_google_doc(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_google_folder(app: AppHandle) -> Result<(), String> {
+    let url = current_status(&app)
+        .folder_url
+        .ok_or("The meeting notes folder isn't set up.")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the layout, then, for "a doc per meeting", makes the folder with
+/// the account already signed in. The setting is saved even when that
+/// fails; the folder row then offers to set it up.
+#[tauri::command]
+#[specta::specta]
+pub async fn change_google_docs_layout_setting(
+    app: AppHandle,
+    layout: GoogleDocsLayout,
+) -> Result<GoogleDocsStatus, String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.google_docs_layout = layout;
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "google_docs_layout", "value": layout }),
+    );
+    let result = if layout == GoogleDocsLayout::DocPerMeeting {
+        add_folder_to_connection(&app).await.map(|_| ())
+    } else {
+        Ok(())
+    };
+    notify_status_changed(&app);
+    result.map(|()| current_status(&app))
 }
 
 #[tauri::command]
@@ -480,6 +654,23 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<NotesTarget>("\"obsidian\"").unwrap(),
             NotesTarget::Obsidian
+        );
+    }
+
+    #[test]
+    fn layout_defaults_to_a_tab_per_meeting_and_serializes_snake_case() {
+        assert_eq!(GoogleDocsLayout::default(), GoogleDocsLayout::TabPerMeeting);
+        assert_eq!(
+            serde_json::to_value(GoogleDocsLayout::DocPerMeeting).unwrap(),
+            serde_json::json!("doc_per_meeting")
+        );
+    }
+
+    #[test]
+    fn folder_url_opens_the_folder_in_drive() {
+        assert_eq!(
+            folder_url("f1"),
+            "https://drive.google.com/drive/folders/f1"
         );
     }
 

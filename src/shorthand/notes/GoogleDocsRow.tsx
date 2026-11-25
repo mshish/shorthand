@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "@/bindings";
+import { commands, type GoogleDocsLayout } from "@/bindings";
 import { Button } from "@/components/ui/Button";
 import { SettingContainer } from "@/components/ui/SettingContainer";
+import { useSettings } from "@/hooks/useSettings";
 import {
   describeGoogleDocs,
   GOOGLE_ACTION_LABEL_KEYS,
@@ -20,8 +21,8 @@ interface GoogleDocsRowProps {
 }
 
 /**
- * Fork-only row: is Google connected, which doc meetings go into, and how
- * the last meeting went. Re-reads on mount, on window focus, and whenever
+ * Fork-only row: is Google connected, which doc (or, with a doc per
+ * meeting, which folder) meetings go into, and how the last meeting went. Re-reads on mount, on window focus, and whenever
  * the backend says something changed (a sign-in finishing, a meeting
  * starting or ending). The copy lives in `googleDocsState.ts`.
  */
@@ -29,6 +30,9 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
   grouped = false,
 }) => {
   const { t } = useTranslation();
+  const { getSetting } = useSettings();
+  const layout = (getSetting("google_docs_layout") ??
+    "tab_per_meeting") as GoogleDocsLayout;
   const [state, setState] = useState<GoogleDocsRowState>({ phase: "loading" });
   const [actionError, setActionError] = useState<string | null>(null);
   /** Set by Cancel, so the sign-in it stops doesn't read as a failure. */
@@ -87,6 +91,25 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
           setState({ phase: "ready", status: result.data });
           return;
         }
+        case "connect_folder":
+        case "set_up_folder": {
+          cancelled.current = false;
+          setState({ phase: "connecting" });
+          const result = await commands.connectGoogleFolder();
+          if (result.status === "error") {
+            if (!cancelled.current) setActionError(String(result.error));
+            setState({ phase: "loading" });
+            await refresh();
+            return;
+          }
+          setState({ phase: "ready", status: result.data });
+          return;
+        }
+        case "open_folder": {
+          const result = await commands.openGoogleFolder();
+          if (result.status === "error") setActionError(String(result.error));
+          return;
+        }
         case "open_doc": {
           const result = await commands.openGoogleDoc();
           if (result.status === "error") setActionError(String(result.error));
@@ -109,7 +132,7 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
     }
   };
 
-  const view = describeGoogleDocs(state);
+  const view = describeGoogleDocs(state, layout);
   const description = actionError
     ? t("settings.notes.google.actionFailed", { error: actionError })
     : [
@@ -121,7 +144,7 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
 
   return (
     <SettingContainer
-      title={t("settings.notes.google.rowTitle")}
+      title={t(view.titleKey)}
       description={description}
       descriptionMode="inline"
       grouped={grouped}

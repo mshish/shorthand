@@ -15,6 +15,7 @@ import type {
   VadBackend,
   CredentialStatus,
   LanguageDetectionMode,
+  GoogleDocsLayout,
   NotesAgent,
   NotesTarget,
 } from "@/bindings";
@@ -148,6 +149,14 @@ const settingUpdaters: {
     commands.changeTelemetryEnabledSetting(value as boolean),
   notes_target: (value) =>
     commands.changeNotesTargetSetting(value as NotesTarget),
+  // The layout is saved before the folder is made, so a folder error is
+  // shown and the choice stays: the row then offers to set the folder up.
+  google_docs_layout: async (value) => {
+    const result = await commands.changeGoogleDocsLayoutSetting(
+      value as GoogleDocsLayout,
+    );
+    if (result.status === "error") notify({ title: result.error });
+  },
   google_notes_agent: async (value) => {
     const result = await commands.changeGoogleNotesAgentSetting(
       value as NotesAgent,

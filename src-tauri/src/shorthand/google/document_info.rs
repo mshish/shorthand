@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const FILE_NAME: &str = "google-docs-document.json";
+/// The meeting notes folder's name, for the "a doc per meeting" setting. The
+/// same shape as the doc's: `document_id` holds the folder's id.
+const FOLDER_FILE_NAME: &str = "google-docs-folder.json";
 const GOOGLE_API_BASE: &str = "https://www.googleapis.com";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -20,6 +23,10 @@ pub struct DocumentInfo {
 
 pub fn info_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(FILE_NAME)
+}
+
+pub fn folder_info_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(FOLDER_FILE_NAME)
 }
 
 /// The stored name, only if it belongs to `document_id`.
@@ -49,6 +56,7 @@ struct NameResponse {
 }
 
 /// Best effort: the name is a label, so any failure is just "no name".
+/// Works for a folder too: both are Drive files.
 pub async fn fetch_name(
     http: &reqwest::Client,
     access_token: &str,

@@ -44,6 +44,7 @@ import {
   mockIPC,
   mockWindows,
 } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 
 import type {
   AppSettings,
@@ -333,6 +334,7 @@ const SETTINGS: AppSettings = {
   // The Rust defaults: Obsidian, and Claude as the Google Docs note taker.
   // `shot-notes.mjs` clicks both over, so the shots start where a user does.
   notes_target: "obsidian",
+  google_docs_layout: "tab_per_meeting",
   google_notes_agent: {
     backend: "claude",
     codex_model: "",
@@ -352,6 +354,8 @@ const SETTINGS: AppSettings = {
  * button. The API key starts missing, as it does until one is added.
  */
 let NOTES_LLM_KEY: CredentialStatus = "missing";
+/** Made when "Its own doc" is chosen, as the app does when signed in. */
+let FOLDER_MADE = false;
 const googleDocsStatus = (): GoogleDocsStatus => {
   const agent = SETTINGS.google_notes_agent;
   const nameable =
@@ -362,6 +366,11 @@ const googleDocsStatus = (): GoogleDocsStatus => {
     connected: true,
     document_url: "https://docs.google.com/document/d/preview/edit",
     document_name: "Meeting notes",
+    signed_in: true,
+    folder_url: FOLDER_MADE
+      ? "https://drive.google.com/drive/folders/preview"
+      : null,
+    folder_name: FOLDER_MADE ? "Shorthand Meeting Notes" : null,
     engine_found: true,
     last_run: { kind: "finished", title: "Weekly sync" },
     custom_client_id: null,
@@ -503,6 +512,18 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     return googleDocsStatus();
   },
   get_google_docs_status: () => googleDocsStatus(),
+  change_google_docs_layout_setting: ({ layout }) => {
+    SETTINGS.google_docs_layout = layout;
+    if (layout === "doc_per_meeting") FOLDER_MADE = true;
+    // The app says the status changed, and the Google row reads it again.
+    setTimeout(() => emit("google-docs-status-changed"), 0);
+    return googleDocsStatus();
+  },
+  connect_google_folder: () => {
+    FOLDER_MADE = true;
+    return googleDocsStatus();
+  },
+  open_google_folder: () => null,
   set_google_notes_llm_key: () => {
     NOTES_LLM_KEY = "configured";
     return googleDocsStatus();

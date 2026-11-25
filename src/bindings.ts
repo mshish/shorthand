@@ -736,6 +736,39 @@ async openGoogleDoc() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Sets up the folder for "a doc per meeting": with the account already
+ * signed in when there is one, otherwise through Google's sign-in.
+ */
+async connectGoogleFolder() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("connect_google_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openGoogleFolder() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_google_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Saves the layout, then, for "a doc per meeting", makes the folder with
+ * the account already signed in. The setting is saved even when that
+ * fails; the folder row then offers to set it up.
+ */
+async changeGoogleDocsLayoutSetting(layout: GoogleDocsLayout) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_docs_layout_setting", { layout }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeNotesTargetSetting(target: NotesTarget) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_notes_target_setting", { target }) };
@@ -1506,7 +1539,11 @@ google_oauth_client_id?: string | null;
  * Fork: which note taker fills the Google Doc. See
  * `shorthand::google::agent`.
  */
-google_notes_agent?: NotesAgent }
+google_notes_agent?: NotesAgent; 
+/**
+ * Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
+ */
+google_docs_layout?: GoogleDocsLayout }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1613,6 +1650,12 @@ post_process_provider_id: string;
  * user who never sets it per mode sees no change in behaviour.
  */
 post_process_model: string | null }
+/**
+ * How the Google Docs target lays meetings out: a new tab in one doc (the
+ * default, and the only layout before this setting), or a new doc for each
+ * meeting in the "Shorthand Meeting Notes" folder.
+ */
+export type GoogleDocsLayout = "tab_per_meeting" | "doc_per_meeting"
 export type GoogleDocsStatus = { 
 /**
  * This build has an OAuth client to sign in with.
@@ -1626,6 +1669,18 @@ document_url: string | null;
  * Its name in Google Drive, when it could be read at sign-in.
  */
 document_name: string | null; 
+/**
+ * Signed in to Google, whether or not a doc or folder is chosen yet.
+ */
+signed_in: boolean; 
+/**
+ * The folder that "a doc per meeting" puts each meeting's doc in.
+ */
+folder_url: string | null; 
+/**
+ * Its name in Google Drive, as last read.
+ */
+folder_name: string | null; 
 /**
  * The notes engine (shorthand-core) was found next to the app.
  */

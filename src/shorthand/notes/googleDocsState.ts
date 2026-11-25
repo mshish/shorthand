@@ -5,13 +5,16 @@
  * `obsidianPluginState.ts`.
  */
 
-import type { GoogleDocsStatus } from "@/bindings";
+import type { GoogleDocsLayout, GoogleDocsStatus } from "@/bindings";
 
 export type GoogleDocsAction =
   | "connect_pick"
   | "connect_create"
   | "open_doc"
   | "change_doc"
+  | "connect_folder"
+  | "set_up_folder"
+  | "open_folder"
   | "disconnect"
   | "cancel"
   | "retry";
@@ -23,6 +26,8 @@ export type GoogleDocsRowState =
   | { phase: "ready"; status: GoogleDocsStatus };
 
 export interface GoogleDocsView {
+  /** "Meeting doc" or "Meeting folder", by layout. */
+  titleKey: string;
   descriptionKey: string;
   params: Record<string, string>;
   actions: GoogleDocsAction[];
@@ -36,6 +41,9 @@ export const GOOGLE_ACTION_LABEL_KEYS: Record<GoogleDocsAction, string> = {
   connect_create: "settings.notes.google.action.connectCreate",
   open_doc: "settings.notes.google.action.openDoc",
   change_doc: "settings.notes.google.action.changeDoc",
+  connect_folder: "settings.notes.google.action.connectFolder",
+  set_up_folder: "settings.notes.google.action.setUpFolder",
+  open_folder: "settings.notes.google.action.openFolder",
   disconnect: "settings.notes.google.action.disconnect",
   cancel: "settings.notes.google.action.cancel",
   retry: "settings.notes.google.action.retry",
@@ -69,8 +77,51 @@ function lastRun(status: GoogleDocsStatus): {
   }
 }
 
-export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
-  const none = { lastRunKey: null, lastRunParams: {} };
+const FOLDER = "settings.notes.google.folder";
+
+/** A doc per meeting: the row is about the folder, not one doc. */
+function describeFolder(status: GoogleDocsStatus): GoogleDocsView {
+  const titleKey = `${FOLDER}.rowTitle`;
+  if (!status.folder_url) {
+    return {
+      titleKey,
+      descriptionKey: status.signed_in
+        ? `${FOLDER}.signedInNoFolder`
+        : `${FOLDER}.notConnected`,
+      params: {},
+      actions: [status.signed_in ? "set_up_folder" : "connect_folder"],
+      ...lastRun(status),
+    };
+  }
+  const actions: GoogleDocsAction[] = ["open_folder", "disconnect"];
+  if (!status.engine_found) {
+    return {
+      titleKey,
+      descriptionKey: `${STATUS}.connectedNoEngine`,
+      params: {},
+      actions,
+      ...lastRun(status),
+    };
+  }
+  const name = status.folder_name;
+  return {
+    titleKey,
+    descriptionKey: name ? `${FOLDER}.connectedNamed` : `${FOLDER}.connected`,
+    params: name ? { name } : {},
+    actions,
+    ...lastRun(status),
+  };
+}
+
+export function describeGoogleDocs(
+  state: GoogleDocsRowState,
+  layout: GoogleDocsLayout = "tab_per_meeting",
+): GoogleDocsView {
+  const titleKey =
+    layout === "doc_per_meeting"
+      ? `${FOLDER}.rowTitle`
+      : "settings.notes.google.rowTitle";
+  const none = { titleKey, lastRunKey: null, lastRunParams: {} };
   if (state.phase === "loading") {
     return {
       descriptionKey: `${STATUS}.checking`,
@@ -105,11 +156,13 @@ export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
       ...none,
     };
   }
+  if (layout === "doc_per_meeting") return describeFolder(status);
   if (!status.connected) {
     return {
       descriptionKey: `${STATUS}.notConnected`,
       params: {},
       actions: ["connect_pick", "connect_create"],
+      titleKey,
       ...lastRun(status),
     };
   }
@@ -119,6 +172,7 @@ export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
       descriptionKey: `${STATUS}.connectedNoEngine`,
       params: {},
       actions: ["open_doc", "change_doc", "disconnect"],
+      titleKey,
       ...lastRun(status),
     };
   }
@@ -126,6 +180,7 @@ export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
     descriptionKey: name ? `${STATUS}.connectedNamed` : `${STATUS}.connected`,
     params: name ? { name } : {},
     actions: ["open_doc", "change_doc", "disconnect"],
+    titleKey,
     ...lastRun(status),
   };
 }

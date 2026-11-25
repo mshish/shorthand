@@ -2,6 +2,9 @@
 //! Notes" holding one Google Doc of the same name, which core then fills with
 //! a tab per meeting. Ported from shorthand-config's `container_doc.rs`.
 //!
+//! The same folder serves the "a doc per meeting" setting: each meeting gets
+//! a new doc created straight into it, and the shared doc isn't needed.
+//!
 //! Every call is made with the `drive.file` scope, so the app only ever sees
 //! the folder and document it created (or the one the user picked).
 
@@ -84,27 +87,8 @@ async fn ensure_container_doc_at(
         });
     }
 
-    let (folder_id, folder_created) = match &existing.folder_id {
-        Some(id) => (id.clone(), false),
-        None => {
-            let response = http
-                .post(format!("{drive_base}/drive/v3/files"))
-                .bearer_auth(access_token)
-                .json(&serde_json::json!({
-                    "name": DEFAULT_NAME,
-                    "mimeType": "application/vnd.google-apps.folder",
-                }))
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            let response = ensure_success(response, "Creating the Drive folder").await?;
-            let body: IdResponse = response.json().await.map_err(|e| e.to_string())?;
-            (
-                body.id.ok_or("Drive created a folder but returned no id")?,
-                true,
-            )
-        }
-    };
+    let (folder_id, folder_created) =
+        ensure_folder_at(http, drive_base, access_token, existing.folder_id.clone()).await?;
 
     match ensure_document_and_reparent(http, drive_base, docs_base, access_token, &existing, &folder_id)
         .await
@@ -121,6 +105,89 @@ async fn ensure_container_doc_at(
         )),
         Err(message) => Err(message),
     }
+}
+
+/// The "Shorthand Meeting Notes" folder: `existing` when there is one,
+/// otherwise a new folder in the top of the user's Drive. The bool is
+/// whether it was created now.
+pub async fn ensure_folder(
+    http: &reqwest::Client,
+    access_token: &str,
+    existing: Option<String>,
+) -> Result<(String, bool), String> {
+    ensure_folder_at(http, GOOGLE_API_BASE, access_token, existing).await
+}
+
+async fn ensure_folder_at(
+    http: &reqwest::Client,
+    drive_base: &str,
+    access_token: &str,
+    existing: Option<String>,
+) -> Result<(String, bool), String> {
+    if let Some(id) = existing.filter(|id| !id.trim().is_empty()) {
+        return Ok((id, false));
+    }
+    let response = http
+        .post(format!("{drive_base}/drive/v3/files"))
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "name": DEFAULT_NAME,
+            "mimeType": "application/vnd.google-apps.folder",
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let response = ensure_success(response, "Creating the Drive folder").await?;
+    let body: IdResponse = response.json().await.map_err(|e| e.to_string())?;
+    Ok((
+        body.id.ok_or("Drive created a folder but returned no id")?,
+        true,
+    ))
+}
+
+/// One meeting's own doc, created straight into `folder_id` and named
+/// `title`. Drive makes it, not Docs, so it lands in the folder in one call
+/// with nothing to move afterwards. A new doc always has one tab, which core
+/// writes into.
+pub async fn create_meeting_doc(
+    http: &reqwest::Client,
+    access_token: &str,
+    folder_id: &str,
+    title: &str,
+) -> Result<String, String> {
+    create_meeting_doc_at(http, GOOGLE_API_BASE, access_token, folder_id, title).await
+}
+
+async fn create_meeting_doc_at(
+    http: &reqwest::Client,
+    drive_base: &str,
+    access_token: &str,
+    folder_id: &str,
+    title: &str,
+) -> Result<String, String> {
+    let response = http
+        .post(format!("{drive_base}/drive/v3/files?fields=id"))
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "name": title,
+            "mimeType": "application/vnd.google-apps.document",
+            "parents": [folder_id],
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    // Drive answers 404 for a parent it can't see: the folder was deleted,
+    // or emptied from the trash. Name the fix rather than the status code.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(
+            "The meeting notes folder is gone from Google Drive. Disconnect and connect again in Settings, Notes, to make a new one."
+                .into(),
+        );
+    }
+    let response = ensure_success(response, "Creating the meeting's Google Doc").await?;
+    let body: IdResponse = response.json().await.map_err(|e| e.to_string())?;
+    body.id
+        .ok_or_else(|| "Drive created the meeting's doc but returned no id".into())
 }
 
 /// Moves the document into the folder even when the document already
@@ -308,6 +375,65 @@ mod tests {
                 .await
                 .unwrap_err();
         assert!(err.contains("orphaned-folder-id"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_existing_folder_is_kept_and_a_missing_one_is_made() {
+        let kept = ensure_folder_at(&client(), "http://127.0.0.1:9", "token", Some("f1".into()))
+            .await
+            .unwrap();
+        assert_eq!(kept, ("f1".to_string(), false));
+
+        let (drive, seen) = serve(vec![Route::json(
+            "POST /drive/v3/files",
+            200,
+            r#"{"id":"new-folder"}"#,
+        )])
+        .await;
+        let made = ensure_folder_at(&client(), &drive, "token", Some("  ".into()))
+            .await
+            .unwrap();
+        assert_eq!(made, ("new-folder".to_string(), true));
+        let body = &seen.await.unwrap()[0].body;
+        assert!(
+            body.contains("application/vnd.google-apps.folder"),
+            "{body}"
+        );
+        assert!(body.contains(DEFAULT_NAME), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_meeting_doc_is_created_inside_the_folder_in_one_call() {
+        let (drive, seen) = serve(vec![Route::json(
+            "POST /drive/v3/files",
+            200,
+            r#"{"id":"meeting-doc"}"#,
+        )])
+        .await;
+        let id = create_meeting_doc_at(&client(), &drive, "token", "f1", "Meeting 2026-11-25 0930")
+            .await
+            .unwrap();
+        assert_eq!(id, "meeting-doc");
+        let seen = seen.await.unwrap();
+        assert_eq!(seen.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(&seen[0].body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "name": "Meeting 2026-11-25 0930",
+                "mimeType": "application/vnd.google-apps.document",
+                "parents": ["f1"],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_folder_says_how_to_fix_it() {
+        let (drive, _) = serve(vec![Route::json("POST /drive/v3/files", 404, "{}")]).await;
+        let err = create_meeting_doc_at(&client(), &drive, "token", "gone", "Meeting")
+            .await
+            .unwrap_err();
+        assert!(err.contains("folder is gone"), "{err}");
     }
 
     #[tokio::test]

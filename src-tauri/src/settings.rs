@@ -615,6 +615,9 @@ pub struct AppSettings {
     /// `shorthand::google::agent`.
     #[serde(default)]
     pub google_notes_agent: crate::shorthand::google::agent::NotesAgent,
+    /// Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
+    #[serde(default)]
+    pub google_docs_layout: crate::shorthand::google::GoogleDocsLayout,
 }
 
 fn default_model() -> String {
@@ -1236,6 +1239,7 @@ pub fn get_default_settings() -> AppSettings {
         notes_target: Default::default(),
         google_oauth_client_id: None,
         google_notes_agent: Default::default(),
+        google_docs_layout: Default::default(),
     }
 }
 

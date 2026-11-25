@@ -1,6 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "@/hooks/useSettings";
+import { GoogleDocsLayoutRow } from "@/shorthand/notes/GoogleDocsLayoutRow";
 import { GoogleDocsRow } from "@/shorthand/notes/GoogleDocsRow";
 import { GoogleOAuthClientRow } from "@/shorthand/notes/GoogleOAuthClientRow";
 import { NotesAgentRows } from "@/shorthand/notes/NotesAgentRow";
@@ -16,8 +17,9 @@ import { Sheet } from "@/shorthand/ui/Sheet";
  * A choice of destination for meetings, then the setup for the one chosen,
  * so the page only ever asks for what the choice needs. Obsidian's setup is
  * a hand-off: the plugin runs inside Obsidian, so it is installed there.
- * Google Docs is set up here: a Google sign-in, the doc meetings go into
- * and who writes the notes, plus, under Advanced, your own OAuth client. See
+ * Google Docs is set up here: one doc with a tab per meeting or a folder
+ * with a doc per meeting, the Google sign-in and doc or folder, and who
+ * writes the notes, plus, under Advanced, your own OAuth client. See
  * docs/superpowers/specs/2026-09-01-notes-obsidian-plugin-install-design.md
  * and docs/superpowers/specs/2026-08-25-shorthand-umbrella-design.md.
  */
@@ -39,6 +41,7 @@ export const NotesSettings: React.FC = () => {
           title={t("settings.notes.google.title")}
           description={t("settings.notes.google.description")}
         >
+          <GoogleDocsLayoutRow grouped={true} />
           <GoogleDocsRow grouped={true} />
           <NotesAgentRows grouped={true} />
           <AdvancedOnly>

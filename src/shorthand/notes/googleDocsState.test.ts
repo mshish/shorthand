@@ -21,6 +21,9 @@ const status = (
   engine_found: true,
   last_run: null,
   document_name: null,
+  signed_in: false,
+  folder_url: null,
+  folder_name: null,
   custom_client_id: null,
   custom_client_secret: "missing",
   using_custom_client: false,
@@ -47,6 +50,20 @@ const ALL_STATES: GoogleDocsRowState[] = [
   ),
   ready(status({ connected: true, engine_found: false })),
   ready(status({ connected: true, document_name: "Team standups" })),
+  ready(status({ signed_in: true })),
+  ready(
+    status({
+      signed_in: true,
+      folder_url: "https://drive.google.com/drive/folders/f",
+    }),
+  ),
+  ready(
+    status({
+      signed_in: true,
+      folder_url: "https://drive.google.com/drive/folders/f",
+      folder_name: "Shorthand Meeting Notes",
+    }),
+  ),
   ready(
     status({
       connected: true,
@@ -135,13 +152,55 @@ describe("describeGoogleDocs", () => {
     expect(view.params).toEqual({ error: "boom" });
   });
 
+  test("a doc per meeting asks for the folder, then names it", () => {
+    const folder = "https://drive.google.com/drive/folders/f";
+    const fresh = describeGoogleDocs(ready(status()), "doc_per_meeting");
+    expect(fresh.titleKey).toBe("settings.notes.google.folder.rowTitle");
+    expect(fresh.descriptionKey).toBe(
+      "settings.notes.google.folder.notConnected",
+    );
+    expect(fresh.actions).toEqual(["connect_folder"]);
+    const signedIn = describeGoogleDocs(
+      ready(status({ signed_in: true })),
+      "doc_per_meeting",
+    );
+    expect(signedIn.descriptionKey).toBe(
+      "settings.notes.google.folder.signedInNoFolder",
+    );
+    expect(signedIn.actions).toEqual(["set_up_folder"]);
+    const named = describeGoogleDocs(
+      ready(
+        status({
+          signed_in: true,
+          folder_url: folder,
+          folder_name: "Shorthand Meeting Notes",
+        }),
+      ),
+      "doc_per_meeting",
+    );
+    expect(named.descriptionKey).toBe(
+      "settings.notes.google.folder.connectedNamed",
+    );
+    expect(named.params).toEqual({ name: "Shorthand Meeting Notes" });
+    expect(named.actions).toEqual(["open_folder", "disconnect"]);
+  });
+
+  test("one doc keeps its own title", () => {
+    expect(describeGoogleDocs(ready(status())).titleKey).toBe(
+      "settings.notes.google.rowTitle",
+    );
+  });
+
   test("every key the row can use exists in the fork's English strings", () => {
     const strings = en as Record<string, string>;
     for (const state of ALL_STATES) {
-      const view = describeGoogleDocs(state);
-      expect(typeof strings[view.descriptionKey]).toBe("string");
-      if (view.lastRunKey)
-        expect(typeof strings[view.lastRunKey]).toBe("string");
+      for (const layout of ["tab_per_meeting", "doc_per_meeting"] as const) {
+        const view = describeGoogleDocs(state, layout);
+        expect(typeof strings[view.titleKey]).toBe("string");
+        expect(typeof strings[view.descriptionKey]).toBe("string");
+        if (view.lastRunKey)
+          expect(typeof strings[view.lastRunKey]).toBe("string");
+      }
     }
     for (const key of Object.values(GOOGLE_ACTION_LABEL_KEYS)) {
       expect(typeof strings[key]).toBe("string");
