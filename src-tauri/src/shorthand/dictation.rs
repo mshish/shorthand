@@ -150,18 +150,18 @@ pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
                 post_process_selected_prompt_id: dictation.post_process_selected_prompt_id,
                 system_audio_enabled: dictation.system_audio_enabled,
                 follow_stream_enabled: dictation.follow_stream_enabled,
-                post_process_provider_id: dictation.post_process_provider_id.clone(),
-                // The per-mode model is expressed as an override *into* the
-                // shared provider->model map rather than as a separate lookup,
-                // so every existing read of `post_process_models` keeps working
-                // untouched. `None` leaves the map exactly as it was.
-                post_process_models: {
-                    let mut models = settings.post_process_models.clone();
-                    if let Some(model) = dictation.post_process_model.clone() {
-                        models.insert(dictation.post_process_provider_id.clone(), model);
-                    }
-                    models
-                },
+                // See `mode_provider`: without its own model, the mode uses the
+                // provider chosen in the Post-processing section.
+                post_process_provider_id: mode_provider(
+                    &settings,
+                    &dictation.post_process_provider_id,
+                    &dictation.post_process_model,
+                ),
+                post_process_models: mode_models(
+                    &settings,
+                    &dictation.post_process_provider_id,
+                    &dictation.post_process_model,
+                ),
                 ..settings
             }
         }
@@ -191,18 +191,53 @@ pub fn apply_mode(settings: AppSettings, mode: Mode) -> AppSettings {
                 // system-audio setting must never leak into Assisted Notes.
                 system_audio_enabled: false,
                 follow_stream_enabled: assisted.follow_stream_enabled,
-                post_process_provider_id: assisted.post_process_provider_id.clone(),
-                post_process_models: {
-                    let mut models = settings.post_process_models.clone();
-                    if let Some(model) = assisted.post_process_model.clone() {
-                        models.insert(assisted.post_process_provider_id.clone(), model);
-                    }
-                    models
-                },
+                post_process_provider_id: mode_provider(
+                    &settings,
+                    &assisted.post_process_provider_id,
+                    &assisted.post_process_model,
+                ),
+                post_process_models: mode_models(
+                    &settings,
+                    &assisted.post_process_provider_id,
+                    &assisted.post_process_model,
+                ),
                 ..settings
             }
         }
     }
+}
+
+/// The provider a mode's AI cleanup uses. A mode's own provider counts only
+/// together with its own model, as one choice. Settings has no control for
+/// either: every mode was created with the default provider, while the
+/// Post-processing section, where the API key and model are set, changes only
+/// the top-level provider. Taking the mode's stored provider on its own sent
+/// dictation's cleanup to OpenAI with no key for anyone who chose another
+/// provider, so it failed every time.
+fn mode_provider(
+    settings: &AppSettings,
+    mode_provider_id: &str,
+    mode_model: &Option<String>,
+) -> String {
+    match mode_model {
+        Some(_) => mode_provider_id.to_string(),
+        None => settings.post_process_provider_id.clone(),
+    }
+}
+
+/// The shared provider->model map, with a mode's own model, if it has one,
+/// put in for that mode's provider, so every existing read of
+/// `post_process_models` keeps working untouched.
+fn mode_models(
+    settings: &AppSettings,
+    mode_provider_id: &str,
+    mode_model: &Option<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut models = settings.post_process_models.clone();
+    if let Some(model) = mode_model.clone() {
+        models.insert(mode_provider_id.to_string(), model);
+    }
+    models
 }
 
 /// One-time migration of the per-mode `push_to_talk` bools that
@@ -611,6 +646,69 @@ mod tests {
         );
         // A field `apply_mode` does not own must survive from the base settings.
         assert_eq!(result.selected_model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn modes_without_their_own_model_use_the_post_processing_provider() {
+        let mut settings = crate::settings::get_default_settings();
+        settings.dictation.enabled = true;
+        settings.assisted_notes.enabled = true;
+        settings.post_process_provider_id = "anthropic".to_string();
+        // What every mode was created with, and what nothing in Settings changes.
+        settings.dictation.post_process_provider_id = "openai".to_string();
+        settings.dictation.post_process_model = None;
+        settings.assisted_notes.post_process_provider_id = "openai".to_string();
+        settings.assisted_notes.post_process_model = None;
+
+        let dictation = apply_mode(settings.clone(), Mode::Dictation);
+        assert_eq!(dictation.post_process_provider_id, "anthropic");
+        assert_eq!(
+            dictation.post_process_models.get("anthropic"),
+            settings.post_process_models.get("anthropic")
+        );
+        let assisted = apply_mode(settings, Mode::AssistedNotes);
+        assert_eq!(assisted.post_process_provider_id, "anthropic");
+    }
+
+    #[test]
+    fn every_post_processing_provider_reaches_dictation_and_assisted_notes() {
+        let base = crate::settings::get_default_settings();
+        let ids: Vec<String> = base
+            .post_process_providers
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect();
+        assert!(ids.len() > 1);
+        for id in ids {
+            let mut settings = base.clone();
+            settings.dictation.enabled = true;
+            settings.assisted_notes.enabled = true;
+            settings.post_process_provider_id = id.clone();
+            settings
+                .post_process_models
+                .insert(id.clone(), format!("{id}-model"));
+            if let Some(custom) = settings
+                .post_process_providers
+                .iter_mut()
+                .find(|provider| provider.allow_base_url_edit)
+            {
+                custom.base_url = "http://my-server:8080/v1".to_string();
+            }
+            let expected = settings.active_post_process_provider().cloned().unwrap();
+
+            for mode in [Mode::Dictation, Mode::AssistedNotes] {
+                let resolved = apply_mode(settings.clone(), mode);
+                let provider = resolved.active_post_process_provider().unwrap();
+                assert_eq!(provider.id, id, "{mode:?}");
+                assert_eq!(provider.base_url, expected.base_url, "{mode:?} {id}");
+                assert_eq!(provider.api_format, expected.api_format, "{mode:?} {id}");
+                assert_eq!(
+                    resolved.post_process_models.get(&id),
+                    Some(&format!("{id}-model")),
+                    "{mode:?} {id}"
+                );
+            }
+        }
     }
 
     #[test]
