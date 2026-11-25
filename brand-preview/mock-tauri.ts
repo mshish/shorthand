@@ -539,6 +539,8 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   is_laptop: () => true,
   get_microphone_mode: () => false,
   check_custom_sounds: () => ({ start: false, stop: false }),
+  is_update_checks_locked: () => false,
+  get_post_process_api_key_status: () => ({}),
   is_recording: () => false,
 
   get_available_models: () => MODELS,
