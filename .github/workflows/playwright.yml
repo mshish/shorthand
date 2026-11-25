@@ -22,24 +22,34 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Build engine
         run: |
-          cd core && bun install --frozen-lockfile
-          bun build bin/shorthand-notes.ts --compile --target=${{ matrix.bun }} --outfile "$GITHUB_WORKSPACE/shorthand-notes"
-          cd .. && ls -la shorthand-notes && file shorthand-notes
-          readelf -lW shorthand-notes | head -40 || true
-          readelf -dW shorthand-notes || true
-          ldd shorthand-notes || true
-          ./shorthand-notes --help | head -5 || true
-      - name: linuxdeploy on an AppDir with the engine
+          cd core && bun install --frozen-lockfile >/dev/null
+          bun build bin/shorthand-notes.ts --compile --target=${{ matrix.bun }} --outfile "$GITHUB_WORKSPACE/eng"
+      - name: Tests
+        shell: bash
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf file >/dev/null
-          curl -sSL -o ld.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage
-          chmod +x ld.AppImage
-          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp shorthand-notes AppDir/usr/bin/
-          cp /bin/true AppDir/usr/bin/app
-          printf '[Desktop Entry]\nType=Application\nName=App\nExec=app\nIcon=app\nCategories=Utility;\n' > AppDir/usr/share/applications/app.desktop
-          convert -size 256x256 xc:blue AppDir/usr/share/icons/hicolor/256x256/apps/app.png 2>/dev/null || python3 -c "import base64,sys;open('AppDir/usr/share/icons/hicolor/256x256/apps/app.png','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='))"
-          ./ld.AppImage --appimage-extract-and-run --appdir AppDir -e AppDir/usr/bin/app -d AppDir/usr/share/applications/app.desktop -i AppDir/usr/share/icons/hicolor/256x256/apps/app.png -v0 2>&1 | tail -80 || true
-          echo "exit: ${PIPESTATUS[0]}"
-          ls -la AppDir/usr/bin
-          AppDir/usr/bin/shorthand-notes --help | head -3 || echo "engine broken after linuxdeploy"
+          set +e
+          run() { "$1" read-block >/dev/null 2>"$1.err"; echo "exit=$? $(head -c 300 "$1.err" | tr '\n' ' ')"; }
+          echo "== original"; run ./eng
+          curl -sSL -o ld.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage; chmod +x ld.AppImage
+          ./ld.AppImage --appimage-extract >/dev/null; PE=squashfs-root/usr/bin/patchelf; ST=squashfs-root/usr/bin/strip
+          echo "== linuxdeploy's patchelf set-rpath"; cp eng e1; $PE --set-rpath '$ORIGIN/../lib' e1; echo "patchelf=$?"; ls -l eng e1 | awk '{print $5}'; run ./e1
+          echo "== system patchelf"; sudo apt-get install -y -qq patchelf >/dev/null 2>&1; patchelf --version; cp eng e2; patchelf --set-rpath '$ORIGIN/../lib' e2; run ./e2
+          echo "== strip only"; cp eng e3; $ST e3; echo "strip=$?"; run ./e3
+          python3 - <<'PY'
+          import zlib,struct
+          w=h=256
+          raw=b''.join(b'\x00'+b'\x00\x00\xff'*w for _ in range(h))
+          def ch(t,d): return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+          open('icon.png','wb').write(b'\x89PNG\r\n\x1a\n'+ch(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+ch(b'IDAT',zlib.compress(raw))+ch(b'IEND',b''))
+          PY
+          for place in usr/bin usr/lib/Shorthand; do
+            echo "== linuxdeploy, engine in $place"
+            rm -rf AppDir; mkdir -p AppDir/usr/bin AppDir/$place
+            cp eng AppDir/$place/shorthand-notes; cp /bin/true AppDir/usr/bin/app
+            printf '[Desktop Entry]\nType=Application\nName=App\nExec=app\nIcon=app\nCategories=Utility;\n' > app.desktop
+            cp icon.png app.png
+            ./ld.AppImage --appimage-extract-and-run --appdir AppDir -e AppDir/usr/bin/app -d app.desktop -i app.png > ld.log 2>&1; echo "linuxdeploy=$?"
+            grep -E "shorthand-notes|ERROR" ld.log | head
+            ls -l AppDir/$place/shorthand-notes | awk '{print $5}'
+            run AppDir/$place/shorthand-notes
+          done
