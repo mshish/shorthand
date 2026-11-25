@@ -124,22 +124,26 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
         descriptionMode="inline"
         grouped={grouped}
       >
-        <Input
-          type="text"
-          value={drafts[field] ?? agent[field]}
-          onChange={(event) =>
-            setDrafts((current) => ({
-              ...current,
-              [field]: event.target.value,
-            }))
-          }
-          onBlur={() => commitText(field)}
-          placeholder={t(`settings.notes.agent.${copy}.placeholder`)}
-          variant="compact"
-          className="w-64"
-          spellCheck={false}
-          autoComplete="off"
-        />
+        <div className="ps-4">
+          <Input
+            type="text"
+            value={drafts[field] ?? agent[field]}
+            onChange={(event) =>
+              setDrafts((current) => ({
+                ...current,
+                [field]: event.target.value,
+              }))
+            }
+            onBlur={() => commitText(field)}
+            placeholder={t(
+              `settings.notes.agent.${copy}.${required ? "placeholderRequired" : "placeholder"}`,
+            )}
+            variant="compact"
+            className="w-80"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
       </SettingContainer>
     );
   };
@@ -152,15 +156,17 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
         descriptionMode="inline"
         grouped={grouped}
       >
-        <Dropdown
-          options={NOTES_AGENT_BACKENDS.map((backend) => ({
-            value: backend,
-            label: t(BACKEND_LABEL_KEYS[backend]),
-          }))}
-          selectedValue={agent.backend}
-          onSelect={(value) => save({ backend: value as NotesAgentBackend })}
-          disabled={saving}
-        />
+        <div className="ps-4">
+          <Dropdown
+            options={NOTES_AGENT_BACKENDS.map((backend) => ({
+              value: backend,
+              label: t(BACKEND_LABEL_KEYS[backend]),
+            }))}
+            selectedValue={agent.backend}
+            onSelect={(value) => save({ backend: value as NotesAgentBackend })}
+            disabled={saving}
+          />
+        </div>
       </SettingContainer>
       {agentFields(agent, advanced).map((field) => {
         if (field === "llm_provider") {
@@ -172,17 +178,19 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
               descriptionMode="inline"
               grouped={grouped}
             >
-              <Dropdown
-                options={NOTES_LLM_PROVIDERS.map((provider) => ({
-                  value: provider,
-                  label: t(PROVIDER_LABEL_KEYS[provider]),
-                }))}
-                selectedValue={agent.llm_provider}
-                onSelect={(value) =>
-                  save({ llm_provider: value as NotesLlmProvider })
-                }
-                disabled={saving}
-              />
+              <div className="ps-4">
+                <Dropdown
+                  options={NOTES_LLM_PROVIDERS.map((provider) => ({
+                    value: provider,
+                    label: t(PROVIDER_LABEL_KEYS[provider]),
+                  }))}
+                  selectedValue={agent.llm_provider}
+                  onSelect={(value) =>
+                    save({ llm_provider: value as NotesLlmProvider })
+                  }
+                  disabled={saving}
+                />
+              </div>
             </SettingContainer>
           );
         }
@@ -202,7 +210,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
               descriptionMode="inline"
               grouped={grouped}
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 ps-4">
                 <ApiKeyField
                   status={keyStatus ?? "unavailable"}
                   onCommit={(secret) =>

@@ -109,6 +109,9 @@ export const GoogleOAuthClientRow: React.FC<GoogleOAuthClientRowProps> = ({
               }
             }}
             disabled={status === null || secretStatus === "unavailable"}
+            missingPlaceholder={t(
+              "settings.notes.google.client.secretPlaceholder",
+            )}
           />
         </div>
       </div>
