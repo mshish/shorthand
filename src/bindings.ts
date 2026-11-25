@@ -708,6 +708,14 @@ async connectGoogleDocs(createNew: boolean) : Promise<Result<GoogleDocsStatus, s
 }
 },
 /**
+ * Stops waiting for Google's redirect, for when the browser tab was closed
+ * or the wrong account was picked. The pending connect returns
+ * "Google sign-in was cancelled."
+ */
+async cancelGoogleSignIn() : Promise<void> {
+    await TAURI_INVOKE("cancel_google_sign_in");
+},
+/**
  * Forgets the connection by removing the credentials file. Google keeps
  * the grant until it's removed from the Google account's third-party access
  * page; the document itself is untouched.
@@ -731,6 +739,38 @@ async openGoogleDoc() : Promise<Result<null, string>> {
 async changeNotesTargetSetting(target: NotesTarget) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_notes_target_setting", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Advanced: the client ID of the user's own OAuth client. Blank clears it,
+ * which goes back to the built-in client.
+ */
+async changeGoogleOauthClientIdSetting(clientId: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_oauth_client_id_setting", { clientId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Advanced: the secret of the user's own OAuth client, kept in the OS
+ * keyring like every other secret the app holds.
+ */
+async setGoogleOauthClientSecret(secret: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_google_oauth_client_secret", { secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async clearGoogleOauthClientSecret() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("clear_google_oauth_client_secret") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1424,7 +1464,12 @@ assisted_notes?: AssistedNotesSettings;
 /**
  * Where meeting notes go. See `shorthand::google`.
  */
-notes_target?: NotesTarget }
+notes_target?: NotesTarget; 
+/**
+ * Fork: the client ID of a Google OAuth client the user brought, used
+ * in place of the built-in one when its secret is in the keyring too.
+ */
+google_oauth_client_id?: string | null }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1541,9 +1586,21 @@ sign_in_available: boolean; connected: boolean;
  */
 document_url: string | null; 
 /**
+ * Its name in Google Drive, when it could be read at sign-in.
+ */
+document_name: string | null; 
+/**
  * The notes engine (shorthand-core) was found next to the app.
  */
-engine_found: boolean; last_run: LastRun | null }
+engine_found: boolean; last_run: LastRun | null; 
+/**
+ * Advanced: the client ID of the user's own OAuth client, if set.
+ */
+custom_client_id: string | null; custom_client_secret: CredentialStatus; 
+/**
+ * Sign-in uses the user's own client, not the built-in one.
+ */
+using_custom_client: boolean }
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; source: string; 
 /**

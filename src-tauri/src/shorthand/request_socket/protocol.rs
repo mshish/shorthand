@@ -198,14 +198,16 @@ struct WsCloseParams {
     reason: String,
 }
 
-/// The app's own post-processing key is never proxied and never arrives
-/// from a client: `CredentialSlot` cannot be narrowed to just the wire
+/// The app's own slots (the post-processing key, and the Google OAuth
+/// client secret) are never proxied and never arrive from a client: `CredentialSlot` cannot be narrowed to just the wire
 /// variants at the type level (serde has no way to exclude one variant from
 /// deserializing), so every method that carries a slot rejects this one
 /// explicitly instead.
 fn reject_post_process(slot: &CredentialSlot) -> Result<(), ErrorCode> {
     match slot {
-        CredentialSlot::PostProcess { .. } => Err(ErrorCode::BadRequest),
+        CredentialSlot::PostProcess { .. } | CredentialSlot::GoogleOAuthClient => {
+            Err(ErrorCode::BadRequest)
+        }
         CredentialSlot::NotesLlm { .. } | CredentialSlot::NotesAcp { .. } => Ok(()),
     }
 }
@@ -423,6 +425,12 @@ mod tests {
         assert!(matches!(
             parse_line(
                 r#"{"id":"r1","method":"credential.set","params":{"slot":{"kind":"post-process","provider_id":"openai"},"secret":"x"}}"#
+            ),
+            Err((ref id, ErrorCode::BadRequest)) if id == "r1"
+        ));
+        assert!(matches!(
+            parse_line(
+                r#"{"id":"r1","method":"credential.set","params":{"slot":{"kind":"google-oauth-client"},"secret":"x"}}"#
             ),
             Err((ref id, ErrorCode::BadRequest)) if id == "r1"
         ));

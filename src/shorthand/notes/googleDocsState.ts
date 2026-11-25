@@ -11,7 +11,9 @@ export type GoogleDocsAction =
   | "connect_pick"
   | "connect_create"
   | "open_doc"
+  | "change_doc"
   | "disconnect"
+  | "cancel"
   | "retry";
 
 export type GoogleDocsRowState =
@@ -33,7 +35,9 @@ export const GOOGLE_ACTION_LABEL_KEYS: Record<GoogleDocsAction, string> = {
   connect_pick: "settings.notes.google.action.connectPick",
   connect_create: "settings.notes.google.action.connectCreate",
   open_doc: "settings.notes.google.action.openDoc",
+  change_doc: "settings.notes.google.action.changeDoc",
   disconnect: "settings.notes.google.action.disconnect",
+  cancel: "settings.notes.google.action.cancel",
   retry: "settings.notes.google.action.retry",
 };
 
@@ -79,7 +83,7 @@ export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
     return {
       descriptionKey: `${STATUS}.connecting`,
       params: {},
-      actions: [],
+      actions: ["cancel"],
       ...none,
     };
   }
@@ -109,12 +113,19 @@ export function describeGoogleDocs(state: GoogleDocsRowState): GoogleDocsView {
       ...lastRun(status),
     };
   }
+  const name = status.document_name;
+  if (!status.engine_found) {
+    return {
+      descriptionKey: `${STATUS}.connectedNoEngine`,
+      params: {},
+      actions: ["open_doc", "change_doc", "disconnect"],
+      ...lastRun(status),
+    };
+  }
   return {
-    descriptionKey: status.engine_found
-      ? `${STATUS}.connected`
-      : `${STATUS}.connectedNoEngine`,
-    params: {},
-    actions: ["open_doc", "disconnect"],
+    descriptionKey: name ? `${STATUS}.connectedNamed` : `${STATUS}.connected`,
+    params: name ? { name } : {},
+    actions: ["open_doc", "change_doc", "disconnect"],
     ...lastRun(status),
   };
 }

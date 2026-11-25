@@ -20,6 +20,10 @@ const status = (
   document_url: null,
   engine_found: true,
   last_run: null,
+  document_name: null,
+  custom_client_id: null,
+  custom_client_secret: "missing",
+  using_custom_client: false,
   ...overrides,
 });
 
@@ -41,6 +45,7 @@ const ALL_STATES: GoogleDocsRowState[] = [
     }),
   ),
   ready(status({ connected: true, engine_found: false })),
+  ready(status({ connected: true, document_name: "Team standups" })),
   ready(
     status({
       connected: true,
@@ -66,6 +71,22 @@ const ALL_STATES: GoogleDocsRowState[] = [
 ];
 
 describe("describeGoogleDocs", () => {
+  test("a connected doc is named when its name is known", () => {
+    const view = describeGoogleDocs(
+      ready(status({ connected: true, document_name: "Team standups" })),
+    );
+    expect(view.descriptionKey).toBe(
+      "settings.notes.google.status.connectedNamed",
+    );
+    expect(view.params).toEqual({ name: "Team standups" });
+  });
+
+  test("signing in can be cancelled", () => {
+    expect(describeGoogleDocs({ phase: "connecting" }).actions).toEqual([
+      "cancel",
+    ]);
+  });
+
   test("a build without an OAuth client says so and offers nothing", () => {
     const view = describeGoogleDocs(
       ready(status({ sign_in_available: false })),
@@ -86,7 +107,7 @@ describe("describeGoogleDocs", () => {
   test("connected offers open and disconnect, and flags a missing engine", () => {
     const view = describeGoogleDocs(ready(status({ connected: true })));
     expect(view.descriptionKey).toBe("settings.notes.google.status.connected");
-    expect(view.actions).toEqual(["open_doc", "disconnect"]);
+    expect(view.actions).toEqual(["open_doc", "change_doc", "disconnect"]);
     expect(
       describeGoogleDocs(
         ready(status({ connected: true, engine_found: false })),

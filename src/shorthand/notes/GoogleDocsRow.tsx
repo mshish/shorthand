@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -31,6 +31,8 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
   const { t } = useTranslation();
   const [state, setState] = useState<GoogleDocsRowState>({ phase: "loading" });
   const [actionError, setActionError] = useState<string | null>(null);
+  /** Set by Cancel, so the sign-in it stops doesn't read as a failure. */
+  const cancelled = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -64,14 +66,20 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
         case "retry":
           await refresh();
           return;
+        case "cancel":
+          cancelled.current = true;
+          await commands.cancelGoogleSignIn();
+          return;
         case "connect_pick":
+        case "change_doc":
         case "connect_create": {
+          cancelled.current = false;
           setState({ phase: "connecting" });
           const result = await commands.connectGoogleDocs(
             action === "connect_create",
           );
           if (result.status === "error") {
-            setActionError(String(result.error));
+            if (!cancelled.current) setActionError(String(result.error));
             setState({ phase: "loading" });
             await refresh();
             return;

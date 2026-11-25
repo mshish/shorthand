@@ -607,6 +607,10 @@ pub struct AppSettings {
     /// Where meeting notes go. See `shorthand::google`.
     #[serde(default)]
     pub notes_target: crate::shorthand::google::NotesTarget,
+    /// Fork: the client ID of a Google OAuth client the user brought, used
+    /// in place of the built-in one when its secret is in the keyring too.
+    #[serde(default)]
+    pub google_oauth_client_id: Option<String>,
 }
 
 fn default_model() -> String {
@@ -1226,6 +1230,7 @@ pub fn get_default_settings() -> AppSettings {
         dictation: crate::shorthand::dictation::DictationSettings::default(),
         assisted_notes: Default::default(),
         notes_target: Default::default(),
+        google_oauth_client_id: None,
     }
 }
 
