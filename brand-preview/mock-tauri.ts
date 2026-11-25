@@ -48,6 +48,8 @@ import {
 import type {
   AppSettings,
   AudioDevice,
+  CredentialStatus,
+  GoogleDocsStatus,
   ModelInfo,
   ShortcutBinding,
 } from "@/bindings";
@@ -328,6 +330,45 @@ const SETTINGS: AppSettings = {
     post_process_provider_id: "openai",
     post_process_model: null,
   },
+  // The Rust defaults: Obsidian, and Claude as the Google Docs note taker.
+  // `shot-notes.mjs` clicks both over, so the shots start where a user does.
+  notes_target: "obsidian",
+  google_notes_agent: {
+    backend: "claude",
+    codex_model: "",
+    cursor_model: "",
+    acp_program: "",
+    acp_args: "",
+    acp_model: "",
+    llm_provider: "openai",
+    llm_model: "",
+    llm_base_url: "",
+  },
+};
+
+/**
+ * The Google Docs connection, already signed in with a doc chosen, so the
+ * Notes shots are of the setup a person returns to rather than the sign-in
+ * button. The API key starts missing, as it does until one is added.
+ */
+let NOTES_LLM_KEY: CredentialStatus = "missing";
+const googleDocsStatus = (): GoogleDocsStatus => {
+  const agent = SETTINGS.google_notes_agent;
+  const nameable =
+    agent?.llm_provider !== "openai-compatible" ||
+    (agent?.llm_base_url ?? "").trim() !== "";
+  return {
+    sign_in_available: true,
+    connected: true,
+    document_url: "https://docs.google.com/document/d/preview/edit",
+    document_name: "Meeting notes",
+    engine_found: true,
+    last_run: { kind: "finished", title: "Weekly sync" },
+    custom_client_id: null,
+    custom_client_secret: "missing",
+    using_custom_client: false,
+    notes_llm_key: nameable ? NOTES_LLM_KEY : "unavailable",
+  };
 };
 
 const AUDIO_DEVICES: AudioDevice[] = [
@@ -453,6 +494,29 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     SETTINGS.save_transcripts = enabled;
     return null;
   },
+  change_notes_target_setting: ({ target }) => {
+    SETTINGS.notes_target = target;
+    return null;
+  },
+  change_google_notes_agent_setting: ({ agent }) => {
+    SETTINGS.google_notes_agent = agent;
+    return googleDocsStatus();
+  },
+  get_google_docs_status: () => googleDocsStatus(),
+  set_google_notes_llm_key: () => {
+    NOTES_LLM_KEY = "configured";
+    return googleDocsStatus();
+  },
+  clear_google_notes_llm_key: () => {
+    NOTES_LLM_KEY = "missing";
+    return googleDocsStatus();
+  },
+  get_obsidian_plugin_status: () => ({
+    kind: "installed",
+    vault_name: "Notes",
+    version: "0.9.5",
+    enabled: true,
+  }),
   change_binding: ({ id, binding: keys }) => {
     const existing = SETTINGS.bindings?.[id];
     if (existing) existing.current_binding = keys;

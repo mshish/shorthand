@@ -24,6 +24,7 @@ const status = (
   custom_client_id: null,
   custom_client_secret: "missing",
   using_custom_client: false,
+  notes_llm_key: "missing",
   ...overrides,
 });
 

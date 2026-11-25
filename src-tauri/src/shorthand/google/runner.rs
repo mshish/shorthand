@@ -124,8 +124,8 @@ fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>) -> Stri
         .expect("an unused title always exists")
 }
 
-fn capture_args(folder: &Path, note: &str, app_exe: &Path) -> Vec<String> {
-    vec![
+fn capture_args(folder: &Path, note: &str, app_exe: &Path, agent_args: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = vec![
         "capture".into(),
         "--vault".into(),
         folder.to_string_lossy().into_owned(),
@@ -136,8 +136,10 @@ fn capture_args(folder: &Path, note: &str, app_exe: &Path) -> Vec<String> {
         "google".into(),
         "--shorthand".into(),
         app_exe.to_string_lossy().into_owned(),
-        "--exit-after-session".into(),
-    ]
+    ];
+    args.extend(agent_args.iter().cloned());
+    args.push("--exit-after-session".into());
+    args
 }
 
 /// The last thing the engine said on stderr is the most useful reason; the
@@ -186,6 +188,13 @@ fn run_meeting(app: &AppHandle) {
             "Google Docs isn't connected. Connect it in Settings, Notes.".into(),
         );
     }
+    let agent_args = match crate::settings::get_settings(app)
+        .google_notes_agent
+        .capture_args()
+    {
+        Ok(args) => args,
+        Err(message) => return fail(fallback_title, message),
+    };
     let Some(engine) = engine_command() else {
         return fail(
             fallback_title,
@@ -246,7 +255,7 @@ fn run_meeting(app: &AppHandle) {
 
     let child = engine
         .command()
-        .args(capture_args(&folder, &note, &app_exe))
+        .args(capture_args(&folder, &note, &app_exe, &agent_args))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -333,11 +342,12 @@ mod tests {
             Path::new("/notes"),
             "Meeting.md",
             Path::new("/app/shorthand"),
+            &["--backend".into(), "cursor".into()],
         );
         let joined = args.join(" ");
         assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
         assert!(joined.contains("--sink google"));
-        assert!(joined.contains("--shorthand /app/shorthand"));
+        assert!(joined.contains("--shorthand /app/shorthand --backend cursor"));
         assert!(joined.ends_with("--exit-after-session"));
     }
 

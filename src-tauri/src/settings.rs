@@ -611,6 +611,10 @@ pub struct AppSettings {
     /// in place of the built-in one when its secret is in the keyring too.
     #[serde(default)]
     pub google_oauth_client_id: Option<String>,
+    /// Fork: which note taker fills the Google Doc. See
+    /// `shorthand::google::agent`.
+    #[serde(default)]
+    pub google_notes_agent: crate::shorthand::google::agent::NotesAgent,
 }
 
 fn default_model() -> String {
@@ -1231,6 +1235,7 @@ pub fn get_default_settings() -> AppSettings {
         assisted_notes: Default::default(),
         notes_target: Default::default(),
         google_oauth_client_id: None,
+        google_notes_agent: Default::default(),
     }
 }
 

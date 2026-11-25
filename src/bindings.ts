@@ -745,6 +745,38 @@ async changeNotesTargetSetting(target: NotesTarget) : Promise<Result<null, strin
 }
 },
 /**
+ * Which note taker fills the doc. Saved whole: the row edits one field at
+ * a time, but each backend's fields only mean something together.
+ */
+async changeGoogleNotesAgentSetting(agent: NotesAgent) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_notes_agent_setting", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The API key for the provider and endpoint currently chosen. Kept in the
+ * slot the Obsidian plugin uses for the same pair, so either can add it.
+ */
+async setGoogleNotesLlmKey(secret: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_google_notes_llm_key", { secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async clearGoogleNotesLlmKey() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("clear_google_notes_llm_key") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Advanced: the client ID of the user's own OAuth client. Blank clears it,
  * which goes back to the built-in client.
  */
@@ -1469,7 +1501,12 @@ notes_target?: NotesTarget;
  * Fork: the client ID of a Google OAuth client the user brought, used
  * in place of the built-in one when its secret is in the keyring too.
  */
-google_oauth_client_id?: string | null }
+google_oauth_client_id?: string | null; 
+/**
+ * Fork: which note taker fills the Google Doc. See
+ * `shorthand::google::agent`.
+ */
+google_notes_agent?: NotesAgent }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1600,7 +1637,12 @@ custom_client_id: string | null; custom_client_secret: CredentialStatus;
 /**
  * Sign-in uses the user's own client, not the built-in one.
  */
-using_custom_client: boolean }
+using_custom_client: boolean; 
+/**
+ * Whether the API key note taker has a key for the provider and
+ * endpoint chosen. `unavailable` also when that endpoint can't be named.
+ */
+notes_llm_key: CredentialStatus }
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; source: string; 
 /**
@@ -1765,6 +1807,27 @@ raised: Notice | null }
  * Where finished meeting notes go. Obsidian is the default and behaves as
  * before: an external follower (the Obsidian plugin) fills the note.
  */
+/**
+ * Each backend keeps its own model, as in the plugin, so switching from
+ * Codex to Cursor doesn't carry a Codex model name across. Blank means the
+ * tool's own default, except for the API key, which has no default.
+ */
+export type NotesAgent = { backend: NotesAgentBackend; codex_model: string; cursor_model: string; 
+/**
+ * The program for "Another app": any ACP agent over standard I/O.
+ */
+acp_program: string; 
+/**
+ * Split on whitespace by core, as the plugin's arguments field is.
+ */
+acp_args: string; acp_model: string; llm_provider: NotesLlmProvider; llm_model: string; 
+/**
+ * Blank uses the provider's own endpoint. Required for
+ * `openai-compatible`, which has none.
+ */
+llm_base_url: string }
+export type NotesAgentBackend = "claude" | "codex" | "cursor" | "acp" | "llm"
+export type NotesLlmProvider = "openai" | "anthropic" | "ollama" | "openai-compatible"
 export type NotesTarget = "obsidian" | "google_docs"
 export type ObsidianPluginStatus = 
 /**

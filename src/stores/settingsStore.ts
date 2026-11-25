@@ -15,6 +15,7 @@ import type {
   VadBackend,
   CredentialStatus,
   LanguageDetectionMode,
+  NotesAgent,
   NotesTarget,
 } from "@/bindings";
 import { commands } from "@/bindings";
@@ -147,6 +148,12 @@ const settingUpdaters: {
     commands.changeTelemetryEnabledSetting(value as boolean),
   notes_target: (value) =>
     commands.changeNotesTargetSetting(value as NotesTarget),
+  google_notes_agent: async (value) => {
+    const result = await commands.changeGoogleNotesAgentSetting(
+      value as NotesAgent,
+    );
+    if (result.status === "error") throw new Error(result.error);
+  },
   whats_new_last_seen_version: (value) =>
     commands.changeWhatsNewLastSeenVersionSetting(value as string),
   shortcut_activation: (value) =>

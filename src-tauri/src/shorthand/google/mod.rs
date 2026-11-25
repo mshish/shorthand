@@ -20,6 +20,7 @@
 //! refreshes with the pair in the credentials file), so a change here
 //! applies from the next connect.
 
+pub mod agent;
 pub mod container_doc;
 pub mod credentials;
 pub mod document_info;
@@ -120,6 +121,9 @@ pub struct GoogleDocsStatus {
     pub custom_client_secret: CredentialStatus,
     /// Sign-in uses the user's own client, not the built-in one.
     pub using_custom_client: bool,
+    /// Whether the API key note taker has a key for the provider and
+    /// endpoint chosen. `unavailable` also when that endpoint can't be named.
+    pub notes_llm_key: CredentialStatus,
 }
 
 pub fn document_url(document_id: &str) -> String {
@@ -148,6 +152,15 @@ fn current_status(app: &AppHandle) -> GoogleDocsStatus {
         .unwrap_or(CredentialStatus::Unavailable);
     let using_custom_client =
         custom_client_id.is_some() && custom_client_secret == CredentialStatus::Configured;
+    let notes_llm_key = match (
+        credential_store(app),
+        crate::settings::get_settings(app)
+            .google_notes_agent
+            .llm_slot(),
+    ) {
+        (Some(store), Ok(slot)) => store.status(&slot),
+        _ => CredentialStatus::Unavailable,
+    };
     GoogleDocsStatus {
         sign_in_available: using_custom_client || built_in_oauth_client().is_some(),
         connected: document_id.is_some(),
@@ -158,6 +171,7 @@ fn current_status(app: &AppHandle) -> GoogleDocsStatus {
         custom_client_id,
         custom_client_secret,
         using_custom_client,
+        notes_llm_key,
     }
 }
 
@@ -351,6 +365,58 @@ pub fn change_notes_target_setting(app: AppHandle, target: NotesTarget) -> Resul
         serde_json::json!({ "setting": "notes_target", "value": target }),
     );
     Ok(())
+}
+
+/// Which note taker fills the doc. Saved whole: the row edits one field at
+/// a time, but each backend's fields only mean something together.
+#[tauri::command]
+#[specta::specta]
+pub fn change_google_notes_agent_setting(
+    app: AppHandle,
+    agent: agent::NotesAgent,
+) -> Result<GoogleDocsStatus, String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.google_notes_agent = agent.clone();
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "google_notes_agent", "value": agent }),
+    );
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+fn notes_llm_slot(app: &AppHandle) -> Result<CredentialSlot, String> {
+    crate::settings::get_settings(app)
+        .google_notes_agent
+        .llm_slot()
+}
+
+/// The API key for the provider and endpoint currently chosen. Kept in the
+/// slot the Obsidian plugin uses for the same pair, so either can add it.
+#[tauri::command]
+#[specta::specta]
+pub fn set_google_notes_llm_key(
+    app: AppHandle,
+    secret: String,
+) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .set(&notes_llm_slot(&app)?, &secret)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn clear_google_notes_llm_key(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .clear(&notes_llm_slot(&app)?)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
 }
 
 /// Advanced: the client ID of the user's own OAuth client. Blank clears it,
