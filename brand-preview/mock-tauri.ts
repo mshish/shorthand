@@ -353,7 +353,7 @@ const SETTINGS: AppSettings = {
  * button. The API key starts missing, as it does until one is added.
  */
 let NOTES_LLM_KEY: CredentialStatus = "missing";
-/** Made when "Its own doc" is chosen, as the app does when signed in. */
+/** Made when "Doc per meeting" is chosen, as the app does when signed in. */
 let FOLDER_MADE = false;
 const googleDocsStatus = (): GoogleDocsStatus => {
   const agent = SETTINGS.google_notes_agent;
