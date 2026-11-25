@@ -14,6 +14,10 @@
 //! the same way, and hands core its id (`--google-document`, in the core
 //! release after 0.24.4), so core writes into the doc's one tab instead of adding a tab.
 //!
+//! When Meeting mode's "Save transcripts" setting is on, core also gets
+//! `--google-transcript` and keeps the transcript in a "Transcript" tab: a
+//! child of the meeting's tab, or a top-level tab in a meeting's own doc.
+//!
 //! The engine is the `shorthand-notes` binary bundled next to the app (see
 //! `scripts/build-notes-engine.sh`), or whatever `SHORTHAND_NOTES_BIN` names
 //! (a `.mjs`/`.js` file runs under `node`), for development.
@@ -135,6 +139,7 @@ fn capture_args(
     app_exe: &Path,
     agent_args: &[String],
     own_document: Option<&str>,
+    save_transcript: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "capture".into(),
@@ -148,6 +153,9 @@ fn capture_args(
     ];
     if let Some(document) = own_document {
         args.push(format!("--google-document={document}"));
+    }
+    if save_transcript {
+        args.push("--google-transcript".into());
     }
     args.push("--shorthand".to_string());
     args.push(app_exe.to_string_lossy().into_owned());
@@ -298,6 +306,9 @@ fn run_meeting(app: &AppHandle) {
             &app_exe,
             &agent_args,
             own_document.as_deref(),
+            // Meeting mode's "Save transcripts" setting: the transcript also
+            // goes in the doc, in a "Transcript" tab.
+            crate::settings::get_settings(app).save_transcripts,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -409,6 +420,7 @@ mod tests {
             Path::new("/app/shorthand"),
             &["--backend".into(), "cursor".into()],
             None,
+            false,
         );
         let joined = args.join(" ");
         assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
@@ -416,6 +428,7 @@ mod tests {
         assert!(joined.contains("--shorthand /app/shorthand --backend cursor"));
         assert!(joined.ends_with("--exit-after-session"));
         assert!(!joined.contains("--google-document"));
+        assert!(!joined.contains("--google-transcript"));
     }
 
     #[test]
@@ -426,10 +439,26 @@ mod tests {
             Path::new("/app/shorthand"),
             &[],
             Some("meeting-doc"),
+            false,
         );
         assert!(args
             .join(" ")
             .contains("--sink google --google-document=meeting-doc --shorthand"));
+    }
+
+    #[test]
+    fn saving_transcripts_puts_the_transcript_in_the_doc_too() {
+        let args = capture_args(
+            Path::new("/notes"),
+            "Meeting.md",
+            Path::new("/app/shorthand"),
+            &[],
+            Some("meeting-doc"),
+            true,
+        );
+        assert!(args
+            .join(" ")
+            .contains("--google-document=meeting-doc --google-transcript --shorthand"));
     }
 
     #[test]
