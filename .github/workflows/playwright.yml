@@ -1,41 +1,45 @@
-name: "Playwright"
-on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - "src/**"
-      - "package.json"
-      - "bun.lock"
-      - "playwright.config.*"
-      - "tests/**"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+name: ldrepro
+on: workflow_dispatch
 jobs:
-  playwright:
-    runs-on: ubuntu-latest
+  repro:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            bun: bun-linux-arm64
+          - os: ubuntu-24.04
+            arch: x86_64
+            bun: bun-linux-x64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-
+        with:
+          repository: mshish/shorthand-core
+          ref: 915c24b1ce9bca30a96798cf11146b4bb969772b
+          path: core
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install Playwright browsers
-        run: bunx playwright install chromium
-
-      - name: Run Playwright tests
-        run: bun run test:playwright
-
-      - name: Upload test results
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
+      - name: Build engine
+        run: |
+          cd core && bun install --frozen-lockfile
+          bun build bin/shorthand-notes.ts --compile --target=${{ matrix.bun }} --outfile "$GITHUB_WORKSPACE/shorthand-notes"
+          cd .. && ls -la shorthand-notes && file shorthand-notes
+          readelf -lW shorthand-notes | head -40 || true
+          readelf -dW shorthand-notes || true
+          ldd shorthand-notes || true
+          ./shorthand-notes --help | head -5 || true
+      - name: linuxdeploy on an AppDir with the engine
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf file >/dev/null
+          curl -sSL -o ld.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage
+          chmod +x ld.AppImage
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp shorthand-notes AppDir/usr/bin/
+          cp /bin/true AppDir/usr/bin/app
+          printf '[Desktop Entry]\nType=Application\nName=App\nExec=app\nIcon=app\nCategories=Utility;\n' > AppDir/usr/share/applications/app.desktop
+          convert -size 256x256 xc:blue AppDir/usr/share/icons/hicolor/256x256/apps/app.png 2>/dev/null || python3 -c "import base64,sys;open('AppDir/usr/share/icons/hicolor/256x256/apps/app.png','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='))"
+          ./ld.AppImage --appimage-extract-and-run --appdir AppDir -e AppDir/usr/bin/app -d AppDir/usr/share/applications/app.desktop -i AppDir/usr/share/icons/hicolor/256x256/apps/app.png -v0 2>&1 | tail -80 || true
+          echo "exit: ${PIPESTATUS[0]}"
+          ls -la AppDir/usr/bin
+          AppDir/usr/bin/shorthand-notes --help | head -3 || echo "engine broken after linuxdeploy"
