@@ -6,6 +6,7 @@ pub mod assisted_notes;
 pub mod capture_command;
 pub mod credentials;
 pub mod dictation;
+pub mod google;
 pub mod mode;
 pub mod obsidian;
 pub mod overlay_error;

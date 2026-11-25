@@ -692,6 +692,225 @@ async openObsidianPluginPage() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getGoogleDocsStatus() : Promise<GoogleDocsStatus> {
+    return await TAURI_INVOKE("get_google_docs_status");
+},
+/**
+ * `create_new` false shows Google's picker to choose an existing doc; true
+ * creates a "Shorthand Meeting Notes" doc in a folder of the same name.
+ */
+async connectGoogleDocs(createNew: boolean) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("connect_google_docs", { createNew }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stops waiting for Google's redirect, for when the browser tab was closed
+ * or the wrong account was picked. The pending connect returns
+ * "Google sign-in was cancelled."
+ */
+async cancelGoogleSignIn() : Promise<void> {
+    await TAURI_INVOKE("cancel_google_sign_in");
+},
+/**
+ * Forgets the connection by removing the credentials file. Google keeps
+ * the grant until it's removed from the Google account's third-party access
+ * page; the document itself is untouched.
+ */
+async disconnectGoogleDocs() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("disconnect_google_docs") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openGoogleDoc() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_google_doc") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Sets up the folder for "a doc per meeting": with the account already
+ * signed in when there is one, otherwise through Google's sign-in.
+ */
+async connectGoogleFolder() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("connect_google_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openGoogleFolder() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_google_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The doc the meeting being recorded writes its notes to, for the overlay.
+ */
+async getNotesDestination() : Promise<NotesDestination | null> {
+    return await TAURI_INVOKE("get_notes_destination");
+},
+/**
+ * Opens that doc in the browser. The overlay passes no URL: the app opens
+ * the one it stored when the meeting began.
+ */
+async openNotesDestination() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_notes_destination") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Saves the layout, then, for "a doc per meeting", makes the folder with
+ * the account already signed in. The setting is saved even when that
+ * fails; the folder row then offers to set it up.
+ */
+async changeGoogleDocsLayoutSetting(layout: GoogleDocsLayout) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_docs_layout_setting", { layout }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeNotesTargetSetting(target: NotesTarget) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_notes_target_setting", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Which note taker fills the doc. Saved whole: the row edits one field at
+ * a time, but each backend's fields only mean something together.
+ */
+async changeGoogleNotesAgentSetting(agent: NotesAgent) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_notes_agent_setting", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The API key for the provider and endpoint currently chosen. Kept in the
+ * slot the Obsidian plugin uses for the same pair, so either can add it.
+ */
+async setGoogleNotesLlmKey(secret: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_google_notes_llm_key", { secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async clearGoogleNotesLlmKey() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("clear_google_notes_llm_key") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async addNotesPrompt(name: string, prompt: string) : Promise<Result<LLMPrompt, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_notes_prompt", { name, prompt }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async updateNotesPrompt(id: string, name: string, prompt: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_notes_prompt", { id, name, prompt }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Deletes one of the user's prompts. Whatever used it goes back to Default.
+ */
+async deleteNotesPrompt(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_notes_prompt", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Chooses the prompt meetings (or, with `assisted`, Assisted notes) use.
+ * None goes back to Default.
+ */
+async changeNotesPromptSelection(assisted: boolean, id: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_notes_prompt_selection", { assisted, id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The notes engine's built-in note-taking prompt for meetings (or, with
+ * `assisted`, for Assisted notes), as it writes for Google Docs. Shown read
+ * only, and as the starting text of a new prompt.
+ */
+async defaultNotesPrompt(assisted: boolean) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("default_notes_prompt", { assisted }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Advanced: the client ID of the user's own OAuth client. Blank clears it,
+ * which goes back to the built-in client.
+ */
+async changeGoogleOauthClientIdSetting(clientId: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_google_oauth_client_id_setting", { clientId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Advanced: the secret of the user's own OAuth client, kept in the OS
+ * keyring like every other secret the app holds.
+ */
+async setGoogleOauthClientSecret(secret: string) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_google_oauth_client_secret", { secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async clearGoogleOauthClientSecret() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("clear_google_oauth_client_secret") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Fork-only Settings toggle. Lives here rather than in `shortcut/mod.rs`
  * so the upstream file gains no lines.
@@ -1376,7 +1595,39 @@ dictation?: DictationSettings;
  * the capture in flight is `shorthand::mode::Mode::AssistedNotes`. See
  * `shorthand::dictation::apply_mode`.
  */
-assisted_notes?: AssistedNotesSettings }
+assisted_notes?: AssistedNotesSettings; 
+/**
+ * Where meeting notes go. See `shorthand::google`.
+ */
+notes_target?: NotesTarget; 
+/**
+ * Fork: the client ID of a Google OAuth client the user brought, used
+ * in place of the built-in one when its secret is in the keyring too.
+ */
+google_oauth_client_id?: string | null; 
+/**
+ * Fork: which note taker fills the Google Doc. See
+ * `shorthand::google::agent`.
+ */
+google_notes_agent?: NotesAgent; 
+/**
+ * Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
+ */
+google_docs_layout?: GoogleDocsLayout; 
+/**
+ * Fork: the user's own note-taking prompts for the Google Docs note
+ * taker. The built-in Default prompt is the notes engine's own and is
+ * never stored here. See `shorthand::google::notes_prompts`.
+ */
+notes_prompts?: LLMPrompt[]; 
+/**
+ * Fork: the note-taking prompt meetings use. None means Default.
+ */
+meeting_notes_prompt_id?: string | null; 
+/**
+ * Fork: the note-taking prompt Assisted notes uses. None means Default.
+ */
+assisted_notes_notes_prompt_id?: string | null }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1483,6 +1734,54 @@ post_process_provider_id: string;
  * user who never sets it per mode sees no change in behaviour.
  */
 post_process_model: string | null }
+/**
+ * How the Google Docs target lays meetings out: a new tab in one doc (the
+ * default, and the only layout before this setting), or a new doc for each
+ * meeting in the "Shorthand Meeting Notes" folder.
+ */
+export type GoogleDocsLayout = "tab_per_meeting" | "doc_per_meeting"
+export type GoogleDocsStatus = { 
+/**
+ * This build has an OAuth client to sign in with.
+ */
+sign_in_available: boolean; connected: boolean; 
+/**
+ * The document meetings go into, when connected.
+ */
+document_url: string | null; 
+/**
+ * Its name in Google Drive, when it could be read at sign-in.
+ */
+document_name: string | null; 
+/**
+ * Signed in to Google, whether or not a doc or folder is chosen yet.
+ */
+signed_in: boolean; 
+/**
+ * The folder that "a doc per meeting" puts each meeting's doc in.
+ */
+folder_url: string | null; 
+/**
+ * Its name in Google Drive, as last read.
+ */
+folder_name: string | null; 
+/**
+ * The notes engine (shorthand-core) was found next to the app.
+ */
+engine_found: boolean; last_run: LastRun | null; 
+/**
+ * Advanced: the client ID of the user's own OAuth client, if set.
+ */
+custom_client_id: string | null; custom_client_secret: CredentialStatus; 
+/**
+ * Sign-in uses the user's own client, not the built-in one.
+ */
+using_custom_client: boolean; 
+/**
+ * Whether the API key note taker has a key for the provider and
+ * endpoint chosen. `unavailable` also when that endpoint can't be named.
+ */
+notes_llm_key: CredentialStatus }
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; source: string; 
 /**
@@ -1577,6 +1876,7 @@ export type LanguageStatus =
  * Auto can't work here; `language` is used instead.
  */
 { kind: "auto_unavailable"; language: string; reason: AutoUnavailableReason }
+export type LastRun = { kind: "running"; title: string } | { kind: "finished"; title: string } | { kind: "failed"; title: string; message: string }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }
@@ -1642,6 +1942,42 @@ notices: Notice[];
  * `None` when a notice was cleared.
  */
 raised: Notice | null }
+/**
+ * Where finished meeting notes go. Obsidian is the default and behaves as
+ * before: an external follower (the Obsidian plugin) fills the note.
+ */
+/**
+ * Each backend keeps its own model, as in the plugin, so switching from
+ * Codex to Cursor doesn't carry a Codex model name across. Blank means the
+ * tool's own default, except for the API key, which has no default.
+ */
+export type NotesAgent = { backend: NotesAgentBackend; codex_model: string; cursor_model: string; 
+/**
+ * The program for "Another app": any ACP agent over standard I/O.
+ */
+acp_program: string; 
+/**
+ * Split on whitespace by core, as the plugin's arguments field is.
+ */
+acp_args: string; acp_model: string; llm_provider: NotesLlmProvider; llm_model: string; 
+/**
+ * Blank uses the provider's own endpoint. Required for
+ * `openai-compatible`, which has none.
+ */
+llm_base_url: string }
+export type NotesAgentBackend = "claude" | "codex" | "cursor" | "acp" | "llm"
+/**
+ * What the overlay shows of the doc a running meeting writes to. The link
+ * itself stays here: `open_notes_destination` opens it, so the overlay never
+ * hands the app a URL to open.
+ */
+export type NotesDestination = { 
+/**
+ * The doc's name, when it is known.
+ */
+name: string | null }
+export type NotesLlmProvider = "openai" | "anthropic" | "ollama" | "openai-compatible"
+export type NotesTarget = "obsidian" | "google_docs"
 export type ObsidianPluginStatus = 
 /**
  * No Obsidian config folder, or no vault registry inside it.

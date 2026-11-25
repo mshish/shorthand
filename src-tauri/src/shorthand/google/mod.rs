@@ -1,0 +1,716 @@
+//! Fork-only "Notes" target: Google Docs. Sign in to Google from the app,
+//! pick or create the document meetings go into, and have each meeting fill
+//! a new tab in it live. See
+//! docs/superpowers/specs/2026-08-25-shorthand-umbrella-design.md, Phase 2.
+//!
+//! The app owns sign-in and the credentials file; shorthand-core does the
+//! writing. `runner.rs` starts core's `capture --sink google` when a meeting
+//! begins and core follows the app's follow-stream like any other follower.
+//!
+//! The OAuth client, first match wins:
+//! 1. One the user brought under Settings, Notes, Advanced: the client ID in
+//!    settings and its secret in the OS keyring.
+//! 2. `SHORTHAND_GOOGLE_CLIENT_ID` / `SHORTHAND_GOOGLE_CLIENT_SECRET` at run
+//!    time, for development.
+//! 3. The same variables at compile time: the built-in client (a Google
+//!    Cloud "Desktop app" client with the `drive.file` scope).
+//!
+//! A build with none of them still compiles; connecting then says sign-in
+//! isn't set up. A connection keeps the client it was made with (core
+//! refreshes with the pair in the credentials file), so a change here
+//! applies from the next connect.
+
+pub mod agent;
+pub mod container_doc;
+pub mod credentials;
+pub mod document_info;
+pub mod notes_prompts;
+pub mod oauth;
+pub mod runner;
+#[cfg(test)]
+mod test_http;
+
+use serde::{Deserialize, Serialize};
+use specta::Type;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
+
+use crate::shorthand::credentials::{CredentialSlot, CredentialStatus, CredentialStore};
+
+/// Must match shorthand-core's `GOOGLE_DOCS_SCOPE`; both repos' scope
+/// guards keep it from widening.
+pub const GOOGLE_DOCS_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
+
+/// The loopback port Google redirects to after consent. The same one
+/// shorthand-config uses, so an existing OAuth client's redirect works.
+const REDIRECT_PORT: u16 = 8721;
+
+/// Emitted whenever anything `get_google_docs_status` reports may have
+/// changed, so the settings page can refresh.
+pub const STATUS_EVENT: &str = "google-docs-status-changed";
+
+/// Where finished meeting notes go. Obsidian is the default and behaves as
+/// before: an external follower (the Obsidian plugin) fills the note.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum NotesTarget {
+    #[default]
+    Obsidian,
+    GoogleDocs,
+}
+
+/// How the Google Docs target lays meetings out: a new tab in one doc (the
+/// default, and the only layout before this setting), or a new doc for each
+/// meeting in the "Shorthand Meeting Notes" folder.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum GoogleDocsLayout {
+    #[default]
+    TabPerMeeting,
+    DocPerMeeting,
+}
+
+struct OAuthClient {
+    id: String,
+    secret: String,
+}
+
+fn custom_oauth_client(app: &AppHandle) -> Option<OAuthClient> {
+    let id = crate::settings::get_settings(app)
+        .google_oauth_client_id
+        .filter(|id| !id.trim().is_empty())?;
+    let secret = credential_store(app)?
+        .get(&CredentialSlot::GoogleOAuthClient)
+        .ok()
+        .flatten()?;
+    Some(OAuthClient { id, secret })
+}
+
+fn credential_store(app: &AppHandle) -> Option<Arc<CredentialStore>> {
+    app.try_state::<Arc<CredentialStore>>()
+        .map(|state| state.inner().clone())
+}
+
+fn oauth_client(app: &AppHandle) -> Option<OAuthClient> {
+    custom_oauth_client(app).or_else(built_in_oauth_client)
+}
+
+fn built_in_oauth_client() -> Option<OAuthClient> {
+    let pick = |name: &str, compiled: Option<&'static str>| {
+        std::env::var(name)
+            .ok()
+            .or_else(|| compiled.map(String::from))
+            .filter(|v| !v.trim().is_empty())
+    };
+    Some(OAuthClient {
+        id: pick(
+            "SHORTHAND_GOOGLE_CLIENT_ID",
+            option_env!("SHORTHAND_GOOGLE_CLIENT_ID"),
+        )?,
+        secret: pick(
+            "SHORTHAND_GOOGLE_CLIENT_SECRET",
+            option_env!("SHORTHAND_GOOGLE_CLIENT_SECRET"),
+        )?,
+    })
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Type)]
+pub struct GoogleDocsStatus {
+    /// This build has an OAuth client to sign in with.
+    pub sign_in_available: bool,
+    pub connected: bool,
+    /// The document meetings go into, when connected.
+    pub document_url: Option<String>,
+    /// Its name in Google Drive, when it could be read at sign-in.
+    pub document_name: Option<String>,
+    /// Signed in to Google, whether or not a doc or folder is chosen yet.
+    pub signed_in: bool,
+    /// The folder that "a doc per meeting" puts each meeting's doc in.
+    pub folder_url: Option<String>,
+    /// Its name in Google Drive, as last read.
+    pub folder_name: Option<String>,
+    /// The notes engine (shorthand-core) was found next to the app.
+    pub engine_found: bool,
+    pub last_run: Option<runner::LastRun>,
+    /// Advanced: the client ID of the user's own OAuth client, if set.
+    pub custom_client_id: Option<String>,
+    pub custom_client_secret: CredentialStatus,
+    /// Sign-in uses the user's own client, not the built-in one.
+    pub using_custom_client: bool,
+    /// Whether the API key note taker has a key for the provider and
+    /// endpoint chosen. `unavailable` also when that endpoint can't be named.
+    pub notes_llm_key: CredentialStatus,
+}
+
+pub fn folder_url(folder_id: &str) -> String {
+    format!("https://drive.google.com/drive/folders/{folder_id}")
+}
+
+pub fn document_url(document_id: &str) -> String {
+    format!("https://docs.google.com/document/d/{document_id}/edit")
+}
+
+fn document_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    crate::portable::app_data_dir(app)
+        .ok()
+        .map(|dir| document_info::info_path(&dir))
+}
+
+/// The connected doc's name as read at sign-in, if it was.
+pub(crate) fn connected_document_name(app: &AppHandle, document_id: &str) -> Option<String> {
+    document_info_path(app).and_then(|path| document_info::read_name(&path, document_id))
+}
+
+fn folder_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    crate::portable::app_data_dir(app)
+        .ok()
+        .map(|dir| document_info::folder_info_path(&dir))
+}
+
+/// Remembers the folder's name for the settings row. Only a label: a
+/// failure leaves the row saying "your folder" instead.
+pub(crate) async fn remember_folder_name(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    access_token: &str,
+    folder_id: &str,
+) {
+    let (Some(path), Some(name)) = (
+        folder_info_path(app),
+        document_info::fetch_name(http, access_token, folder_id).await,
+    ) else {
+        return;
+    };
+    let _ = document_info::write(
+        &path,
+        &document_info::DocumentInfo {
+            document_id: folder_id.to_string(),
+            name,
+        },
+    );
+}
+
+fn current_status(app: &AppHandle) -> GoogleDocsStatus {
+    let saved = credentials::credentials_path()
+        .ok()
+        .and_then(|path| credentials::read(&path));
+    let document_id = saved.as_ref().and_then(|c| c.document_id.clone());
+    let folder_id = saved.as_ref().and_then(|c| c.folder_id.clone());
+    let document_name = document_id.as_deref().and_then(|id| {
+        document_info_path(app).and_then(|path| document_info::read_name(&path, id))
+    });
+    let folder_name = folder_id
+        .as_deref()
+        .and_then(|id| folder_info_path(app).and_then(|path| document_info::read_name(&path, id)));
+    let custom_client_id = crate::settings::get_settings(app)
+        .google_oauth_client_id
+        .filter(|id| !id.trim().is_empty());
+    let custom_client_secret = credential_store(app)
+        .map(|store| store.status(&CredentialSlot::GoogleOAuthClient))
+        .unwrap_or(CredentialStatus::Unavailable);
+    let using_custom_client =
+        custom_client_id.is_some() && custom_client_secret == CredentialStatus::Configured;
+    let notes_llm_key = match (
+        credential_store(app),
+        crate::settings::get_settings(app)
+            .google_notes_agent
+            .llm_slot(),
+    ) {
+        (Some(store), Ok(slot)) => store.status(&slot),
+        _ => CredentialStatus::Unavailable,
+    };
+    GoogleDocsStatus {
+        sign_in_available: using_custom_client || built_in_oauth_client().is_some(),
+        connected: document_id.is_some(),
+        document_url: document_id.as_deref().map(document_url),
+        document_name,
+        signed_in: saved.is_some(),
+        folder_url: folder_id.as_deref().map(folder_url),
+        folder_name,
+        engine_found: runner::engine_command().is_some(),
+        last_run: runner::last_run(),
+        custom_client_id,
+        custom_client_secret,
+        using_custom_client,
+        notes_llm_key,
+    }
+}
+
+pub(crate) fn notify_status_changed(app: &AppHandle) {
+    let _ = app.emit(STATUS_EVENT, ());
+}
+
+static SIGN_IN_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Aborts the wait for Google's redirect, for the Cancel button.
+static SIGN_IN_ABORT: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
+
+const SIGN_IN_CANCELLED: &str = "Google sign-in was cancelled.";
+
+fn set_sign_in_abort(handle: Option<tokio::task::AbortHandle>) {
+    if let Ok(mut slot) = SIGN_IN_ABORT.lock() {
+        *slot = handle;
+    }
+}
+
+struct SignInGuard;
+impl Drop for SignInGuard {
+    fn drop(&mut self) {
+        set_sign_in_abort(None);
+        SIGN_IN_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// What a sign-in sets up once Google says yes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignInFor {
+    /// An existing doc, chosen on Google's consent page.
+    PickedDoc,
+    /// A new "Shorthand Meeting Notes" doc, in a folder of the same name.
+    NewDoc,
+    /// Only the folder, for "a doc per meeting".
+    Folder,
+}
+
+/// PKCE, consent in the browser, the loopback redirect, token exchange, then
+/// pick or create the document or folder, then write the credentials file.
+async fn sign_in(app: &AppHandle, purpose: SignInFor) -> Result<(), String> {
+    let client = oauth_client(app).ok_or(
+        "Google sign-in isn't set up in this build of Shorthand. It needs a Google OAuth client ID.",
+    )?;
+    if SIGN_IN_RUNNING.swap(true, Ordering::AcqRel) {
+        return Err("Google sign-in is already open in your browser.".into());
+    }
+    let _guard = SignInGuard;
+
+    let redirect_uri = format!("http://127.0.0.1:{REDIRECT_PORT}/callback");
+    let challenge = oauth::generate_pkce_challenge();
+    let authorization_url = oauth::build_authorization_url(&oauth::AuthorizationUrlOptions {
+        client_id: &client.id,
+        redirect_uri: &redirect_uri,
+        code_challenge: &challenge.code_challenge,
+        scope: GOOGLE_DOCS_SCOPE,
+        use_picker: purpose == SignInFor::PickedDoc,
+    });
+    let listener = oauth::bind_loopback(REDIRECT_PORT).await?;
+    app.opener()
+        .open_url(&authorization_url, None::<&str>)
+        .map_err(|e| format!("Couldn't open your browser for Google sign-in: {e}"))?;
+    let waiting = tokio::spawn(oauth::listen_for_redirect(
+        listener,
+        oauth::REDIRECT_LISTEN_TIMEOUT,
+    ));
+    set_sign_in_abort(Some(waiting.abort_handle()));
+    let redirect = match waiting.await {
+        Ok(result) => result?,
+        Err(e) if e.is_cancelled() => return Err(SIGN_IN_CANCELLED.into()),
+        Err(e) => return Err(format!("Google sign-in stopped unexpectedly: {e}")),
+    };
+    set_sign_in_abort(None);
+
+    let http = reqwest::Client::new();
+    let pair = oauth::ClientCredentials {
+        client_id: &client.id,
+        client_secret: &client.secret,
+    };
+    let refresh_token = oauth::exchange_code(
+        &http,
+        &pair,
+        &redirect.code,
+        &challenge.code_verifier,
+        &redirect_uri,
+    )
+    .await?;
+
+    let path = credentials::credentials_path()
+        .map_err(|e| format!("Couldn't find Shorthand's config folder: {e}"))?;
+    let access_token = oauth::refresh_access_token(&http, &pair, &refresh_token).await?;
+    // Ids from an earlier connection, which stay usable under the same
+    // client: switching layouts shouldn't lose the other one's doc or folder.
+    let previous = credentials::read(&path)
+        .filter(|c| c.client_id == client.id)
+        .map(|c| container_doc::ExistingTarget {
+            folder_id: c.folder_id,
+            document_id: c.document_id,
+        })
+        .unwrap_or_default();
+    let (document_id, folder_id) = match purpose {
+        SignInFor::NewDoc => {
+            let doc = container_doc::ensure_container_doc(&http, &access_token, previous).await?;
+            (Some(doc.document_id), Some(doc.folder_id))
+        }
+        SignInFor::PickedDoc => {
+            let picked = redirect
+                .picked_file_ids
+                .into_iter()
+                .next()
+                .ok_or("No document was picked. Connect again and choose a Google Doc.")?;
+            (Some(picked), previous.folder_id)
+        }
+        SignInFor::Folder => {
+            let (folder, _) =
+                container_doc::ensure_folder(&http, &access_token, previous.folder_id).await?;
+            (previous.document_id, Some(folder))
+        }
+    };
+
+    let name = match &document_id {
+        Some(id) => document_info::fetch_name(&http, &access_token, id).await,
+        None => None,
+    };
+    if let Some(folder) = &folder_id {
+        remember_folder_name(app, &http, &access_token, folder).await;
+    }
+
+    credentials::write(
+        &path,
+        &credentials::Credentials {
+            client_id: client.id,
+            client_secret: client.secret,
+            refresh_token,
+            document_id: document_id.clone(),
+            folder_id,
+        },
+    )
+    .map_err(|e| format!("Couldn't save the Google connection: {e}"))?;
+
+    // The name is only a label; a doc that connects without one still works.
+    if let Some(info_path) = document_info_path(app) {
+        let _ = match (document_id, name) {
+            (Some(document_id), Some(name)) => document_info::write(
+                &info_path,
+                &document_info::DocumentInfo { document_id, name },
+            ),
+            _ => document_info::remove(&info_path),
+        };
+    }
+    Ok(())
+}
+
+/// Makes the meeting notes folder with the Google account already signed
+/// in, so choosing "a doc per meeting" after connecting a doc needs no
+/// second trip to the browser. `Ok(false)` when there is no account to use.
+async fn add_folder_to_connection(app: &AppHandle) -> Result<bool, String> {
+    let path = credentials::credentials_path()
+        .map_err(|e| format!("Couldn't find Shorthand's config folder: {e}"))?;
+    let Some(saved) = credentials::read(&path) else {
+        return Ok(false);
+    };
+    if saved.folder_id.is_some() {
+        return Ok(true);
+    }
+    let http = reqwest::Client::new();
+    let pair = oauth::ClientCredentials {
+        client_id: &saved.client_id,
+        client_secret: &saved.client_secret,
+    };
+    let access_token = oauth::refresh_access_token(&http, &pair, &saved.refresh_token).await?;
+    let (folder, _) = container_doc::ensure_folder(&http, &access_token, None).await?;
+    credentials::write(
+        &path,
+        &credentials::Credentials {
+            folder_id: Some(folder.clone()),
+            ..saved
+        },
+    )
+    .map_err(|e| format!("Couldn't save the Google connection: {e}"))?;
+    remember_folder_name(app, &http, &access_token, &folder).await;
+    Ok(true)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_google_docs_status(app: AppHandle) -> GoogleDocsStatus {
+    current_status(&app)
+}
+
+/// `create_new` false shows Google's picker to choose an existing doc; true
+/// creates a "Shorthand Meeting Notes" doc in a folder of the same name.
+#[tauri::command]
+#[specta::specta]
+pub async fn connect_google_docs(
+    app: AppHandle,
+    create_new: bool,
+) -> Result<GoogleDocsStatus, String> {
+    let purpose = if create_new {
+        SignInFor::NewDoc
+    } else {
+        SignInFor::PickedDoc
+    };
+    let result = sign_in(&app, purpose).await;
+    notify_status_changed(&app);
+    result.map(|()| current_status(&app))
+}
+
+/// Sets up the folder for "a doc per meeting": with the account already
+/// signed in when there is one, otherwise through Google's sign-in.
+#[tauri::command]
+#[specta::specta]
+pub async fn connect_google_folder(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let result = match add_folder_to_connection(&app).await {
+        Ok(true) => Ok(()),
+        Ok(false) => sign_in(&app, SignInFor::Folder).await,
+        Err(message) => Err(message),
+    };
+    notify_status_changed(&app);
+    result.map(|()| current_status(&app))
+}
+
+/// Stops waiting for Google's redirect, for when the browser tab was closed
+/// or the wrong account was picked. The pending connect returns
+/// "Google sign-in was cancelled."
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_google_sign_in() {
+    if let Some(handle) = SIGN_IN_ABORT.lock().ok().and_then(|mut slot| slot.take()) {
+        handle.abort();
+    }
+}
+
+/// Forgets the connection by removing the credentials file. Google keeps
+/// the grant until it's removed from the Google account's third-party access
+/// page; the document itself is untouched.
+#[tauri::command]
+#[specta::specta]
+pub fn disconnect_google_docs(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let path = credentials::credentials_path().map_err(|e| e.to_string())?;
+    credentials::remove(&path)
+        .map_err(|e| format!("Couldn't remove the Google connection: {e}"))?;
+    for info_path in [document_info_path(&app), folder_info_path(&app)]
+        .into_iter()
+        .flatten()
+    {
+        let _ = document_info::remove(&info_path);
+    }
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_google_doc(app: AppHandle) -> Result<(), String> {
+    let url = current_status(&app)
+        .document_url
+        .ok_or("Google Docs isn't connected.")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_google_folder(app: AppHandle) -> Result<(), String> {
+    let url = current_status(&app)
+        .folder_url
+        .ok_or("The meeting notes folder isn't set up.")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The doc the meeting being recorded writes its notes to, for the overlay.
+#[tauri::command]
+#[specta::specta]
+pub fn get_notes_destination() -> Option<runner::NotesDestination> {
+    runner::notes_destination()
+}
+
+/// Opens that doc in the browser. The overlay passes no URL: the app opens
+/// the one it stored when the meeting began.
+#[tauri::command]
+#[specta::specta]
+pub fn open_notes_destination(app: AppHandle) -> Result<(), String> {
+    let url = runner::notes_destination_url().ok_or("No meeting is writing to a Google Doc.")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the layout, then, for "a doc per meeting", makes the folder with
+/// the account already signed in. The setting is saved even when that
+/// fails; the folder row then offers to set it up.
+#[tauri::command]
+#[specta::specta]
+pub async fn change_google_docs_layout_setting(
+    app: AppHandle,
+    layout: GoogleDocsLayout,
+) -> Result<GoogleDocsStatus, String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.google_docs_layout = layout;
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "google_docs_layout", "value": layout }),
+    );
+    let result = if layout == GoogleDocsLayout::DocPerMeeting {
+        add_folder_to_connection(&app).await.map(|_| ())
+    } else {
+        Ok(())
+    };
+    notify_status_changed(&app);
+    result.map(|()| current_status(&app))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_notes_target_setting(app: AppHandle, target: NotesTarget) -> Result<(), String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.notes_target = target;
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "notes_target", "value": target }),
+    );
+    Ok(())
+}
+
+/// Which note taker fills the doc. Saved whole: the row edits one field at
+/// a time, but each backend's fields only mean something together.
+#[tauri::command]
+#[specta::specta]
+pub fn change_google_notes_agent_setting(
+    app: AppHandle,
+    agent: agent::NotesAgent,
+) -> Result<GoogleDocsStatus, String> {
+    let mut settings = crate::settings::get_settings(&app);
+    settings.google_notes_agent = agent.clone();
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "google_notes_agent", "value": agent }),
+    );
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+fn notes_llm_slot(app: &AppHandle) -> Result<CredentialSlot, String> {
+    crate::settings::get_settings(app)
+        .google_notes_agent
+        .llm_slot()
+}
+
+/// The API key for the provider and endpoint currently chosen. Kept in the
+/// slot the Obsidian plugin uses for the same pair, so either can add it.
+#[tauri::command]
+#[specta::specta]
+pub fn set_google_notes_llm_key(
+    app: AppHandle,
+    secret: String,
+) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .set(&notes_llm_slot(&app)?, &secret)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn clear_google_notes_llm_key(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .clear(&notes_llm_slot(&app)?)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+/// Advanced: the client ID of the user's own OAuth client. Blank clears it,
+/// which goes back to the built-in client.
+#[tauri::command]
+#[specta::specta]
+pub fn change_google_oauth_client_id_setting(
+    app: AppHandle,
+    client_id: String,
+) -> Result<GoogleDocsStatus, String> {
+    let client_id = Some(client_id.trim().to_string()).filter(|id| !id.is_empty());
+    let mut settings = crate::settings::get_settings(&app);
+    settings.google_oauth_client_id = client_id.clone();
+    crate::settings::write_settings(&app, settings);
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "google_oauth_client_id", "value": client_id }),
+    );
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+/// Advanced: the secret of the user's own OAuth client, kept in the OS
+/// keyring like every other secret the app holds.
+#[tauri::command]
+#[specta::specta]
+pub fn set_google_oauth_client_secret(
+    app: AppHandle,
+    secret: String,
+) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .set(&CredentialSlot::GoogleOAuthClient, &secret)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn clear_google_oauth_client_secret(app: AppHandle) -> Result<GoogleDocsStatus, String> {
+    let store = credential_store(&app).ok_or("Secure storage isn't ready yet.")?;
+    store
+        .clear(&CredentialSlot::GoogleOAuthClient)
+        .map_err(|e| e.to_string())?;
+    notify_status_changed(&app);
+    Ok(current_status(&app))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_target_defaults_to_obsidian_and_serializes_snake_case() {
+        assert_eq!(NotesTarget::default(), NotesTarget::Obsidian);
+        assert_eq!(
+            serde_json::to_string(&NotesTarget::GoogleDocs).unwrap(),
+            "\"google_docs\""
+        );
+        assert_eq!(
+            serde_json::from_str::<NotesTarget>("\"obsidian\"").unwrap(),
+            NotesTarget::Obsidian
+        );
+    }
+
+    #[test]
+    fn layout_defaults_to_a_tab_per_meeting_and_serializes_snake_case() {
+        assert_eq!(GoogleDocsLayout::default(), GoogleDocsLayout::TabPerMeeting);
+        assert_eq!(
+            serde_json::to_value(GoogleDocsLayout::DocPerMeeting).unwrap(),
+            serde_json::json!("doc_per_meeting")
+        );
+    }
+
+    #[test]
+    fn folder_url_opens_the_folder_in_drive() {
+        assert_eq!(
+            folder_url("f1"),
+            "https://drive.google.com/drive/folders/f1"
+        );
+    }
+
+    #[test]
+    fn document_url_opens_the_doc_for_editing() {
+        assert_eq!(
+            document_url("abc"),
+            "https://docs.google.com/document/d/abc/edit"
+        );
+    }
+
+    #[test]
+    fn scope_is_drive_file_only() {
+        assert_eq!(
+            GOOGLE_DOCS_SCOPE,
+            "https://www.googleapis.com/auth/drive.file"
+        );
+    }
+}

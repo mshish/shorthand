@@ -338,7 +338,7 @@ async fn post_process_with_key(
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
         None => {
-            debug!("Post-processing enabled but no provider is selected");
+            warn!("Post-processing enabled but no provider is selected");
             return PostProcessOutcome::Failed;
         }
     };
@@ -350,7 +350,7 @@ async fn post_process_with_key(
         .unwrap_or_default();
 
     if model.trim().is_empty() {
-        debug!(
+        warn!(
             "Post-processing skipped because provider '{}' has no model configured",
             provider.id
         );
@@ -360,7 +360,7 @@ async fn post_process_with_key(
     let selected_prompt_id = match &settings.post_process_selected_prompt_id {
         Some(id) => id.clone(),
         None => {
-            debug!("Post-processing skipped because no prompt is selected");
+            warn!("Post-processing skipped because no prompt is selected");
             return PostProcessOutcome::Failed;
         }
     };
@@ -372,7 +372,7 @@ async fn post_process_with_key(
     {
         Some(prompt) => prompt.prompt.clone(),
         None => {
-            debug!(
+            warn!(
                 "Post-processing skipped because prompt '{}' was not found",
                 selected_prompt_id
             );
@@ -381,7 +381,7 @@ async fn post_process_with_key(
     };
 
     if prompt.trim().is_empty() {
-        debug!("Post-processing skipped because the selected prompt is empty");
+        warn!("Post-processing skipped because the selected prompt is empty");
         return PostProcessOutcome::Failed;
     }
 
@@ -853,6 +853,10 @@ impl ShortcutAction for TranscribeAction {
                 } else {
                     None
                 };
+                crate::shorthand::google::runner::on_capture_begin(
+                    app,
+                    follow_stream_session.is_some(),
+                );
                 let generation = readiness.generation();
                 let app_clone = app.clone();
                 let rm_clone = Arc::clone(&rm);

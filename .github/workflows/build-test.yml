@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      notes-engine-ref:
+        description: "shorthand-core ref (tag, branch or sha) to bundle as the notes engine for Google Docs. Empty builds without it."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-test:
@@ -62,4 +67,5 @@ jobs:
       asset-prefix: "handy-test"
       upload-artifacts: true
       is-debug-build: ${{ contains(matrix.args, '--debug') }}
+      notes-engine-ref: ${{ inputs.notes-engine-ref }}
     secrets: inherit

@@ -10,13 +10,22 @@ interface ApiKeyFieldProps {
   onClear: () => void;
   disabled: boolean;
   className?: string;
+  /** What an empty field says when no secret is saved yet. */
+  missingPlaceholder?: string;
 }
 
 // Write-only: the settings payload the backend sends down never carries a
 // saved key's value, so this field never has one to show. It only ever
 // sends what the user just typed.
 export const ApiKeyField: React.FC<ApiKeyFieldProps> = React.memo(
-  ({ status, onCommit, onClear, disabled, className = "" }) => {
+  ({
+    status,
+    onCommit,
+    onClear,
+    disabled,
+    className = "",
+    missingPlaceholder,
+  }) => {
     const { t } = useTranslation();
     const [value, setValue] = useState("");
 
@@ -25,7 +34,7 @@ export const ApiKeyField: React.FC<ApiKeyFieldProps> = React.memo(
         ? t("shorthand.apiKey.saved")
         : status === "unavailable"
           ? t("shorthand.apiKey.unavailable")
-          : t("shorthand.apiKey.missing");
+          : (missingPlaceholder ?? t("shorthand.apiKey.missing"));
 
     const handleBlur = async () => {
       if (value === "") return;

@@ -604,6 +604,31 @@ pub struct AppSettings {
     /// `shorthand::dictation::apply_mode`.
     #[serde(default)]
     pub assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
+    /// Where meeting notes go. See `shorthand::google`.
+    #[serde(default)]
+    pub notes_target: crate::shorthand::google::NotesTarget,
+    /// Fork: the client ID of a Google OAuth client the user brought, used
+    /// in place of the built-in one when its secret is in the keyring too.
+    #[serde(default)]
+    pub google_oauth_client_id: Option<String>,
+    /// Fork: which note taker fills the Google Doc. See
+    /// `shorthand::google::agent`.
+    #[serde(default)]
+    pub google_notes_agent: crate::shorthand::google::agent::NotesAgent,
+    /// Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
+    #[serde(default)]
+    pub google_docs_layout: crate::shorthand::google::GoogleDocsLayout,
+    /// Fork: the user's own note-taking prompts for the Google Docs note
+    /// taker. The built-in Default prompt is the notes engine's own and is
+    /// never stored here. See `shorthand::google::notes_prompts`.
+    #[serde(default)]
+    pub notes_prompts: Vec<LLMPrompt>,
+    /// Fork: the note-taking prompt meetings use. None means Default.
+    #[serde(default)]
+    pub meeting_notes_prompt_id: Option<String>,
+    /// Fork: the note-taking prompt Assisted notes uses. None means Default.
+    #[serde(default)]
+    pub assisted_notes_notes_prompt_id: Option<String>,
 }
 
 fn default_model() -> String {
@@ -1222,6 +1247,13 @@ pub fn get_default_settings() -> AppSettings {
         show_all_settings: false,
         dictation: crate::shorthand::dictation::DictationSettings::default(),
         assisted_notes: Default::default(),
+        notes_target: Default::default(),
+        google_oauth_client_id: None,
+        google_notes_agent: Default::default(),
+        google_docs_layout: Default::default(),
+        notes_prompts: Vec::new(),
+        meeting_notes_prompt_id: None,
+        assisted_notes_notes_prompt_id: None,
     }
 }
 

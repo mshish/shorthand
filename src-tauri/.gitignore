@@ -11,3 +11,7 @@
 # tauri.windows.conf.json on Windows, into /usr/lib/Handy (deb/rpm) via
 # tauri.conf.json on Linux.
 /transcribe-libs/
+
+# Fork-only: the notes engine scripts/build-notes-engine.sh compiles for
+# the Google Docs notes target. Built in CI, never committed.
+/binaries/

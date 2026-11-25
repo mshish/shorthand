@@ -14,5 +14,5 @@ mod protocol;
 mod server;
 mod ws_relay;
 
-pub use discovery::remove_discovery;
+pub use discovery::{config_directory, remove_discovery};
 pub use server::RequestSocketServer;
