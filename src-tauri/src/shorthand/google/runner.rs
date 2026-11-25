@@ -194,10 +194,11 @@ pub fn engine_command() -> Option<EngineCommand> {
     )
 }
 
-/// "Meeting 2026-11-25 0930", with " 2", " 3"… when that note already
-/// exists. No characters that a file name or a doc tab would trip on.
-fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>) -> String {
-    let base = format!("Meeting {}", started.format("%Y-%m-%d %H%M"));
+/// "Meeting 2026-11-25 0930" (or "Notes …" for Assisted notes), with " 2",
+/// " 3"… when that note already exists. No characters that a file name or a
+/// doc tab would trip on.
+fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>, mode: Mode) -> String {
+    let base = format!("{} {}", title_prefix(mode), started.format("%Y-%m-%d %H%M"));
     (1..)
         .map(|n| {
             if n == 1 {
@@ -210,6 +211,13 @@ fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>) -> Stri
         .expect("an unused title always exists")
 }
 
+fn title_prefix(mode: Mode) -> &'static str {
+    match mode {
+        Mode::AssistedNotes => "Notes",
+        Mode::Meeting | Mode::Dictation => "Meeting",
+    }
+}
+
 fn capture_args(
     folder: &Path,
     note: &str,
@@ -217,6 +225,7 @@ fn capture_args(
     agent_args: &[String],
     own_document: Option<&str>,
     save_transcript: bool,
+    mode: Mode,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "capture".into(),
@@ -233,6 +242,11 @@ fn capture_args(
     }
     if save_transcript {
         args.push("--google-transcript".into());
+    }
+    // One person thinking out loud, not a meeting: core picks the
+    // assisted-notes guidance for the agent.
+    if mode == Mode::AssistedNotes {
+        args.push("--assisted-notes".into());
     }
     args.push("--shorthand".to_string());
     args.push(app_exe.to_string_lossy().into_owned());
@@ -259,23 +273,27 @@ fn failure_message(stderr_tail: &[String], code: Option<i32>) -> String {
 /// reaches follow-stream followers; without it there's nothing for core to
 /// follow.
 pub fn on_capture_begin(app: &AppHandle, published: bool) {
-    if !published || crate::shorthand::mode::active(app) != Mode::Meeting {
+    // Meetings and Assisted notes are the two notetaking modes; dictation
+    // pastes into the focused window and has no notes.
+    let mode = crate::shorthand::mode::active(app);
+    if !published || !matches!(mode, Mode::Meeting | Mode::AssistedNotes) {
         return;
     }
     if crate::settings::get_settings(app).notes_target != NotesTarget::GoogleDocs {
         return;
     }
     let app = app.clone();
-    std::thread::spawn(move || run_meeting(&app));
+    std::thread::spawn(move || run_meeting(&app, mode));
 }
 
-fn run_meeting(app: &AppHandle) {
+fn run_meeting(app: &AppHandle, mode: Mode) {
     let started = chrono::Local::now();
+    log::info!("Google Docs notes: starting for a {mode:?} recording");
     let fail = |title: String, message: String| {
         log::warn!("Google Docs notes for {title}: {message}");
         set_last_run(app, LastRun::Failed { title, message });
     };
-    let fallback_title = format!("Meeting {}", started.format("%Y-%m-%d %H%M"));
+    let fallback_title = format!("{} {}", title_prefix(mode), started.format("%Y-%m-%d %H%M"));
 
     let layout = crate::settings::get_settings(app).google_docs_layout;
     let saved = super::credentials::credentials_path()
@@ -336,7 +354,7 @@ fn run_meeting(app: &AppHandle) {
             format!("Couldn't create {}: {e}", folder.display()),
         );
     }
-    let title = unique_title(&folder, started);
+    let title = unique_title(&folder, started, mode);
     let note = format!("{title}.md");
     set_last_run(
         app,
@@ -366,6 +384,10 @@ fn run_meeting(app: &AppHandle) {
         )),
         (None, None) => None,
     };
+    log::info!(
+        "Google Docs notes for {title}: doc ready after {} ms",
+        (chrono::Local::now() - started).num_milliseconds()
+    );
 
     let init = engine
         .command()
@@ -397,6 +419,7 @@ fn run_meeting(app: &AppHandle) {
             // Meeting mode's "Save transcripts" setting: the transcript also
             // goes in the doc, in a "Transcript" tab.
             crate::settings::get_settings(app).save_transcripts,
+            mode,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -492,10 +515,13 @@ mod tests {
         let started = chrono::Local
             .with_ymd_and_hms(2026, 11, 25, 9, 30, 12)
             .unwrap();
-        assert_eq!(unique_title(dir.path(), started), "Meeting 2026-11-25 0930");
+        assert_eq!(
+            unique_title(dir.path(), started, Mode::Meeting),
+            "Meeting 2026-11-25 0930"
+        );
         std::fs::write(dir.path().join("Meeting 2026-11-25 0930.md"), "").unwrap();
         assert_eq!(
-            unique_title(dir.path(), started),
+            unique_title(dir.path(), started, Mode::Meeting),
             "Meeting 2026-11-25 0930 2"
         );
     }
@@ -509,6 +535,7 @@ mod tests {
             &["--backend".into(), "cursor".into()],
             None,
             false,
+            Mode::Meeting,
         );
         let joined = args.join(" ");
         assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
@@ -517,6 +544,30 @@ mod tests {
         assert!(joined.ends_with("--exit-after-session"));
         assert!(!joined.contains("--google-document"));
         assert!(!joined.contains("--google-transcript"));
+        assert!(!joined.contains("--assisted-notes"));
+    }
+
+    #[test]
+    fn assisted_notes_tells_core_and_names_the_note_for_itself() {
+        let args = capture_args(
+            Path::new("/notes"),
+            "Notes.md",
+            Path::new("/app/shorthand"),
+            &[],
+            None,
+            false,
+            Mode::AssistedNotes,
+        );
+        assert!(args.iter().any(|arg| arg == "--assisted-notes"));
+        assert!(args.join(" ").ends_with("--exit-after-session"));
+        let dir = tempfile::tempdir().unwrap();
+        let started = chrono::Local
+            .with_ymd_and_hms(2026, 11, 25, 9, 30, 12)
+            .unwrap();
+        assert_eq!(
+            unique_title(dir.path(), started, Mode::AssistedNotes),
+            "Notes 2026-11-25 0930"
+        );
     }
 
     #[test]
@@ -528,6 +579,7 @@ mod tests {
             &[],
             Some("meeting-doc"),
             false,
+            Mode::Meeting,
         );
         assert!(args
             .join(" ")
@@ -543,6 +595,7 @@ mod tests {
             &[],
             Some("meeting-doc"),
             true,
+            Mode::Meeting,
         );
         assert!(args
             .join(" ")
