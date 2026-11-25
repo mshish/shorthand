@@ -671,6 +671,47 @@ mod tests {
     }
 
     #[test]
+    fn every_post_processing_provider_reaches_dictation_and_assisted_notes() {
+        let base = crate::settings::get_default_settings();
+        let ids: Vec<String> = base
+            .post_process_providers
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect();
+        assert!(ids.len() > 1);
+        for id in ids {
+            let mut settings = base.clone();
+            settings.dictation.enabled = true;
+            settings.assisted_notes.enabled = true;
+            settings.post_process_provider_id = id.clone();
+            settings
+                .post_process_models
+                .insert(id.clone(), format!("{id}-model"));
+            if let Some(custom) = settings
+                .post_process_providers
+                .iter_mut()
+                .find(|provider| provider.allow_base_url_edit)
+            {
+                custom.base_url = "http://my-server:8080/v1".to_string();
+            }
+            let expected = settings.active_post_process_provider().cloned().unwrap();
+
+            for mode in [Mode::Dictation, Mode::AssistedNotes] {
+                let resolved = apply_mode(settings.clone(), mode);
+                let provider = resolved.active_post_process_provider().unwrap();
+                assert_eq!(provider.id, id, "{mode:?}");
+                assert_eq!(provider.base_url, expected.base_url, "{mode:?} {id}");
+                assert_eq!(provider.api_format, expected.api_format, "{mode:?} {id}");
+                assert_eq!(
+                    resolved.post_process_models.get(&id),
+                    Some(&format!("{id}-model")),
+                    "{mode:?} {id}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn assisted_notes_never_pastes() {
         let mut settings = crate::settings::get_default_settings();
         settings.paste_method = PasteMethod::CtrlV;
