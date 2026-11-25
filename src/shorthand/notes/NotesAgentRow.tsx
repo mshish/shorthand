@@ -212,7 +212,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
               descriptionMode="inline"
               grouped={grouped}
             >
-              <div className="flex w-[272px] items-center gap-2 ps-4 [&_input]:min-w-0">
+              <div className="flex w-[17rem] items-center gap-2 ps-4 [&_input]:min-w-0">
                 <ApiKeyField
                   status={keyStatus ?? "unavailable"}
                   onCommit={(secret) =>
