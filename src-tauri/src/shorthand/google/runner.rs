@@ -28,7 +28,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use super::{GoogleDocsLayout, NotesTarget};
 use crate::shorthand::mode::Mode;
@@ -55,6 +55,83 @@ fn set_last_run(app: &AppHandle, run: LastRun) {
         *slot = Some(run);
     }
     super::notify_status_changed(app);
+}
+
+/// Tells the overlay that the doc a meeting's notes go to changed. The
+/// payload is that doc, or `null` once the meeting's notes are done.
+pub const DESTINATION_EVENT: &str = "notes-destination-changed";
+
+/// What the overlay shows of the doc a running meeting writes to. The link
+/// itself stays here: `open_notes_destination` opens it, so the overlay never
+/// hands the app a URL to open.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Type)]
+pub struct NotesDestination {
+    /// The doc's name, when it is known.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Destination {
+    name: Option<String>,
+    url: String,
+    /// Tells apart two meetings that write to the same doc.
+    run: u64,
+}
+
+static DESTINATION: Mutex<Option<Destination>> = Mutex::new(None);
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn notes_destination() -> Option<NotesDestination> {
+    DESTINATION
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .map(|d| NotesDestination { name: d.name })
+}
+
+pub fn notes_destination_url() -> Option<String> {
+    DESTINATION
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|d| d.url.clone()))
+}
+
+/// Shows the meeting's doc in the overlay for as long as this lives. Dropping
+/// it, on any way out of `run_meeting`, takes the doc away again, unless a
+/// later meeting has replaced it meanwhile.
+struct ShownDestination<'a> {
+    app: &'a AppHandle,
+    run: u64,
+}
+
+impl<'a> ShownDestination<'a> {
+    fn show(app: &'a AppHandle, name: Option<String>, document_id: &str) -> Self {
+        let run = NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut slot) = DESTINATION.lock() {
+            *slot = Some(Destination {
+                name: name.clone(),
+                url: super::document_url(document_id),
+                run,
+            });
+        }
+        let _ = app.emit(DESTINATION_EVENT, Some(NotesDestination { name }));
+        Self { app, run }
+    }
+}
+
+impl Drop for ShownDestination<'_> {
+    fn drop(&mut self) {
+        let cleared = DESTINATION.lock().is_ok_and(|mut slot| {
+            let ours = slot.as_ref().is_some_and(|d| d.run == self.run);
+            if ours {
+                *slot = None;
+            }
+            ours
+        });
+        if cleared {
+            let _ = self.app.emit(DESTINATION_EVENT, None::<NotesDestination>);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,6 +354,17 @@ fn run_meeting(app: &AppHandle) {
             }
         }
         _ => None,
+    };
+    // A meeting's own doc is named for the meeting; the connected doc keeps
+    // the name it had in Drive at sign-in, and the meeting goes in a new tab.
+    let _shown = match (&own_document, saved.document_id.as_deref()) {
+        (Some(id), _) => Some(ShownDestination::show(app, Some(title.clone()), id)),
+        (None, Some(id)) => Some(ShownDestination::show(
+            app,
+            super::connected_document_name(app, id),
+            id,
+        )),
+        (None, None) => None,
     };
 
     let init = engine

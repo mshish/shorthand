@@ -757,6 +757,24 @@ async openGoogleFolder() : Promise<Result<null, string>> {
 }
 },
 /**
+ * The doc the meeting being recorded writes its notes to, for the overlay.
+ */
+async getNotesDestination() : Promise<NotesDestination | null> {
+    return await TAURI_INVOKE("get_notes_destination");
+},
+/**
+ * Opens that doc in the browser. The overlay passes no URL: the app opens
+ * the one it stored when the meeting began.
+ */
+async openNotesDestination() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_notes_destination") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Saves the layout, then, for "a doc per meeting", makes the folder with
  * the account already signed in. The setting is saved even when that
  * fails; the folder row then offers to set it up.
@@ -1882,6 +1900,16 @@ acp_args: string; acp_model: string; llm_provider: NotesLlmProvider; llm_model: 
  */
 llm_base_url: string }
 export type NotesAgentBackend = "claude" | "codex" | "cursor" | "acp" | "llm"
+/**
+ * What the overlay shows of the doc a running meeting writes to. The link
+ * itself stays here: `open_notes_destination` opens it, so the overlay never
+ * hands the app a URL to open.
+ */
+export type NotesDestination = { 
+/**
+ * The doc's name, when it is known.
+ */
+name: string | null }
 export type NotesLlmProvider = "openai" | "anthropic" | "ollama" | "openai-compatible"
 export type NotesTarget = "obsidian" | "google_docs"
 export type ObsidianPluginStatus = 

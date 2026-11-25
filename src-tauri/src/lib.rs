@@ -930,6 +930,8 @@ pub fn run(cli_args: CliArgs) {
             shorthand::google::open_google_doc,
             shorthand::google::connect_google_folder,
             shorthand::google::open_google_folder,
+            shorthand::google::get_notes_destination,
+            shorthand::google::open_notes_destination,
             shorthand::google::change_google_docs_layout_setting,
             shorthand::google::change_notes_target_setting,
             shorthand::google::change_google_oauth_client_id_setting,

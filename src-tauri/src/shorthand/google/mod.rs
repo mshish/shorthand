@@ -157,6 +157,11 @@ fn document_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| document_info::info_path(&dir))
 }
 
+/// The connected doc's name as read at sign-in, if it was.
+pub(crate) fn connected_document_name(app: &AppHandle, document_id: &str) -> Option<String> {
+    document_info_path(app).and_then(|path| document_info::read_name(&path, document_id))
+}
+
 fn folder_info_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     crate::portable::app_data_dir(app)
         .ok()
@@ -498,6 +503,24 @@ pub fn open_google_folder(app: AppHandle) -> Result<(), String> {
     let url = current_status(&app)
         .folder_url
         .ok_or("The meeting notes folder isn't set up.")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The doc the meeting being recorded writes its notes to, for the overlay.
+#[tauri::command]
+#[specta::specta]
+pub fn get_notes_destination() -> Option<runner::NotesDestination> {
+    runner::notes_destination()
+}
+
+/// Opens that doc in the browser. The overlay passes no URL: the app opens
+/// the one it stored when the meeting began.
+#[tauri::command]
+#[specta::specta]
+pub fn open_notes_destination(app: AppHandle) -> Result<(), String> {
+    let url = runner::notes_destination_url().ok_or("No meeting is writing to a Google Doc.")?;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())

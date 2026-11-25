@@ -31,6 +31,8 @@
   "overlay.error.notReady.message": "Couldn't get ready to transcribe.",
   "overlay.error.savedInHistory": "Your recording is in History.",
   "overlay.error.transcribeFailed": "Couldn't transcribe that recording.",
+  "overlay.notesDoc.open": "Open your notes in {{name}}",
+  "overlay.notesDoc.unnamed": "Google Docs",
   "settings.about.acknowledgments.handy.button": "View Handy on GitHub",
   "settings.about.acknowledgments.handy.description": "Open-source speech-to-text for the desktop, by CJ Pais",
   "settings.about.acknowledgments.handy.details": "Shorthand is a fork of Handy. Recording, local transcription, dictation, the model catalogue and the app itself are Handy's work; Shorthand adds meeting capture and AI note taking on top. Thank you to CJ Pais and the Handy contributors.",
