@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fork-only. In the AppImage, usr/bin/shorthand-notes is this launcher and the
+# real notes engine sits in usr/share/shorthand-notes/. linuxdeploy rewrites
+# the rpath of every ELF file in usr/bin, and on arm64 that leaves the
+# Bun-compiled engine segfaulting at start, so the engine is kept out of
+# usr/bin. The deb and rpm packages ship the engine in usr/bin directly.
+exec "$(dirname "$0")/../share/shorthand-notes/shorthand-notes" "$@"

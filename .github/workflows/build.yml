@@ -581,6 +581,7 @@ jobs:
           BASE_ARGS: ${{ inputs.build-args }}
           SIGN_UPDATES: ${{ inputs.sign-updates }}
           NOTES_ENGINE: ${{ inputs.notes-engine-ref != '' }}
+          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
           ARGS="$BASE_ARGS"
@@ -592,6 +593,19 @@ jobs:
           fi
           if [ "$NOTES_ENGINE" = "true" ]; then
             BUNDLE="${BUNDLE:+$BUNDLE,}\"externalBin\":[\"binaries/shorthand-notes\"]"
+            # AppImage only: linuxdeploy rewrites the rpath of every ELF file
+            # in usr/bin, which leaves the Bun-compiled engine segfaulting on
+            # arm64. So the AppImage gets a launcher script at that path and
+            # the engine in usr/share, where linuxdeploy doesn't look. These
+            # files are copied after the external binaries, so the launcher
+            # replaces the engine copy in usr/bin. --config merges, so the
+            # existing appimage files entry stays.
+            case "$TARGET" in
+              *linux*)
+                APPIMAGE_FILES="\"/usr/bin/shorthand-notes\":\"appimage/shorthand-notes-launcher\",\"/usr/share/shorthand-notes/shorthand-notes\":\"binaries/shorthand-notes-$TARGET\""
+                BUNDLE="$BUNDLE,\"linux\":{\"appimage\":{\"files\":{$APPIMAGE_FILES}}}"
+                ;;
+            esac
           fi
           if [ -n "$BUNDLE" ]; then
             ARGS="$ARGS --config {\"bundle\":{$BUNDLE}}"
@@ -657,6 +671,31 @@ jobs:
               exit 1
             fi
           )
+
+      # Fork-only. The AppImage's notes engine goes through a launcher (see
+      # src-tauri/appimage/shorthand-notes-launcher). Run it from the built
+      # AppImage, so a broken engine fails the build rather than a meeting.
+      # With no arguments it prints its usage and exits 2; a crash exits 128+.
+      - name: Check the AppImage's notes engine runs
+        if: contains(inputs.platform, 'ubuntu') && inputs.notes-engine-ref != ''
+        shell: bash
+        run: |
+          set -uo pipefail
+          PROFILE="${{ steps.build-profile.outputs.profile }}"
+          APPIMAGE_PATH="$(find src-tauri/target -path "*/${PROFILE}/bundle/appimage/*.AppImage" -print -quit 2>/dev/null || true)"
+          if [ -z "$APPIMAGE_PATH" ]; then
+            echo "No AppImage in this build; nothing to check"
+            exit 0
+          fi
+          WORK="$(mktemp -d)"
+          ( cd "$WORK" && "$OLDPWD/$APPIMAGE_PATH" --appimage-extract >/dev/null )
+          "$WORK/squashfs-root/usr/bin/shorthand-notes" >/dev/null 2>&1
+          STATUS=$?
+          echo "shorthand-notes exited with $STATUS"
+          if [ "$STATUS" -ge 128 ] || [ "$STATUS" -eq 126 ] || [ "$STATUS" -eq 127 ]; then
+            echo "::error::The AppImage's notes engine did not run (exit $STATUS)"
+            exit 1
+          fi
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')
