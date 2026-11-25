@@ -390,14 +390,21 @@ const RecordingOverlay: React.FC = () => {
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path
-          d="M4.5 1.75h4.75L12.25 4.75v9.5h-7.75z"
+          d="M3 1.5h6.75L13 4.75v9.75H3z"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.3"
           strokeLinejoin="round"
         />
         <path
-          d="M6.5 8h3.5M6.5 10.5h3.5"
+          d="M9.5 1.75V5h3.25"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.1"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M5.5 8.25h5M5.5 11h5"
           stroke="currentColor"
           strokeWidth="1.3"
           strokeLinecap="round"
