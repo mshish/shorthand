@@ -119,6 +119,29 @@ impl<'a> ShownDestination<'a> {
     }
 }
 
+impl ShownDestination<'_> {
+    /// Shows the doc under a new name, if this meeting is still the one shown.
+    fn rename(&self, name: &str) {
+        let renamed = DESTINATION
+            .lock()
+            .is_ok_and(|mut slot| match slot.as_mut() {
+                Some(d) if d.run == self.run => {
+                    d.name = Some(name.to_string());
+                    true
+                }
+                _ => false,
+            });
+        if renamed {
+            let _ = self.app.emit(
+                DESTINATION_EVENT,
+                Some(NotesDestination {
+                    name: Some(name.to_string()),
+                }),
+            );
+        }
+    }
+}
+
 impl Drop for ShownDestination<'_> {
     fn drop(&mut self) {
         let cleared = DESTINATION.lock().is_ok_and(|mut slot| {
@@ -255,6 +278,17 @@ fn capture_args(
     args
 }
 
+/// The line core prints when the agent names the meeting:
+/// `notes-title: 2026-11-25 - Q1 pricing review`.
+const NOTES_TITLE_PREFIX: &str = "notes-title: ";
+
+/// The meeting's new name, when `line` is core's naming line.
+fn notes_title(line: &str) -> Option<&str> {
+    line.strip_prefix(NOTES_TITLE_PREFIX)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+}
+
 /// The last thing the engine said on stderr is the most useful reason; the
 /// exit code is the fallback.
 fn failure_message(stderr_tail: &[String], code: Option<i32>) -> String {
@@ -375,7 +409,7 @@ fn run_meeting(app: &AppHandle, mode: Mode) {
     };
     // A meeting's own doc is named for the meeting; the connected doc keeps
     // the name it had in Drive at sign-in, and the meeting goes in a new tab.
-    let _shown = match (&own_document, saved.document_id.as_deref()) {
+    let shown = match (&own_document, saved.document_id.as_deref()) {
         (Some(id), _) => Some(ShownDestination::show(app, Some(title.clone()), id)),
         (None, Some(id)) => Some(ShownDestination::show(
             app,
@@ -430,9 +464,35 @@ fn run_meeting(app: &AppHandle, mode: Mode) {
         Err(e) => return fail(title, format!("Couldn't start the notes engine: {e}")),
     };
     let mut tail: Vec<String> = Vec::new();
+    // What the meeting is called once the engine names it; the first name
+    // stays the note's file name and the key for the engine's own state.
+    let mut shown_title = title.clone();
     if let Some(stderr) = child.stderr.take() {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             log::info!("[shorthand-notes] {line}");
+            if let Some(name) = notes_title(&line) {
+                shown_title = name.to_string();
+                // Core renames the tab itself; a meeting's own doc is a Drive
+                // file, which only the app may rename.
+                if let Some(id) = own_document.as_deref() {
+                    if let Err(message) =
+                        tauri::async_runtime::block_on(rename_meeting_doc(&saved, id, name))
+                    {
+                        log::warn!(
+                            "Google Docs notes for {title}: couldn't rename the doc: {message}"
+                        );
+                    } else if let Some(shown) = &shown {
+                        shown.rename(name);
+                    }
+                }
+                set_last_run(
+                    app,
+                    LastRun::Running {
+                        title: shown_title.clone(),
+                    },
+                );
+                continue;
+            }
             tail.push(line);
             if tail.len() > 8 {
                 tail.remove(0);
@@ -440,10 +500,27 @@ fn run_meeting(app: &AppHandle, mode: Mode) {
         }
     }
     match child.wait() {
-        Ok(status) if status.success() => set_last_run(app, LastRun::Finished { title }),
-        Ok(status) => fail(title, failure_message(&tail, status.code())),
-        Err(e) => fail(title, format!("Lost track of the notes engine: {e}")),
+        Ok(status) if status.success() => {
+            set_last_run(app, LastRun::Finished { title: shown_title })
+        }
+        Ok(status) => fail(shown_title, failure_message(&tail, status.code())),
+        Err(e) => fail(shown_title, format!("Lost track of the notes engine: {e}")),
     }
+}
+
+async fn rename_meeting_doc(
+    saved: &super::credentials::Credentials,
+    document_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let http = reqwest::Client::new();
+    let pair = super::oauth::ClientCredentials {
+        client_id: &saved.client_id,
+        client_secret: &saved.client_secret,
+    };
+    let access_token =
+        super::oauth::refresh_access_token(&http, &pair, &saved.refresh_token).await?;
+    super::container_doc::rename_file(&http, &access_token, document_id, name).await
 }
 
 /// The meeting's own doc, made in the folder before core starts. Reads the
@@ -600,6 +677,16 @@ mod tests {
         assert!(args
             .join(" ")
             .contains("--google-document=meeting-doc --google-transcript --shorthand"));
+    }
+
+    #[test]
+    fn the_engines_naming_line_gives_the_new_name() {
+        assert_eq!(
+            notes_title("notes-title: 2026-11-25 - Q1 pricing review"),
+            Some("2026-11-25 - Q1 pricing review")
+        );
+        assert_eq!(notes_title("notes-title:   "), None);
+        assert_eq!(notes_title("Enhancement pass 1 finished (written)."), None);
     }
 
     #[test]

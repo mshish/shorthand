@@ -190,6 +190,35 @@ async fn create_meeting_doc_at(
         .ok_or_else(|| "Drive created the meeting's doc but returned no id".into())
 }
 
+/// Renames a meeting's own doc once the notes engine has named the meeting.
+/// The doc is one the app made, so the `drive.file` scope reaches it.
+pub async fn rename_file(
+    http: &reqwest::Client,
+    access_token: &str,
+    file_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    rename_file_at(http, GOOGLE_API_BASE, access_token, file_id, name).await
+}
+
+async fn rename_file_at(
+    http: &reqwest::Client,
+    drive_base: &str,
+    access_token: &str,
+    file_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let response = http
+        .patch(format!("{drive_base}/drive/v3/files/{file_id}?fields=id"))
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    ensure_success(response, "Renaming the meeting's Google Doc").await?;
+    Ok(())
+}
+
 /// Moves the document into the folder even when the document already
 /// existed: someone who picked a doc earlier and now chooses "create" still
 /// wants that doc inside the folder.
@@ -424,6 +453,31 @@ mod tests {
                 "mimeType": "application/vnd.google-apps.document",
                 "parents": ["f1"],
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_meeting_doc_is_renamed_by_its_id() {
+        let (drive, seen) = serve(vec![Route::json(
+            "PATCH /drive/v3/files/meeting-doc",
+            200,
+            r#"{"id":"meeting-doc"}"#,
+        )])
+        .await;
+        rename_file_at(
+            &client(),
+            &drive,
+            "token",
+            "meeting-doc",
+            "2026-11-25 - Q1 pricing review",
+        )
+        .await
+        .unwrap();
+        let seen = seen.await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(&seen[0].body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "name": "2026-11-25 - Q1 pricing review" })
         );
     }
 
