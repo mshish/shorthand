@@ -274,7 +274,7 @@ export const NotesPromptsRows: React.FC<NotesPromptsRowsProps> = ({
                     t("settings.notes.prompts.defaultLoading")
                   }
                   readOnly
-                  className="min-h-[200px]"
+                  className="w-full min-h-[200px]"
                 />
               )}
               <div className="flex gap-2 pt-2">
