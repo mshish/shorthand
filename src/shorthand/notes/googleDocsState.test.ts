@@ -12,7 +12,9 @@ import {
   type GoogleDocsRowState,
 } from "./googleDocsState";
 
-const status = (overrides: Partial<GoogleDocsStatus> = {}): GoogleDocsStatus => ({
+const status = (
+  overrides: Partial<GoogleDocsStatus> = {},
+): GoogleDocsStatus => ({
   sign_in_available: true,
   connected: false,
   document_url: null,
@@ -32,22 +34,45 @@ const ALL_STATES: GoogleDocsRowState[] = [
   { phase: "error", message: "boom" },
   ready(status({ sign_in_available: false })),
   ready(status()),
-  ready(status({ connected: true, document_url: "https://docs.google.com/document/d/x/edit" })),
-  ready(status({ connected: true, engine_found: false })),
-  ready(status({ connected: true, last_run: { kind: "running", title: "Meeting 1" } })),
-  ready(status({ connected: true, last_run: { kind: "finished", title: "Meeting 1" } })),
   ready(
     status({
       connected: true,
-      last_run: { kind: "failed", title: "Meeting 1", message: "Shorthand is not running." },
+      document_url: "https://docs.google.com/document/d/x/edit",
+    }),
+  ),
+  ready(status({ connected: true, engine_found: false })),
+  ready(
+    status({
+      connected: true,
+      last_run: { kind: "running", title: "Meeting 1" },
+    }),
+  ),
+  ready(
+    status({
+      connected: true,
+      last_run: { kind: "finished", title: "Meeting 1" },
+    }),
+  ),
+  ready(
+    status({
+      connected: true,
+      last_run: {
+        kind: "failed",
+        title: "Meeting 1",
+        message: "Shorthand is not running.",
+      },
     }),
   ),
 ];
 
 describe("describeGoogleDocs", () => {
   test("a build without an OAuth client says so and offers nothing", () => {
-    const view = describeGoogleDocs(ready(status({ sign_in_available: false })));
-    expect(view.descriptionKey).toBe("settings.notes.google.status.unavailable");
+    const view = describeGoogleDocs(
+      ready(status({ sign_in_available: false })),
+    );
+    expect(view.descriptionKey).toBe(
+      "settings.notes.google.status.unavailable",
+    );
     expect(view.actions).toEqual([]);
   });
 
@@ -63,8 +88,9 @@ describe("describeGoogleDocs", () => {
     expect(view.descriptionKey).toBe("settings.notes.google.status.connected");
     expect(view.actions).toEqual(["open_doc", "disconnect"]);
     expect(
-      describeGoogleDocs(ready(status({ connected: true, engine_found: false })))
-        .descriptionKey,
+      describeGoogleDocs(
+        ready(status({ connected: true, engine_found: false })),
+      ).descriptionKey,
     ).toBe("settings.notes.google.status.connectedNoEngine");
   });
 
@@ -91,11 +117,12 @@ describe("describeGoogleDocs", () => {
     const strings = en as Record<string, string>;
     for (const state of ALL_STATES) {
       const view = describeGoogleDocs(state);
-      expect(strings[view.descriptionKey]).toBeString();
-      if (view.lastRunKey) expect(strings[view.lastRunKey]).toBeString();
+      expect(typeof strings[view.descriptionKey]).toBe("string");
+      if (view.lastRunKey)
+        expect(typeof strings[view.lastRunKey]).toBe("string");
     }
     for (const key of Object.values(GOOGLE_ACTION_LABEL_KEYS)) {
-      expect(strings[key]).toBeString();
+      expect(typeof strings[key]).toBe("string");
     }
   });
 });

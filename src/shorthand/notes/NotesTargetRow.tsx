@@ -31,10 +31,15 @@ export const NotesTargetRow: React.FC<NotesTargetRowProps> = ({
       <Dropdown
         options={[
           { value: "obsidian", label: t("settings.notes.target.obsidian") },
-          { value: "google_docs", label: t("settings.notes.target.googleDocs") },
+          {
+            value: "google_docs",
+            label: t("settings.notes.target.googleDocs"),
+          },
         ]}
         selectedValue={selected}
-        onSelect={(value) => updateSetting("notes_target", value as NotesTarget)}
+        onSelect={(value) =>
+          updateSetting("notes_target", value as NotesTarget)
+        }
         disabled={isUpdating("notes_target")}
       />
     </SettingContainer>
