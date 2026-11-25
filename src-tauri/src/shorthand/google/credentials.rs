@@ -46,26 +46,32 @@ pub fn read(path: &Path) -> Option<Credentials> {
     })
 }
 
+/// Field order follows the declaration below. A `serde_json::Map` would sort
+/// the keys alphabetically (the crate is built without `preserve_order`),
+/// which breaks the byte-exact contract with core.
+#[derive(serde::Serialize)]
+struct OnDisk<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    client_id: &'a str,
+    client_secret: &'a str,
+    refresh_token: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    document_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder_id: Option<&'a str>,
+}
+
 fn render(credentials: &Credentials) -> String {
-    let mut map = serde_json::Map::new();
-    map.insert("type".into(), "authorized_user".into());
-    map.insert("client_id".into(), credentials.client_id.clone().into());
-    map.insert(
-        "client_secret".into(),
-        credentials.client_secret.clone().into(),
-    );
-    map.insert(
-        "refresh_token".into(),
-        credentials.refresh_token.clone().into(),
-    );
-    if let Some(document_id) = &credentials.document_id {
-        map.insert("document_id".into(), document_id.clone().into());
-    }
-    if let Some(folder_id) = &credentials.folder_id {
-        map.insert("folder_id".into(), folder_id.clone().into());
-    }
-    let mut body = serde_json::to_string_pretty(&serde_json::Value::Object(map))
-        .expect("credentials always serialize");
+    let on_disk = OnDisk {
+        kind: "authorized_user",
+        client_id: &credentials.client_id,
+        client_secret: &credentials.client_secret,
+        refresh_token: &credentials.refresh_token,
+        document_id: credentials.document_id.as_deref(),
+        folder_id: credentials.folder_id.as_deref(),
+    };
+    let mut body = serde_json::to_string_pretty(&on_disk).expect("credentials always serialize");
     body.push('\n');
     body
 }
