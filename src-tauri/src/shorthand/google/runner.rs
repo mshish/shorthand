@@ -1,0 +1,369 @@
+//! Starts shorthand-core's `capture --sink google` when a meeting begins and
+//! Google Docs is the notes target. Core attaches to this app's follow-stream
+//! (`shorthand --follow-stream json`), fills a new tab in the connected doc
+//! as the meeting goes, and exits after that one recording
+//! (`--exit-after-session`, core 0.24.5 or later).
+//!
+//! Core needs a markdown note to anchor a capture, so each meeting gets one
+//! in `<app data>/google-docs-notes/`, named for the meeting's start time.
+//! The doc tab takes the same name. That folder also holds core's transcript
+//! sidecars.
+//!
+//! The engine is the `shorthand-notes` binary bundled next to the app (see
+//! `scripts/build-notes-engine.sh`), or whatever `SHORTHAND_NOTES_BIN` names
+//! (a `.mjs`/`.js` file runs under `node`), for development.
+
+use serde::Serialize;
+use specta::Type;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use tauri::AppHandle;
+
+use super::NotesTarget;
+use crate::shorthand::mode::Mode;
+
+const ENGINE_NAME: &str = "shorthand-notes";
+const NOTES_FOLDER: &str = "google-docs-notes";
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LastRun {
+    Running { title: String },
+    Finished { title: String },
+    Failed { title: String, message: String },
+}
+
+static LAST_RUN: Mutex<Option<LastRun>> = Mutex::new(None);
+
+pub fn last_run() -> Option<LastRun> {
+    LAST_RUN.lock().ok().and_then(|run| run.clone())
+}
+
+fn set_last_run(app: &AppHandle, run: LastRun) {
+    if let Ok(mut slot) = LAST_RUN.lock() {
+        *slot = Some(run);
+    }
+    super::notify_status_changed(app);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineCommand {
+    pub program: PathBuf,
+    pub leading_args: Vec<String>,
+}
+
+impl EngineCommand {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.leading_args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command
+    }
+}
+
+fn resolve_engine(
+    override_path: Option<String>,
+    app_exe: Option<PathBuf>,
+) -> Option<EngineCommand> {
+    if let Some(path) = override_path.filter(|p| !p.trim().is_empty()) {
+        let path = PathBuf::from(path);
+        let is_script = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mjs") || e.eq_ignore_ascii_case("js"));
+        return Some(if is_script {
+            EngineCommand {
+                program: PathBuf::from("node"),
+                leading_args: vec![path.to_string_lossy().into_owned()],
+            }
+        } else {
+            EngineCommand {
+                program: path,
+                leading_args: Vec::new(),
+            }
+        });
+    }
+    // Tauri bundles an `externalBin` next to the app's own executable, with
+    // the target-triple suffix it was built under removed.
+    let bundled = app_exe?
+        .parent()?
+        .join(format!("{ENGINE_NAME}{}", std::env::consts::EXE_SUFFIX));
+    bundled.is_file().then_some(EngineCommand {
+        program: bundled,
+        leading_args: Vec::new(),
+    })
+}
+
+pub fn engine_command() -> Option<EngineCommand> {
+    resolve_engine(
+        std::env::var("SHORTHAND_NOTES_BIN").ok(),
+        std::env::current_exe().ok(),
+    )
+}
+
+/// "Meeting 2026-11-25 0930", with " 2", " 3"… when that note already
+/// exists. No characters that a file name or a doc tab would trip on.
+fn unique_title(folder: &Path, started: chrono::DateTime<chrono::Local>) -> String {
+    let base = format!("Meeting {}", started.format("%Y-%m-%d %H%M"));
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base} {n}")
+            }
+        })
+        .find(|title| !folder.join(format!("{title}.md")).exists())
+        .expect("an unused title always exists")
+}
+
+fn capture_args(folder: &Path, note: &str, app_exe: &Path) -> Vec<String> {
+    vec![
+        "capture".into(),
+        "--vault".into(),
+        folder.to_string_lossy().into_owned(),
+        "--note".into(),
+        note.into(),
+        "--enhance".into(),
+        "--sink".into(),
+        "google".into(),
+        "--shorthand".into(),
+        app_exe.to_string_lossy().into_owned(),
+        "--exit-after-session".into(),
+    ]
+}
+
+/// The last thing the engine said on stderr is the most useful reason; the
+/// exit code is the fallback.
+fn failure_message(stderr_tail: &[String], code: Option<i32>) -> String {
+    stderr_tail
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| match code {
+            Some(code) => format!("The notes engine stopped with exit code {code}."),
+            None => "The notes engine was stopped.".to_string(),
+        })
+}
+
+/// Called right after a capture starts. `published` is whether that capture
+/// reaches follow-stream followers; without it there's nothing for core to
+/// follow.
+pub fn on_capture_begin(app: &AppHandle, published: bool) {
+    if !published || crate::shorthand::mode::active(app) != Mode::Meeting {
+        return;
+    }
+    if crate::settings::get_settings(app).notes_target != NotesTarget::GoogleDocs {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || run_meeting(&app));
+}
+
+fn run_meeting(app: &AppHandle) {
+    let started = chrono::Local::now();
+    let fail = |title: String, message: String| {
+        log::warn!("Google Docs notes for {title}: {message}");
+        set_last_run(app, LastRun::Failed { title, message });
+    };
+    let fallback_title = format!("Meeting {}", started.format("%Y-%m-%d %H%M"));
+
+    let connected = super::credentials::credentials_path()
+        .ok()
+        .and_then(|path| super::credentials::read(&path))
+        .is_some_and(|c| c.document_id.is_some());
+    if !connected {
+        return fail(
+            fallback_title,
+            "Google Docs isn't connected. Connect it in Settings, Notes.".into(),
+        );
+    }
+    let Some(engine) = engine_command() else {
+        return fail(
+            fallback_title,
+            "The notes engine isn't installed with this build of Shorthand.".into(),
+        );
+    };
+    let app_exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            return fail(
+                fallback_title,
+                format!("Couldn't find Shorthand itself: {e}"),
+            )
+        }
+    };
+    let folder = match crate::portable::app_data_dir(app) {
+        Ok(dir) => dir.join(NOTES_FOLDER),
+        Err(e) => {
+            return fail(
+                fallback_title,
+                format!("Couldn't find the app data folder: {e}"),
+            )
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(&folder) {
+        return fail(
+            fallback_title,
+            format!("Couldn't create {}: {e}", folder.display()),
+        );
+    }
+    let title = unique_title(&folder, started);
+    let note = format!("{title}.md");
+    set_last_run(
+        app,
+        LastRun::Running {
+            title: title.clone(),
+        },
+    );
+
+    let init = engine
+        .command()
+        .args(["init-note", "--vault"])
+        .arg(&folder)
+        .args(["--note", note.as_str(), "--title", title.as_str()])
+        .stdin(Stdio::null())
+        .output();
+    match init {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr: Vec<String> = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .map(String::from)
+                .collect();
+            return fail(title, failure_message(&stderr, output.status.code()));
+        }
+        Err(e) => return fail(title, format!("Couldn't start the notes engine: {e}")),
+    }
+
+    let child = engine
+        .command()
+        .args(capture_args(&folder, &note, &app_exe))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return fail(title, format!("Couldn't start the notes engine: {e}")),
+    };
+    let mut tail: Vec<String> = Vec::new();
+    if let Some(stderr) = child.stderr.take() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            log::info!("[shorthand-notes] {line}");
+            tail.push(line);
+            if tail.len() > 8 {
+                tail.remove(0);
+            }
+        }
+    }
+    match child.wait() {
+        Ok(status) if status.success() => set_last_run(app, LastRun::Finished { title }),
+        Ok(status) => fail(title, failure_message(&tail, status.code())),
+        Err(e) => fail(title, format!("Lost track of the notes engine: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn override_runs_scripts_under_node_and_binaries_directly() {
+        assert_eq!(
+            resolve_engine(Some("/dev/core/dist/shorthand-notes.mjs".into()), None),
+            Some(EngineCommand {
+                program: PathBuf::from("node"),
+                leading_args: vec!["/dev/core/dist/shorthand-notes.mjs".into()],
+            })
+        );
+        assert_eq!(
+            resolve_engine(Some("/opt/shorthand-notes".into()), None),
+            Some(EngineCommand {
+                program: PathBuf::from("/opt/shorthand-notes"),
+                leading_args: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn bundled_engine_is_found_next_to_the_app_and_only_if_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("shorthand");
+        assert_eq!(resolve_engine(None, Some(exe.clone())), None);
+        let engine = dir
+            .path()
+            .join(format!("{ENGINE_NAME}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&engine, b"").unwrap();
+        assert_eq!(
+            resolve_engine(Some("  ".into()), Some(exe)),
+            Some(EngineCommand {
+                program: engine,
+                leading_args: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn titles_name_the_start_time_and_never_reuse_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = chrono::Local
+            .with_ymd_and_hms(2026, 11, 25, 9, 30, 12)
+            .unwrap();
+        assert_eq!(unique_title(dir.path(), started), "Meeting 2026-11-25 0930");
+        std::fs::write(dir.path().join("Meeting 2026-11-25 0930.md"), "").unwrap();
+        assert_eq!(
+            unique_title(dir.path(), started),
+            "Meeting 2026-11-25 0930 2"
+        );
+    }
+
+    #[test]
+    fn capture_uses_the_google_sink_and_ends_with_the_meeting() {
+        let args = capture_args(
+            Path::new("/notes"),
+            "Meeting.md",
+            Path::new("/app/shorthand"),
+        );
+        let joined = args.join(" ");
+        assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
+        assert!(joined.contains("--sink google"));
+        assert!(joined.contains("--shorthand /app/shorthand"));
+        assert!(joined.ends_with("--exit-after-session"));
+    }
+
+    #[test]
+    fn failure_message_prefers_the_engines_last_words() {
+        let tail = vec![
+            "first".to_string(),
+            "Shorthand is not running.".into(),
+            " ".into(),
+        ];
+        assert_eq!(failure_message(&tail, Some(1)), "Shorthand is not running.");
+        assert_eq!(
+            failure_message(&[], Some(3)),
+            "The notes engine stopped with exit code 3."
+        );
+    }
+
+    #[test]
+    fn last_run_serializes_with_a_kind_tag() {
+        let run = LastRun::Failed {
+            title: "Meeting".into(),
+            message: "boom".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(run).unwrap(),
+            serde_json::json!({"kind": "failed", "title": "Meeting", "message": "boom"})
+        );
+    }
+}

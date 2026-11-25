@@ -69,6 +69,15 @@ on:
         required: false
         type: boolean
         default: false
+      notes-engine-ref:
+        # Fork-only. A shorthand-core tag (0.24.5 or later, which has
+        # `capture --exit-after-session`). When set, the build compiles core's
+        # `shorthand-notes` CLI and bundles it next to the app, which the
+        # Google Docs notes target runs. Empty leaves the app without it, as
+        # before; the Notes page then says the engine is missing.
+        required: false
+        type: string
+        default: ""
 
 env:
   TSC_VERSION: "0.9.0"
@@ -244,6 +253,21 @@ jobs:
       - name: install frontend dependencies (Windows ARM64)
         if: ${{ contains(inputs.platform, 'windows') && contains(inputs.target, 'aarch64') }}
         run: bun install --cpu=arm64
+
+      - name: Check out shorthand-core for the notes engine
+        if: ${{ inputs.notes-engine-ref != '' }}
+        uses: actions/checkout@v5
+        with:
+          repository: mshish/shorthand-core
+          ref: ${{ inputs.notes-engine-ref }}
+          path: shorthand-core-checkout
+
+      - name: Build the notes engine
+        if: ${{ inputs.notes-engine-ref != '' }}
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: scripts/build-notes-engine.sh shorthand-core-checkout "$TARGET"
 
       - name: rustup install target
         if: ${{ inputs.target != '' && !contains(inputs.target, 'x86_64-unknown-linux-gnu') && !contains(inputs.target, 'aarch64-unknown-linux-gnu') && !contains(inputs.target, 'x86_64-pc-windows-msvc') }}
@@ -556,11 +580,21 @@ jobs:
         env:
           BASE_ARGS: ${{ inputs.build-args }}
           SIGN_UPDATES: ${{ inputs.sign-updates }}
+          NOTES_ENGINE: ${{ inputs.notes-engine-ref != '' }}
         run: |
           set -euo pipefail
           ARGS="$BASE_ARGS"
+          # One --config holding every override, built up as a list of
+          # top-level `bundle` members.
+          BUNDLE=""
           if [ "$SIGN_UPDATES" != "true" ]; then
-            ARGS="$ARGS --config {\"bundle\":{\"createUpdaterArtifacts\":false}}"
+            BUNDLE="\"createUpdaterArtifacts\":false"
+          fi
+          if [ "$NOTES_ENGINE" = "true" ]; then
+            BUNDLE="${BUNDLE:+$BUNDLE,}\"externalBin\":[\"binaries/shorthand-notes\"]"
+          fi
+          if [ -n "$BUNDLE" ]; then
+            ARGS="$ARGS --config {\"bundle\":{$BUNDLE}}"
           fi
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
 
@@ -568,6 +602,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fork-only. The Google OAuth "Desktop app" client the Notes page
+          # signs in with (src-tauri/src/shorthand/google/mod.rs). Unset, the
+          # app builds without Google sign-in.
+          SHORTHAND_GOOGLE_CLIENT_ID: ${{ secrets.SHORTHAND_GOOGLE_CLIENT_ID }}
+          SHORTHAND_GOOGLE_CLIENT_SECRET: ${{ secrets.SHORTHAND_GOOGLE_CLIENT_SECRET }}
           # The Vulkan loader and Wayland client library must come from the host
           # graphics stack. Bundling Ubuntu's copies ahead of the system libraries can
           # prevent a newer distro's Vulkan ICD or Mesa stack from loading.

@@ -692,6 +692,50 @@ async openObsidianPluginPage() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getGoogleDocsStatus() : Promise<GoogleDocsStatus> {
+    return await TAURI_INVOKE("get_google_docs_status");
+},
+/**
+ * `create_new` false shows Google's picker to choose an existing doc; true
+ * creates a "Shorthand Meeting Notes" doc in a folder of the same name.
+ */
+async connectGoogleDocs(createNew: boolean) : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("connect_google_docs", { createNew }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Forgets the connection by removing the credentials file. Google keeps
+ * the grant until it's removed from the Google account's third-party access
+ * page; the document itself is untouched.
+ */
+async disconnectGoogleDocs() : Promise<Result<GoogleDocsStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("disconnect_google_docs") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openGoogleDoc() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_google_doc") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeNotesTargetSetting(target: NotesTarget) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_notes_target_setting", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Fork-only Settings toggle. Lives here rather than in `shortcut/mod.rs`
  * so the upstream file gains no lines.
@@ -1376,7 +1420,11 @@ dictation?: DictationSettings;
  * the capture in flight is `shorthand::mode::Mode::AssistedNotes`. See
  * `shorthand::dictation::apply_mode`.
  */
-assisted_notes?: AssistedNotesSettings }
+assisted_notes?: AssistedNotesSettings; 
+/**
+ * Where meeting notes go. See `shorthand::google`.
+ */
+notes_target?: NotesTarget }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1483,6 +1531,19 @@ post_process_provider_id: string;
  * user who never sets it per mode sees no change in behaviour.
  */
 post_process_model: string | null }
+export type GoogleDocsStatus = { 
+/**
+ * This build has an OAuth client to sign in with.
+ */
+sign_in_available: boolean; connected: boolean; 
+/**
+ * The document meetings go into, when connected.
+ */
+document_url: string | null; 
+/**
+ * The notes engine (shorthand-core) was found next to the app.
+ */
+engine_found: boolean; last_run: LastRun | null }
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; source: string; 
 /**
@@ -1577,6 +1638,7 @@ export type LanguageStatus =
  * Auto can't work here; `language` is used instead.
  */
 { kind: "auto_unavailable"; language: string; reason: AutoUnavailableReason }
+export type LastRun = { kind: "running"; title: string } | { kind: "finished"; title: string } | { kind: "failed"; title: string; message: string }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }
@@ -1642,6 +1704,11 @@ notices: Notice[];
  * `None` when a notice was cleared.
  */
 raised: Notice | null }
+/**
+ * Where finished meeting notes go. Obsidian is the default and behaves as
+ * before: an external follower (the Obsidian plugin) fills the note.
+ */
+export type NotesTarget = "obsidian" | "google_docs"
 export type ObsidianPluginStatus = 
 /**
  * No Obsidian config folder, or no vault registry inside it.

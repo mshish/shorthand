@@ -604,6 +604,9 @@ pub struct AppSettings {
     /// `shorthand::dictation::apply_mode`.
     #[serde(default)]
     pub assisted_notes: crate::shorthand::assisted_notes::AssistedNotesSettings,
+    /// Where meeting notes go. See `shorthand::google`.
+    #[serde(default)]
+    pub notes_target: crate::shorthand::google::NotesTarget,
 }
 
 fn default_model() -> String {
@@ -1222,6 +1225,7 @@ pub fn get_default_settings() -> AppSettings {
         show_all_settings: false,
         dictation: crate::shorthand::dictation::DictationSettings::default(),
         assisted_notes: Default::default(),
+        notes_target: Default::default(),
     }
 }
 

@@ -101,6 +101,10 @@ jobs:
       # Releases always build from scratch — never restore the Rust cache, so a
       # stale cached native lib can never be linked into a shipped artifact.
       no-cache: true
+      # Fork-only. The shorthand-core tag to bundle as the Google Docs notes
+      # engine. A repository variable, so turning it on (or moving to a newer
+      # core) needs no workflow change; unset, releases ship without it.
+      notes-engine-ref: ${{ vars.SHORTHAND_NOTES_ENGINE_REF }}
     secrets: inherit
 
   # Tells Sentry which commits each release contains. Without it a Sentry issue

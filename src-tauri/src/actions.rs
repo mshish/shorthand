@@ -853,6 +853,10 @@ impl ShortcutAction for TranscribeAction {
                 } else {
                     None
                 };
+                crate::shorthand::google::runner::on_capture_begin(
+                    app,
+                    follow_stream_session.is_some(),
+                );
                 let generation = readiness.generation();
                 let app_clone = app.clone();
                 let rm_clone = Arc::clone(&rm);

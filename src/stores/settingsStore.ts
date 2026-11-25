@@ -15,6 +15,7 @@ import type {
   VadBackend,
   CredentialStatus,
   LanguageDetectionMode,
+  NotesTarget,
 } from "@/bindings";
 import { commands } from "@/bindings";
 import { notify } from "@/stores/noticeStore";
@@ -144,6 +145,8 @@ const settingUpdaters: {
     commands.changeShowWhatsNewOnUpdateSetting(value as boolean),
   telemetry_enabled: (value) =>
     commands.changeTelemetryEnabledSetting(value as boolean),
+  notes_target: (value) =>
+    commands.changeNotesTargetSetting(value as NotesTarget),
   whats_new_last_seen_version: (value) =>
     commands.changeWhatsNewLastSeenVersionSetting(value as string),
   shortcut_activation: (value) =>
