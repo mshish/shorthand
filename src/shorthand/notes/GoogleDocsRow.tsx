@@ -50,7 +50,6 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
   }, []);
 
   useEffect(() => {
-    refresh();
     const unlistenFocus = getCurrentWindow().onFocusChanged(
       ({ payload: focused }) => {
         if (focused) refresh();
@@ -62,6 +61,12 @@ export const GoogleDocsRow: React.FC<GoogleDocsRowProps> = ({
       unlistenStatus.then((fn) => fn());
     };
   }, [refresh]);
+
+  // On mount, and again on a change of layout, since the other layout reads
+  // another part of the status (doc or folder).
+  useEffect(() => {
+    refresh();
+  }, [layout, refresh]);
 
   const act = async (action: GoogleDocsAction) => {
     setActionError(null);

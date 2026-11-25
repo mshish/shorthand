@@ -44,7 +44,6 @@ import {
   mockIPC,
   mockWindows,
 } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
 
 import type {
   AppSettings,
@@ -515,8 +514,6 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   change_google_docs_layout_setting: ({ layout }) => {
     SETTINGS.google_docs_layout = layout;
     if (layout === "doc_per_meeting") FOLDER_MADE = true;
-    // The app says the status changed, and the Google row reads it again.
-    setTimeout(() => emit("google-docs-status-changed"), 0);
     return googleDocsStatus();
   },
   connect_google_folder: () => {
