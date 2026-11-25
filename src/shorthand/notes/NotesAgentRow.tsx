@@ -139,7 +139,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
               `settings.notes.agent.${copy}.${required ? "placeholderRequired" : "placeholder"}`,
             )}
             variant="compact"
-            className="w-80"
+            className="w-64"
             spellCheck={false}
             autoComplete="off"
           />
@@ -165,6 +165,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
             selectedValue={agent.backend}
             onSelect={(value) => save({ backend: value as NotesAgentBackend })}
             disabled={saving}
+            className="w-64"
           />
         </div>
       </SettingContainer>
@@ -189,6 +190,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
                     save({ llm_provider: value as NotesLlmProvider })
                   }
                   disabled={saving}
+                  className="w-64"
                 />
               </div>
             </SettingContainer>
@@ -210,7 +212,7 @@ export const NotesAgentRows: React.FC<NotesAgentRowProps> = ({
               descriptionMode="inline"
               grouped={grouped}
             >
-              <div className="flex items-center gap-2 ps-4">
+              <div className="flex w-[272px] items-center gap-2 ps-4 [&_input]:min-w-0">
                 <ApiKeyField
                   status={keyStatus ?? "unavailable"}
                   onCommit={(secret) =>
