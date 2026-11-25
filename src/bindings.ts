@@ -827,6 +827,58 @@ async clearGoogleNotesLlmKey() : Promise<Result<GoogleDocsStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async addNotesPrompt(name: string, prompt: string) : Promise<Result<LLMPrompt, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_notes_prompt", { name, prompt }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async updateNotesPrompt(id: string, name: string, prompt: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_notes_prompt", { id, name, prompt }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Deletes one of the user's prompts. Whatever used it goes back to Default.
+ */
+async deleteNotesPrompt(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_notes_prompt", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Chooses the prompt meetings (or, with `assisted`, Assisted notes) use.
+ * None goes back to Default.
+ */
+async changeNotesPromptSelection(assisted: boolean, id: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_notes_prompt_selection", { assisted, id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The notes engine's built-in note-taking prompt for meetings (or, with
+ * `assisted`, for Assisted notes), as it writes for Google Docs. Shown read
+ * only, and as the starting text of a new prompt.
+ */
+async defaultNotesPrompt(assisted: boolean) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("default_notes_prompt", { assisted }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Advanced: the client ID of the user's own OAuth client. Blank clears it,
  * which goes back to the built-in client.
@@ -1561,7 +1613,21 @@ google_notes_agent?: NotesAgent;
 /**
  * Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
  */
-google_docs_layout?: GoogleDocsLayout }
+google_docs_layout?: GoogleDocsLayout; 
+/**
+ * Fork: the user's own note-taking prompts for the Google Docs note
+ * taker. The built-in Default prompt is the notes engine's own and is
+ * never stored here. See `shorthand::google::notes_prompts`.
+ */
+notes_prompts?: LLMPrompt[]; 
+/**
+ * Fork: the note-taking prompt meetings use. None means Default.
+ */
+meeting_notes_prompt_id?: string | null; 
+/**
+ * Fork: the note-taking prompt Assisted notes uses. None means Default.
+ */
+assisted_notes_notes_prompt_id?: string | null }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the

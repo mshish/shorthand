@@ -24,6 +24,7 @@ pub mod agent;
 pub mod container_doc;
 pub mod credentials;
 pub mod document_info;
+pub mod notes_prompts;
 pub mod oauth;
 pub mod runner;
 #[cfg(test)]

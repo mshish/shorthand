@@ -334,6 +334,9 @@ const SETTINGS: AppSettings = {
   // `shot-notes.mjs` clicks both over, so the shots start where a user does.
   notes_target: "obsidian",
   google_docs_layout: "tab_per_meeting",
+  notes_prompts: [],
+  meeting_notes_prompt_id: null,
+  assisted_notes_notes_prompt_id: null,
   google_notes_agent: {
     backend: "claude",
     codex_model: "",
@@ -529,6 +532,40 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
     NOTES_LLM_KEY = "missing";
     return googleDocsStatus();
   },
+  add_notes_prompt: ({ name, prompt }) => {
+    const added = {
+      id: `notes_prompt_${(SETTINGS.notes_prompts ?? []).length + 1}`,
+      name,
+      prompt,
+    };
+    SETTINGS.notes_prompts = [...(SETTINGS.notes_prompts ?? []), added];
+    return added;
+  },
+  update_notes_prompt: ({ id, name, prompt }) => {
+    SETTINGS.notes_prompts = (SETTINGS.notes_prompts ?? []).map((p) =>
+      p.id === id ? { ...p, name, prompt } : p,
+    );
+    return null;
+  },
+  delete_notes_prompt: ({ id }) => {
+    SETTINGS.notes_prompts = (SETTINGS.notes_prompts ?? []).filter(
+      (p) => p.id !== id,
+    );
+    if (SETTINGS.meeting_notes_prompt_id === id)
+      SETTINGS.meeting_notes_prompt_id = null;
+    if (SETTINGS.assisted_notes_notes_prompt_id === id)
+      SETTINGS.assisted_notes_notes_prompt_id = null;
+    return null;
+  },
+  change_notes_prompt_selection: ({ assisted, id }) => {
+    if (assisted) SETTINGS.assisted_notes_notes_prompt_id = id;
+    else SETTINGS.meeting_notes_prompt_id = id;
+    return null;
+  },
+  default_notes_prompt: ({ assisted }) =>
+    assisted
+      ? "Organize what the speaker is thinking through into clear notes."
+      : "Take clear, organized notes of the meeting.",
   get_obsidian_plugin_status: () => ({
     kind: "installed",
     vault_name: "Notes",

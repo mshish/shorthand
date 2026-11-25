@@ -5,6 +5,7 @@ import { GoogleDocsLayoutRow } from "@/shorthand/notes/GoogleDocsLayoutRow";
 import { GoogleDocsRow } from "@/shorthand/notes/GoogleDocsRow";
 import { GoogleOAuthClientRow } from "@/shorthand/notes/GoogleOAuthClientRow";
 import { NotesAgentRows } from "@/shorthand/notes/NotesAgentRow";
+import { NotesPromptsRows } from "@/shorthand/notes/NotesPromptsRows";
 import { NotesTargetRow } from "@/shorthand/notes/NotesTargetRow";
 import { ObsidianPluginRow } from "@/shorthand/notes/ObsidianPluginRow";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
@@ -19,7 +20,8 @@ import { Sheet } from "@/shorthand/ui/Sheet";
  * a hand-off: the plugin runs inside Obsidian, so it is installed there.
  * Google Docs is set up here: one doc with a tab per meeting or a folder
  * with a doc per meeting, the Google sign-in and doc or folder, and who
- * writes the notes, plus, under Advanced, your own OAuth client. See
+ * writes the notes, plus, under Advanced, your own OAuth client, and the
+ * note-taking prompts the note taker follows. See
  * docs/superpowers/specs/2026-09-01-notes-obsidian-plugin-install-design.md
  * and docs/superpowers/specs/2026-08-25-shorthand-umbrella-design.md.
  */
@@ -37,17 +39,25 @@ export const NotesSettings: React.FC = () => {
         <NotesTargetRow grouped={true} />
       </Sheet>
       {target === "google_docs" ? (
-        <Sheet
-          title={t("settings.notes.google.title")}
-          description={t("settings.notes.google.description")}
-        >
-          <GoogleDocsLayoutRow grouped={true} />
-          <GoogleDocsRow grouped={true} />
-          <NotesAgentRows grouped={true} />
-          <AdvancedOnly>
-            <GoogleOAuthClientRow grouped={true} />
-          </AdvancedOnly>
-        </Sheet>
+        <>
+          <Sheet
+            title={t("settings.notes.google.title")}
+            description={t("settings.notes.google.description")}
+          >
+            <GoogleDocsLayoutRow grouped={true} />
+            <GoogleDocsRow grouped={true} />
+            <NotesAgentRows grouped={true} />
+            <AdvancedOnly>
+              <GoogleOAuthClientRow grouped={true} />
+            </AdvancedOnly>
+          </Sheet>
+          <Sheet
+            title={t("settings.notes.prompts.title")}
+            description={t("settings.notes.prompts.description")}
+          >
+            <NotesPromptsRows grouped={true} />
+          </Sheet>
+        </>
       ) : (
         <Sheet
           title={t("settings.notes.obsidian.title")}

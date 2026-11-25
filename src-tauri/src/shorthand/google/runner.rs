@@ -164,7 +164,7 @@ pub struct EngineCommand {
 }
 
 impl EngineCommand {
-    fn command(&self) -> Command {
+    pub(super) fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.leading_args);
         #[cfg(windows)]
@@ -241,6 +241,7 @@ fn title_prefix(mode: Mode) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_args(
     folder: &Path,
     note: &str,
@@ -249,6 +250,7 @@ fn capture_args(
     own_document: Option<&str>,
     save_transcript: bool,
     mode: Mode,
+    guidance_file: Option<&Path>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "capture".into(),
@@ -271,11 +273,44 @@ fn capture_args(
     if mode == Mode::AssistedNotes {
         args.push("--assisted-notes".into());
     }
+    // The user's own note-taking prompt, in place of the engine's Default.
+    // A file, not an argument, so a long prompt never meets a command-line
+    // limit and never shows in a process list.
+    if let Some(path) = guidance_file {
+        args.push("--guidance-file".into());
+        args.push(path.to_string_lossy().into_owned());
+    }
     args.push("--shorthand".to_string());
     args.push(app_exe.to_string_lossy().into_owned());
     args.extend(agent_args.iter().cloned());
     args.push("--exit-after-session".into());
     args
+}
+
+/// Writes the note-taking prompt chosen for `mode` next to the note, when it
+/// is one of the user's own. None means the engine's Default.
+fn write_guidance_file(
+    app: &AppHandle,
+    folder: &Path,
+    title: &str,
+    mode: Mode,
+) -> Result<Option<PathBuf>, String> {
+    let settings = crate::settings::get_settings(app);
+    let Some(prompt) = super::notes_prompts::selected_prompt(&settings, mode) else {
+        return Ok(None);
+    };
+    let path = guidance_path(folder, title);
+    std::fs::write(&path, prompt.prompt.trim()).map_err(|e| {
+        format!(
+            "Couldn't save the note-taking prompt to {}: {e}",
+            path.display()
+        )
+    })?;
+    Ok(Some(path))
+}
+
+fn guidance_path(folder: &Path, title: &str) -> PathBuf {
+    folder.join(format!("{title}.guidance.md"))
 }
 
 /// The line core prints when the agent names the meeting:
@@ -442,6 +477,10 @@ fn run_meeting(app: &AppHandle, mode: Mode) {
         Err(e) => return fail(title, format!("Couldn't start the notes engine: {e}")),
     }
 
+    let guidance_file = match write_guidance_file(app, &folder, &title, mode) {
+        Ok(path) => path,
+        Err(message) => return fail(title, message),
+    };
     let child = engine
         .command()
         .args(capture_args(
@@ -454,6 +493,7 @@ fn run_meeting(app: &AppHandle, mode: Mode) {
             // goes in the doc, in a "Transcript" tab.
             crate::settings::get_settings(app).save_transcripts,
             mode,
+            guidance_file.as_deref(),
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -613,6 +653,7 @@ mod tests {
             None,
             false,
             Mode::Meeting,
+            None,
         );
         let joined = args.join(" ");
         assert!(joined.starts_with("capture --vault /notes --note Meeting.md --enhance"));
@@ -634,6 +675,7 @@ mod tests {
             None,
             false,
             Mode::AssistedNotes,
+            None,
         );
         assert!(args.iter().any(|arg| arg == "--assisted-notes"));
         assert!(args.join(" ").ends_with("--exit-after-session"));
@@ -657,6 +699,7 @@ mod tests {
             Some("meeting-doc"),
             false,
             Mode::Meeting,
+            None,
         );
         assert!(args
             .join(" ")
@@ -673,10 +716,46 @@ mod tests {
             Some("meeting-doc"),
             true,
             Mode::Meeting,
+            None,
         );
         assert!(args
             .join(" ")
             .contains("--google-document=meeting-doc --google-transcript --shorthand"));
+    }
+
+    #[test]
+    fn a_chosen_note_taking_prompt_goes_to_core_as_a_file() {
+        let guidance = guidance_path(Path::new("/notes"), "Meeting 2026-11-25 0930");
+        assert_eq!(
+            guidance,
+            Path::new("/notes").join("Meeting 2026-11-25 0930.guidance.md")
+        );
+        let args = capture_args(
+            Path::new("/notes"),
+            "Meeting.md",
+            Path::new("/app/shorthand"),
+            &[],
+            None,
+            false,
+            Mode::Meeting,
+            Some(guidance.as_path()),
+        );
+        let at = args
+            .iter()
+            .position(|arg| arg == "--guidance-file")
+            .unwrap();
+        assert_eq!(args[at + 1], guidance.to_string_lossy());
+        let default = capture_args(
+            Path::new("/notes"),
+            "Meeting.md",
+            Path::new("/app/shorthand"),
+            &[],
+            None,
+            false,
+            Mode::Meeting,
+            None,
+        );
+        assert!(!default.iter().any(|arg| arg == "--guidance-file"));
     }
 
     #[test]

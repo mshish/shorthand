@@ -618,6 +618,17 @@ pub struct AppSettings {
     /// Fork: a tab per meeting in one doc, or a doc per meeting in a folder.
     #[serde(default)]
     pub google_docs_layout: crate::shorthand::google::GoogleDocsLayout,
+    /// Fork: the user's own note-taking prompts for the Google Docs note
+    /// taker. The built-in Default prompt is the notes engine's own and is
+    /// never stored here. See `shorthand::google::notes_prompts`.
+    #[serde(default)]
+    pub notes_prompts: Vec<LLMPrompt>,
+    /// Fork: the note-taking prompt meetings use. None means Default.
+    #[serde(default)]
+    pub meeting_notes_prompt_id: Option<String>,
+    /// Fork: the note-taking prompt Assisted notes uses. None means Default.
+    #[serde(default)]
+    pub assisted_notes_notes_prompt_id: Option<String>,
 }
 
 fn default_model() -> String {
@@ -1240,6 +1251,9 @@ pub fn get_default_settings() -> AppSettings {
         google_oauth_client_id: None,
         google_notes_agent: Default::default(),
         google_docs_layout: Default::default(),
+        notes_prompts: Vec::new(),
+        meeting_notes_prompt_id: None,
+        assisted_notes_notes_prompt_id: None,
     }
 }
 
