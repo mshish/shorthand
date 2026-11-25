@@ -689,8 +689,8 @@ jobs:
           fi
           WORK="$(mktemp -d)"
           ( cd "$WORK" && "$OLDPWD/$APPIMAGE_PATH" --appimage-extract >/dev/null )
-          "$WORK/squashfs-root/usr/bin/shorthand-notes" >/dev/null 2>&1
-          STATUS=$?
+          STATUS=0
+          "$WORK/squashfs-root/usr/bin/shorthand-notes" >/dev/null 2>&1 || STATUS=$?
           echo "shorthand-notes exited with $STATUS"
           if [ "$STATUS" -ge 128 ] || [ "$STATUS" -eq 126 ] || [ "$STATUS" -eq 127 ]; then
             echo "::error::The AppImage's notes engine did not run (exit $STATUS)"
