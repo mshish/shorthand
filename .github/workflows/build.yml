@@ -70,8 +70,8 @@ on:
         type: boolean
         default: false
       notes-engine-ref:
-        # Fork-only. A shorthand-core tag (0.24.5 or later, which has
-        # `capture --exit-after-session`). When set, the build compiles core's
+        # Fork-only. A shorthand-core tag (0.25.0 or later, which has
+        # `capture --exit-after-session` and `--guidance-file`). When set, the build compiles core's
         # `shorthand-notes` CLI and bundles it next to the app, which the
         # Google Docs notes target runs. Empty leaves the app without it, as
         # before; the Notes page then says the engine is missing.
