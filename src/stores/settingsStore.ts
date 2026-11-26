@@ -15,6 +15,9 @@ import type {
   VadBackend,
   CredentialStatus,
   LanguageDetectionMode,
+  GoogleDocsLayout,
+  NotesAgent,
+  NotesTarget,
 } from "@/bindings";
 import { commands } from "@/bindings";
 import { notify } from "@/stores/noticeStore";
@@ -144,6 +147,22 @@ const settingUpdaters: {
     commands.changeShowWhatsNewOnUpdateSetting(value as boolean),
   telemetry_enabled: (value) =>
     commands.changeTelemetryEnabledSetting(value as boolean),
+  notes_target: (value) =>
+    commands.changeNotesTargetSetting(value as NotesTarget),
+  // The layout is saved before the folder is made, so a folder error is
+  // shown and the choice stays: the row then offers to set the folder up.
+  google_docs_layout: async (value) => {
+    const result = await commands.changeGoogleDocsLayoutSetting(
+      value as GoogleDocsLayout,
+    );
+    if (result.status === "error") notify({ title: result.error });
+  },
+  google_notes_agent: async (value) => {
+    const result = await commands.changeGoogleNotesAgentSetting(
+      value as NotesAgent,
+    );
+    if (result.status === "error") throw new Error(result.error);
+  },
   whats_new_last_seen_version: (value) =>
     commands.changeWhatsNewLastSeenVersionSetting(value as string),
   shortcut_activation: (value) =>

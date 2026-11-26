@@ -1,6 +1,13 @@
 name: "Release"
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      notes-engine-ref:
+        description: "shorthand-core tag to bundle as the notes engine. Empty uses the one pinned below."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   create-release:
@@ -101,6 +108,14 @@ jobs:
       # Releases always build from scratch — never restore the Rust cache, so a
       # stale cached native lib can never be linked into a shipped artifact.
       no-cache: true
+      # Fork-only. The shorthand-core tag to bundle as the Google Docs notes
+      # engine. Pinned here, not in a repository variable, because the app
+      # passes the engine flags only a given core has (0.25.0 added
+      # --guidance-file), so the pin has to move in the same commit as the
+      # code that needs it. The dispatch input overrides it for a one-off.
+      # 2537f2d is core 0.25.0 (shorthand-core#12); swap in the tag once it
+      # exists.
+      notes-engine-ref: ${{ inputs.notes-engine-ref || '2537f2d014eaf9c8f8a1efecb12daac3ee4de57c' }}
     secrets: inherit
 
   # Tells Sentry which commits each release contains. Without it a Sentry issue

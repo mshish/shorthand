@@ -66,6 +66,11 @@ pub enum CredentialSlot {
         #[serde(deserialize_with = "origin_only")]
         origin: String,
     },
+    /// The client secret of a Google OAuth client the user brought
+    /// (Settings, Notes, Advanced), overriding the one built in. The app's
+    /// own slot, like `PostProcess`: never proxied, never from a client.
+    #[serde(rename = "google-oauth-client")]
+    GoogleOAuthClient,
 }
 
 impl CredentialSlot {
@@ -79,6 +84,7 @@ impl CredentialSlot {
                 format!("notes-llm/{}/{origin}", provider.as_str())
             }
             Self::NotesAcp { vault_id, origin } => format!("notes-acp/{vault_id}/{origin}"),
+            Self::GoogleOAuthClient => "google-oauth-client/secret".to_string(),
         }
     }
 
@@ -86,7 +92,7 @@ impl CredentialSlot {
     /// for the app's own post-processing key, which is not proxied.
     pub fn origin(&self) -> Option<&str> {
         match self {
-            Self::PostProcess { .. } => None,
+            Self::PostProcess { .. } | Self::GoogleOAuthClient => None,
             Self::NotesLlm { origin, .. } | Self::NotesAcp { origin, .. } => Some(origin),
         }
     }
@@ -336,6 +342,10 @@ mod tests {
             }
             .service(),
             "post-process/openai"
+        );
+        assert_eq!(
+            CredentialSlot::GoogleOAuthClient.service(),
+            "google-oauth-client/secret"
         );
         assert_eq!(
             CredentialSlot::NotesLlm {

@@ -5,6 +5,7 @@ import "./RecordingOverlay.css";
 import { commands, events } from "@/bindings";
 import type {
   Notice,
+  NotesDestination,
   StreamPhase,
   StreamPhaseEvent,
   StreamSource,
@@ -94,6 +95,8 @@ const RecordingOverlay: React.FC = () => {
   // while overflowing, so the resting first line stays crisp flush under the pill.
   const [overflowing, setOverflowing] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // The Google Doc a meeting's notes are going to, while that meeting runs.
+  const [notesDoc, setNotesDoc] = useState<NotesDestination | null>(null);
   const [noticeWidth, setNoticeWidth] = useState<number>();
   const noticeProbeRef = useRef<HTMLSpanElement>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -122,6 +125,11 @@ const RecordingOverlay: React.FC = () => {
         setNotice(event.payload);
       });
 
+      const unlistenNotesDoc = await listen<NotesDestination | null>(
+        "notes-destination-changed",
+        (event) => setNotesDoc(event.payload),
+      );
+
       const unlistenShow = await listen("show-overlay", async (event) => {
         const overlayState = event.payload as OverlayState;
         clearTimeout(fadeTimerRef.current);
@@ -139,6 +147,12 @@ const RecordingOverlay: React.FC = () => {
         }
 
         await syncLanguageFromSettings();
+        // A meeting's doc can be chosen before this window was listening.
+        try {
+          setNotesDoc(await commands.getNotesDestination());
+        } catch {
+          // Keep whatever the last event said.
+        }
         // The Live panel flows downward from a top overlay and upward from a
         // bottom one; read the placement so the layout can flip to match.
         try {
@@ -250,6 +264,7 @@ const RecordingOverlay: React.FC = () => {
 
       return () => {
         unlistenNotice();
+        unlistenNotesDoc();
         unlistenShow();
         unlistenHide();
         unlistenReady();
@@ -359,12 +374,53 @@ const RecordingOverlay: React.FC = () => {
     </button>
   );
 
+  // Where a meeting's notes are going: a small doc glyph beside the dot, plus
+  // the doc's name once the Live panel is open. Opens the doc in the browser.
+  const notesDocName = notesDoc?.name?.trim() || t("overlay.notesDoc.unnamed");
+  const notesDocLink = notesDoc && (
+    <button
+      type="button"
+      className="sdoc"
+      title={t("overlay.notesDoc.open", { name: notesDocName })}
+      aria-label={t("overlay.notesDoc.open", { name: notesDocName })}
+      onClick={(event) => {
+        event.stopPropagation();
+        void commands.openNotesDestination();
+      }}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M3 1.5h6.75L13 4.75v9.75H3z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M9.5 1.75V5h3.25"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.1"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M5.5 8.25h5M5.5 11h5"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+        />
+      </svg>
+      <span className="sdoc-name">{notesDocName}</span>
+    </button>
+  );
+
   // dot (left) | waveform (center) | timer + cancel (right) — same structure for
   // pill & panel, so the Live morph is a pure width change.
   const listeningRow = (showTimer: boolean, showCancel: boolean) => (
     <div className="sbase">
       <div className="sbase-l">
         <span className={`sdot ${captureReady ? "ready" : "arming"}`} />
+        {notesDocLink}
       </div>
       {waveform}
       <div className="sbase-r">
@@ -380,6 +436,7 @@ const RecordingOverlay: React.FC = () => {
     <div className="sbase">
       <div className="sbase-l">
         <span className="sspinner" />
+        {notesDocLink}
       </div>
       <span className="swork-label">{label}</span>
       <div className="sbase-r">{showCancel && cancelBtn}</div>

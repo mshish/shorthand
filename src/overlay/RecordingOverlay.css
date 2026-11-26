@@ -392,6 +392,67 @@
     opacity: 0;
   }
 }
+/* The doc a meeting's notes go to. A quiet glyph in the pill; in the open Live
+   panel its name follows, cut short with an ellipsis, fading in like the
+   timer. The button is the 22px hit area; the glyph itself is 13px. */
+.sdoc {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 22px;
+  min-width: 22px;
+  max-width: 132px;
+  margin-inline-start: 6px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 11px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  color: var(--s-muted);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.sdoc svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  display: block;
+}
+.sdoc-name {
+  font-size: 12px;
+  color: var(--s-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+  opacity: 0;
+  transition:
+    opacity 240ms ease 80ms,
+    max-width 240ms ease;
+}
+.scard.open .sdoc {
+  gap: 4px;
+}
+.scard.open .sdoc-name {
+  max-width: 104px;
+  opacity: 1;
+}
+.sdoc:hover {
+  background: var(--s-hair);
+  color: var(--color-text);
+}
+.sdoc:hover .sdoc-name {
+  color: var(--color-text);
+}
+.sdoc:focus-visible {
+  outline: 2px solid var(--s-accent);
+  outline-offset: 1px;
+}
+
 .stimer {
   font-size: 12px;
   color: var(--s-faint);
