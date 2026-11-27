@@ -32,6 +32,12 @@ pub fn handle_shortcut_event(
     hotkey_string: &str,
     is_pressed: bool,
 ) {
+    // Fork: the live-typing shortcut has its own activation logic.
+    if binding_id == crate::shorthand::live_type::BINDING_ID {
+        crate::shorthand::live_type::on_shortcut(app, is_pressed);
+        return;
+    }
+
     let settings = get_settings(app);
 
     // Transcribe bindings are handled by the coordinator.

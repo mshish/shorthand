@@ -831,6 +831,23 @@ fn paste_direct(
     })
 }
 
+/// Fork (`shorthand::live_type`): types `text` into the focused app by
+/// simulated key presses, whatever `paste_method` says, and leaves the
+/// clipboard alone. Serialized with [`paste`] so the two never interleave.
+pub(crate) fn type_text_direct(
+    text: &str,
+    app_handle: &AppHandle,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] settings: &AppSettings,
+) -> Result<(), String> {
+    let _paste = PASTE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    paste_direct(
+        text,
+        app_handle,
+        #[cfg(target_os = "linux")]
+        settings.typing_tool,
+    )
+}
+
 pub(crate) fn send_return_key(enigo: &mut Enigo, key_type: AutoSubmitKey) -> Result<(), String> {
     match key_type {
         AutoSubmitKey::Enter => {

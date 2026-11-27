@@ -6,12 +6,13 @@ import { useSettings } from "@/hooks/useSettings";
 import type {
   AssistedNotesSettings,
   DictationSettings,
+  LiveTypeSettings,
   ShortcutActivation,
 } from "@/bindings";
 
 interface ModeShortcutActivationProps {
   /** The per-mode settings object this row edits. */
-  mode: "dictation" | "assisted_notes";
+  mode: "dictation" | "assisted_notes" | "live_type";
   descriptionMode?: "inline" | "tooltip";
   grouped?: boolean;
   disabled?: boolean;
@@ -36,6 +37,7 @@ export const ModeShortcutActivation: React.FC<ModeShortcutActivationProps> = ({
   const modeSettings = getSetting(mode) as
     | DictationSettings
     | AssistedNotesSettings
+    | LiveTypeSettings
     | undefined;
 
   const options = [
@@ -79,7 +81,7 @@ export const ModeShortcutActivation: React.FC<ModeShortcutActivationProps> = ({
           updateSetting(mode, {
             ...modeSettings,
             shortcut_activation: value as ShortcutActivation,
-          } as DictationSettings & AssistedNotesSettings)
+          } as DictationSettings & AssistedNotesSettings & LiveTypeSettings)
         }
         disabled={disabled || isUpdating(mode)}
       />

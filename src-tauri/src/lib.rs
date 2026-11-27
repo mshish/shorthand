@@ -534,6 +534,8 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                 log::info!("Language switched to {} via tray.", language);
                 tray::rebuild_tray_menu(app);
             }
+            // Fork: per-mode Start/Stop items (shorthand::tray_modes).
+            id if crate::shorthand::tray_modes::handle_menu_event(app, id) => {}
             _ => {}
         })
         .build(app_handle)
@@ -911,6 +913,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_save_transcripts_setting,
             shortcut::change_dictation_settings,
             shortcut::change_assisted_notes_settings,
+            shorthand::live_type::change_live_type_settings,
             shortcut::change_transcribe_accelerator_setting,
             shortcut::change_transcribe_gpu_device,
             shortcut::get_available_accelerators,

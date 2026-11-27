@@ -58,6 +58,11 @@ const NOTICE_DISPLAY: Record<NoticeCode, NoticeDisplay> = {
   RetryTranscriptionFailed: {
     title: "errors.retryTranscriptionFailedTitle",
   },
+  // Fork: the live-typing shortcut needs a model with live text.
+  LiveTypeNeedsStreaming: {
+    title: "errors.liveTypeNeedsStreamingTitle",
+    explanation: (t) => t("errors.liveTypeNeedsStreaming"),
+  },
   FilePostProcessFailed: {
     title: "errors.filePostProcessFailedTitle",
     explanation: (t) => t("errors.filePostProcessFailed"),

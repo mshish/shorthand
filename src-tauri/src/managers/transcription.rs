@@ -861,6 +861,7 @@ impl TranscriptionManager {
         }
         let (rx, cancelled) = self.router.open();
         self.stream_active.store(false, Ordering::Release);
+        crate::shorthand::live_type::on_stream_start(self.source);
 
         let manager = self.clone();
         thread::spawn(move || manager.run_stream_worker(rx, cancelled, worker_id));
@@ -1556,6 +1557,9 @@ fn emit_stream_text(
     if stream_active.load(Ordering::Acquire) {
         if let Some(hub) = crate::follow_stream::hub(app_handle) {
             hub.partial(source, frame.committed, frame.tentative);
+        }
+        if committed_changed {
+            crate::shorthand::live_type::observe_committed(app_handle, source, frame.committed);
         }
     }
     let _ = StreamTextEvent {

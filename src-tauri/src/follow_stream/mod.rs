@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+pub(crate) use client::committed_suffix;
 pub use client::run_client;
 pub use hub::{
     FollowStreamHub, Follower, SubscribeError, MAX_BUFFERED_BYTES, MAX_FOLLOWERS, MAX_QUEUED_EVENTS,

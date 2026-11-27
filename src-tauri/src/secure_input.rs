@@ -504,6 +504,11 @@ mod imp {
                 {
                     continue;
                 }
+                if id == crate::shorthand::live_type::BINDING_ID
+                    && !crate::shorthand::live_type::binding_active(&settings)
+                {
+                    continue;
+                }
 
                 match plan_fallback_binding(id, binding) {
                     ShadowPlan::Immune => immune += 1,

@@ -257,6 +257,8 @@ pub fn change_binding(
     // Save the settings and synchronize any active Secure Input shadows.
     settings::write_settings(&app, settings);
     crate::secure_input::reconcile_fallback(&app);
+    // Fork: the tray's Start items show this shortcut.
+    tray::update_tray_menu(&app);
 
     // Return the updated binding
     Ok(BindingResponse {
@@ -330,6 +332,11 @@ pub fn resume_all_shortcuts(app: &AppHandle) {
         {
             continue;
         }
+        if id == crate::shorthand::live_type::BINDING_ID
+            && !crate::shorthand::live_type::binding_active(&settings)
+        {
+            continue;
+        }
         if let Err(e) = register_shortcut(app, binding.clone()) {
             debug!("resume_all_shortcuts: could not register '{}': {}", id, e);
         }
@@ -399,6 +406,8 @@ pub fn change_keyboard_implementation_setting(
     let mut settings = settings::get_settings(&app);
     settings.keyboard_implementation = new_impl;
     settings::write_settings(&app, settings);
+    // Fork: the tray shows shortcuts only while built-in shortcuts are on.
+    tray::update_tray_menu(&app);
 
     // Carbon fallback registrations use the Tauri plugin. Remove them before
     // registering the full Tauri implementation to avoid duplicate conflicts.
@@ -541,6 +550,11 @@ fn register_all_shortcuts_for_implementation(
         if id == "assisted_notes_with_post_process"
             && !(current_settings.assisted_notes.enabled
                 && current_settings.assisted_notes.post_process_enabled)
+        {
+            continue;
+        }
+        if id == crate::shorthand::live_type::BINDING_ID
+            && !crate::shorthand::live_type::binding_active(&current_settings)
         {
             continue;
         }
@@ -1169,8 +1183,11 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
 #[specta::specta]
 pub fn change_experimental_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
+    let before = settings.clone();
     settings.experimental_enabled = enabled;
     settings::write_settings(&app, settings);
+    // Fork: the live-typing shortcut is an experimental feature.
+    crate::shorthand::live_type::sync_after_experimental_change(&app, &before);
     Ok(())
 }
 
@@ -1708,6 +1725,8 @@ pub async fn change_dictation_settings(
 
     settings::write_settings(&app, settings);
     crate::secure_input::reconcile_fallback(&app);
+    // Fork: the tray's Start dictation item follows the enable switch.
+    tray::update_tray_menu(&app);
 
     // Dictation ships this toggle off by default (FOLLOW_STREAM.md), so this
     // fires rarely, but a user who did turn it on and then off again mid
@@ -1831,6 +1850,8 @@ pub async fn change_assisted_notes_settings(
 
     settings::write_settings(&app, settings);
     crate::secure_input::reconcile_fallback(&app);
+    // Fork: the tray's Start assisted notes item follows the enable switch.
+    tray::update_tray_menu(&app);
 
     // Assisted Notes ships this toggle on by default, so this is the more
     // likely of the two per-mode paths to fire: a user disabling it while it

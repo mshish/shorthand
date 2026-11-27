@@ -16,6 +16,7 @@ import { VolumeSlider } from "@/components/settings/VolumeSlider";
 import { KeyboardImplementationSelector } from "@/components/settings/debug/KeyboardImplementationSelector";
 import { useSettings } from "@/hooks/useSettings";
 import { AdvancedOnly } from "@/shorthand/ui/AdvancedOnly";
+import { LiveTypeRows } from "@/shorthand/live-type/LiveTypeRows";
 import { Dependents } from "@/shorthand/ui/Dependents";
 import { OverlayPositionRow } from "@/shorthand/ui/OverlayRows";
 import { Sheet } from "@/shorthand/ui/Sheet";
@@ -109,6 +110,7 @@ export const AppSettings: React.FC = () => {
               by the rule above it no longer belongs in this file, which is
               only for settings that appear exactly once. */}
           <ExperimentalToggle descriptionMode="tooltip" grouped={true} />
+          <LiveTypeRows />
           <LazyStreamClose descriptionMode="tooltip" grouped={true} />
           <KeyboardImplementationSelector
             descriptionMode="tooltip"

@@ -1,4 +1,6 @@
 {
+  "errors.liveTypeNeedsStreaming": "The model in use only transcribes after a capture ends, so there is no live text to type. Choose a model that supports live transcription.",
+  "errors.liveTypeNeedsStreamingTitle": "Live typing needs a streaming model",
   "errors.retryTranscriptionFailedTitle": "Transcribing again failed",
   "onboarding.demo.shorthandContinue": "Continue",
   "onboarding.demo.shorthandHold": "<0>Open your note.</0> <1>Hold your shortcut and talk.</1> <2>Let go, and Shorthand adds what you said to your note.</2>",
@@ -90,6 +92,8 @@
   "settings.general.shortcut.bindings.dictate.name": "Dictation shortcut",
   "settings.general.shortcut.bindings.dictate_with_post_process.description": "Optional: a dedicated hotkey that always applies AI cleanup to your dictation.",
   "settings.general.shortcut.bindings.dictate_with_post_process.name": "Dictation AI cleanup shortcut",
+  "settings.general.shortcut.bindings.live_type.description": "While a meeting or assisted notes capture runs, types newly transcribed text into the focused window.",
+  "settings.general.shortcut.bindings.live_type.name": "Live typing shortcut",
   "settings.general.shortcut.bindings.transcribe.name": "Capture shortcut",
   "settings.general.shortcut.bindings.transcribe_with_post_process.name": "AI cleanup shortcut",
   "settings.history.source.assistedNotes": "Assisted notes",
@@ -97,6 +101,9 @@
   "settings.history.source.file": "File",
   "settings.history.source.meeting": "Meeting",
   "settings.history.transcriptNotSaved": "Transcript not saved.",
+  "settings.liveType.enable.description": "During a meeting or assisted notes capture, a shortcut types newly transcribed text into the focused window, as it is transcribed. Meetings label each speaker. Needs a model that supports live transcription.",
+  "settings.liveType.enable.label": "Type the live transcript",
+  "settings.liveType.enable.shortcutConflict": "Could not turn on live typing: its shortcut is already in use, either by another Shorthand shortcut or another application. Choose a different shortcut below and try again.",
   "settings.model.groups.output": "Transcript settings",
   "settings.model.tabs.label": "Model page",
   "settings.model.tabs.settings": "Settings",
@@ -266,8 +273,15 @@
   "sidebar.modes": "Modes",
   "sidebar.notes": "Notes",
   "sidebar.transcription": "Transcription",
+  "transcript.liveTypeMe": "Me",
+  "transcript.liveTypeThem": "Them",
   "transcript.retryUnavailable": "Retry is unavailable for transcripts containing system audio.",
   "transcript.speakerMic": "You",
   "transcript.speakerSystem": "System",
-  "tray.retryTranscriptionFailedTitle": "Transcribing again failed"
+  "tray.liveTypeNeedsStreamingTitle": "Live typing needs a streaming model",
+  "tray.retryTranscriptionFailedTitle": "Transcribing again failed",
+  "tray.startAssistedNotes": "Start assisted notes",
+  "tray.startDictation": "Start dictation",
+  "tray.startMeeting": "Start meeting",
+  "tray.stop": "Stop"
 }

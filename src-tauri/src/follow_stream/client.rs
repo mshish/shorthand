@@ -299,6 +299,16 @@ impl CommittedEvent {
     }
 }
 
+/// What `committed` adds to the `previous` committed text of the same speaker:
+/// the new suffix when `committed` extends it, or the whole of `committed`
+/// when it does not (the first snapshot, or a rewritten prefix). The one rule
+/// behind `delta`, shared in-process with `shorthand::live_type`.
+pub(crate) fn committed_suffix<'a>(previous: Option<&str>, committed: &'a str) -> &'a str {
+    previous
+        .and_then(|previous| committed.strip_prefix(previous))
+        .unwrap_or(committed)
+}
+
 /// Turns the protocol stream into committed chunks. Both `delta` and `text`
 /// build on this, which is why both require a streaming-capable model: there is
 /// nothing to extract from a session that only ever produces a `final`.
@@ -380,11 +390,7 @@ impl CommittedStream {
             self.reset(Some(session));
         }
 
-        let delta = self
-            .committed
-            .get(speaker)
-            .and_then(|previous| committed.strip_prefix(previous))
-            .unwrap_or(committed)
+        let delta = committed_suffix(self.committed.get(speaker).map(String::as_str), committed)
             .to_string();
         self.committed
             .insert(speaker.to_string(), committed.to_string());
