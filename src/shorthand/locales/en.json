@@ -237,7 +237,7 @@
   "settings.notes.prompts.saveFailed": "Couldn't save that: {{error}}",
   "settings.notes.prompts.title": "Note-taking prompts",
   "settings.notes.tabs.label": "Notes settings",
-  "settings.notes.tabs.prompts": "Note-taking prompts",
+  "settings.notes.tabs.prompts": "Prompts",
   "settings.notes.tabs.setup": "Setup",
   "settings.notes.target.description": "Obsidian uses the Shorthand plugin in your vault. Google Docs writes each meeting into a doc or folder you connect here.",
   "settings.notes.target.googleDocs": "Google Docs",
