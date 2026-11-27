@@ -50,6 +50,9 @@ pub enum NoticeCode {
     FilePostProcessFailed,
     /// Fork: an entry transcribed again, which is not a file.
     RetryTranscriptionFailed,
+    /// Fork: the live-typing shortcut was pressed with a model that has no
+    /// live text (`shorthand::live_type`).
+    LiveTypeNeedsStreaming,
 }
 
 impl NoticeCode {
@@ -62,7 +65,8 @@ impl NoticeCode {
             | Self::RecordingFailed
             | Self::ModelLoadFailed
             | Self::FileTranscriptionFailed
-            | Self::RetryTranscriptionFailed => NoticeLevel::Error,
+            | Self::RetryTranscriptionFailed
+            | Self::LiveTypeNeedsStreaming => NoticeLevel::Error,
             Self::PostProcessFailed | Self::FilePostProcessFailed => NoticeLevel::Warning,
         }
     }
@@ -80,6 +84,7 @@ impl NoticeCode {
             Self::FileTranscriptionFailed => &strings.file_transcription_failed_title,
             Self::FilePostProcessFailed => &strings.file_post_process_failed_title,
             Self::RetryTranscriptionFailed => &strings.retry_transcription_failed_title,
+            Self::LiveTypeNeedsStreaming => &strings.live_type_needs_streaming_title,
         }
     }
 }

@@ -73,6 +73,8 @@ struct MenuInputs {
     save_transcripts: bool,
     /// The language submenu, when the selected model has languages to pick.
     language: Option<LanguageMenu>,
+    /// Fork: the per-mode Start items and their shortcuts.
+    modes: crate::shorthand::tray_modes::TrayModes,
 }
 
 /// What the language submenu shows: `(code, name)` entries, with codes as
@@ -357,6 +359,7 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
     // the top-level field defaults off, so "Copy Last Transcript" stayed
     // disabled despite history having a fresh entry to copy.
     let settings = crate::shorthand::dictation::resolve_settings(app);
+    let modes = crate::shorthand::tray_modes::compute(&settings::get_settings(app));
     let theme = get_current_theme(app);
     let secure_input = crate::secure_input::tray_warning_active(app);
     let notice = notices::tray_headline(app);
@@ -404,6 +407,7 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             update_checks_enabled: settings.update_checks_enabled,
             save_transcripts: settings.save_transcripts,
             language,
+            modes,
         },
     }
 }
@@ -711,11 +715,13 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
 
     let menu = if inputs.busy {
         let cancel_i = MenuItem::with_id(app, "cancel", &strings.cancel, true, None::<&str>)?;
+        let stop_i = crate::shorthand::tray_modes::stop_item(app, &strings)?;
         Menu::with_items(
             app,
             &[
                 &version_i,
                 &separator()?,
+                &stop_i,
                 &cancel_i,
                 &separator()?,
                 &copy_last_transcript_i,
@@ -771,6 +777,12 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
         // Right below the model submenu: version, separator, copy, separator, model.
         if let Some(language) = &inputs.language {
             menu.insert(&language_submenu(app, &strings, language)?, 5)?;
+        }
+        // Fork: the Start items, with their own separator, below the version.
+        let start_items = crate::shorthand::tray_modes::start_items(app, &strings, &inputs.modes)?;
+        menu.insert(&separator()?, 2)?;
+        for (offset, item) in start_items.iter().enumerate() {
+            menu.insert(item, 2 + offset)?;
         }
         menu
     };
@@ -1008,6 +1020,7 @@ mod tests {
             update_checks_enabled: true,
             save_transcripts: true,
             language: None,
+            modes: crate::shorthand::tray_modes::compute(&crate::settings::get_default_settings()),
         }
     }
 

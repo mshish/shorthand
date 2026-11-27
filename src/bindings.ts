@@ -549,6 +549,14 @@ async changeAssistedNotesSettings(assistedNotes: AssistedNotesSettings) : Promis
     else return { status: "error", error: e  as any };
 }
 },
+async changeLiveTypeSettings(liveType: LiveTypeSettings) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_live_type_settings", { liveType }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeTranscribeAcceleratorSetting(accelerator: TranscribeAcceleratorSetting) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_transcribe_accelerator_setting", { accelerator }) };
@@ -1627,7 +1635,12 @@ meeting_notes_prompt_id?: string | null;
 /**
  * Fork: the note-taking prompt Assisted notes uses. None means Default.
  */
-assisted_notes_notes_prompt_id?: string | null }
+assisted_notes_notes_prompt_id?: string | null; 
+/**
+ * Fork, experimental: typing the live transcript into the focused
+ * window. See `shorthand::live_type`.
+ */
+live_type?: LiveTypeSettings }
 /**
  * Assisted notes' own copy of settings meeting mode also has, so enabling or
  * configuring assisted notes never touches a meeting-mode value. Mirrors the
@@ -1877,6 +1890,17 @@ export type LanguageStatus =
  */
 { kind: "auto_unavailable"; language: string; reason: AutoUnavailableReason }
 export type LastRun = { kind: "running"; title: string } | { kind: "finished"; title: string } | { kind: "failed"; title: string; message: string }
+export type LiveTypeSettings = { 
+/**
+ * Also requires `AppSettings::experimental_enabled`; see
+ * [`binding_active`].
+ */
+enabled: boolean; 
+/**
+ * How the shortcut opens and closes the typing window, with the same
+ * three behaviours as the capture shortcuts.
+ */
+shortcut_activation: ShortcutActivation }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }
@@ -1917,7 +1941,12 @@ export type NoticeCode = "TranscriptionFailed" | "PasteFailed" | "NoMicrophone" 
 /**
  * Fork: an entry transcribed again, which is not a file.
  */
-"RetryTranscriptionFailed"
+"RetryTranscriptionFailed" | 
+/**
+ * Fork: the live-typing shortcut was pressed with a model that has no
+ * live text (`shorthand::live_type`).
+ */
+"LiveTypeNeedsStreaming"
 export type NoticeLevel = 
 /**
  * Nothing came out, or Handy can't do its job.

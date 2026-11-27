@@ -450,6 +450,11 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         {
             continue;
         }
+        if id == crate::shorthand::live_type::BINDING_ID
+            && !crate::shorthand::live_type::binding_active(&user_settings)
+        {
+            continue;
+        }
 
         let binding = user_settings
             .bindings

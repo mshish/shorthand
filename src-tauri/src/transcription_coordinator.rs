@@ -294,6 +294,13 @@ enum Command {
         /// names, so the `_with_post_process` distinction is never lost (see
         /// `decide_explicit_capture`).
         binding_id: String,
+        /// Whether a start is refused with `PublicationDisabled` when the
+        /// mode's follow-stream toggle is off. `true` for the CLI flags,
+        /// whose caller is a follower that could not otherwise observe the
+        /// start. `false` for the tray menu: a person clicked it and sees
+        /// the capture start, so there is nothing to make observable.
+        /// Whether the capture then *publishes* is still the toggle's call.
+        require_publication: bool,
         // No `mode_enabled` field here: it used to be resolved by the
         // sender before this command was placed on the channel, which meant
         // a settings change landing between enqueue and dequeue was decided
@@ -920,6 +927,7 @@ enum ExplicitOutcome {
 /// already-applied `Stage` transition — closing the decide-then-toggle race
 /// where two retries could each observe `Idle` and one would start what the
 /// other then stopped.
+#[cfg(test)]
 fn decide_explicit_capture(
     state: &mut CoordinatorState,
     op: capture_command::ExplicitOp,
@@ -928,9 +936,39 @@ fn decide_explicit_capture(
     publication_enabled: bool,
     processing_mode: Mode,
 ) -> ExplicitOutcome {
+    decide_explicit_capture_gated(
+        state,
+        op,
+        binding_id,
+        mode_enabled,
+        publication_enabled,
+        true,
+        processing_mode,
+    )
+}
+
+/// [`decide_explicit_capture`] with the publication gate made optional — see
+/// `Command::ExplicitCapture::require_publication`. Only the *refusal* is
+/// skipped: the real `publication_enabled` is still what `Effect::Start`
+/// carries, so a tray start of a mode whose toggle is off never publishes.
+fn decide_explicit_capture_gated(
+    state: &mut CoordinatorState,
+    op: capture_command::ExplicitOp,
+    binding_id: &str,
+    mode_enabled: bool,
+    publication_enabled: bool,
+    require_publication: bool,
+    processing_mode: Mode,
+) -> ExplicitOutcome {
     let mode = mode::mode_for_binding(binding_id);
     let capture = capture_state_for_decision(&state.stage, processing_mode);
-    let decision = capture_command::decide(op, mode, mode_enabled, publication_enabled, capture);
+    let decision = capture_command::decide(
+        op,
+        mode,
+        mode_enabled,
+        publication_enabled || !require_publication,
+        capture,
+    );
     // A Refuse leaves the capture exactly as it was and promises the caller
     // nothing about it, so there is nothing here yet for a deferred input to
     // contradict; only Forward and NoOp report an outcome ("it started",
@@ -1071,7 +1109,11 @@ impl TranscriptionCoordinator {
                                 publish_capture_state(&app, &state);
                             }
                         }
-                        Command::ExplicitCapture { op, binding_id } => {
+                        Command::ExplicitCapture {
+                            op,
+                            binding_id,
+                            require_publication,
+                        } => {
                             // Resolved here, at dequeue time, rather than by
                             // the sender before this command was placed on
                             // the channel — see `Command::ExplicitCapture`'s
@@ -1102,12 +1144,13 @@ impl TranscriptionCoordinator {
                                 requested_mode,
                             )
                             .follow_stream_enabled;
-                            let outcome = decide_explicit_capture(
+                            let outcome = decide_explicit_capture_gated(
                                 &mut state,
                                 op,
                                 &binding_id,
                                 mode_enabled,
                                 publication_enabled,
+                                require_publication,
                                 mode::active(&app),
                             );
                             run_explicit_outcome(&app, &mut state, op, &binding_id, outcome);
@@ -1268,11 +1311,28 @@ impl TranscriptionCoordinator {
     /// so it can't go stale between this call and the command being
     /// dequeued.
     pub fn send_explicit_capture(&self, op: capture_command::ExplicitOp, binding_id: &str) {
+        self.send_explicit(op, binding_id, true);
+    }
+
+    /// The tray menu's Start/Stop items: [`Self::send_explicit_capture`]
+    /// without the `PublicationDisabled` refusal — see
+    /// `Command::ExplicitCapture::require_publication`.
+    pub fn send_tray_capture(&self, op: capture_command::ExplicitOp, binding_id: &str) {
+        self.send_explicit(op, binding_id, false);
+    }
+
+    fn send_explicit(
+        &self,
+        op: capture_command::ExplicitOp,
+        binding_id: &str,
+        require_publication: bool,
+    ) {
         if self
             .tx
             .send(Command::ExplicitCapture {
                 op,
                 binding_id: binding_id.to_string(),
+                require_publication,
             })
             .is_err()
         {

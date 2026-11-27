@@ -629,6 +629,10 @@ pub struct AppSettings {
     /// Fork: the note-taking prompt Assisted notes uses. None means Default.
     #[serde(default)]
     pub assisted_notes_notes_prompt_id: Option<String>,
+    /// Fork, experimental: typing the live transcript into the focused
+    /// window. See `shorthand::live_type`.
+    #[serde(default)]
+    pub live_type: crate::shorthand::live_type::LiveTypeSettings,
 }
 
 fn default_model() -> String {
@@ -1166,6 +1170,29 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
 
+    // Fork, experimental: `shorthand::live_type`. Registered only once the
+    // feature is turned on. `L` for live; Linux adds Shift because several
+    // desktops lock the screen on Ctrl+Alt+L.
+    #[cfg(target_os = "windows")]
+    let default_live_type_shortcut = "ctrl+alt+l";
+    #[cfg(target_os = "macos")]
+    let default_live_type_shortcut = "ctrl+option+l";
+    #[cfg(target_os = "linux")]
+    let default_live_type_shortcut = "ctrl+alt+shift+l";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_live_type_shortcut = "alt+l";
+
+    bindings.insert(
+        crate::shorthand::live_type::BINDING_ID.to_string(),
+        ShortcutBinding {
+            id: crate::shorthand::live_type::BINDING_ID.to_string(),
+            name: "Type Live Transcript".to_string(),
+            description: "Types newly transcribed text from a running meeting or assisted-notes capture into the focused window.".to_string(),
+            default_binding: default_live_type_shortcut.to_string(),
+            current_binding: default_live_type_shortcut.to_string(),
+        },
+    );
+
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
@@ -1254,6 +1281,7 @@ pub fn get_default_settings() -> AppSettings {
         notes_prompts: Vec::new(),
         meeting_notes_prompt_id: None,
         assisted_notes_notes_prompt_id: None,
+        live_type: Default::default(),
     }
 }
 
@@ -2044,6 +2072,7 @@ mod tests {
             "dictate_with_post_process",
             "assisted_notes",
             "assisted_notes_with_post_process",
+            "live_type",
             "cancel",
         ];
         let mut shortcuts: Vec<&str> = ids

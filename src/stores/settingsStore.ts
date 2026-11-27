@@ -9,6 +9,7 @@ import type {
   TranscribeAcceleratorSetting,
   DictationSettings,
   AssistedNotesSettings,
+  LiveTypeSettings,
   SystemAudioAvailability,
   SystemAudioDevice,
   ShortcutActivation,
@@ -314,6 +315,14 @@ const settingUpdaters: {
   assisted_notes: async (value) => {
     const result = await commands.changeAssistedNotesSettings(
       value as AssistedNotesSettings,
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
+  live_type: async (value) => {
+    const result = await commands.changeLiveTypeSettings(
+      value as LiveTypeSettings,
     );
     if (result.status === "error") {
       throw new Error(result.error);
